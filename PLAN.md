@@ -106,7 +106,7 @@ Specified in [docs/extension-api.md](./docs/extension-api.md) — produced by a 
 
 Each milestone ends with something runnable; "done when" is the gate.
 
-- **M0 — Scaffold.** Bun workspace, `packages/core` + `packages/laziergit`, OpenTUI React hello-world booting in the terminal, typecheck/format scripts. *Done when: `bun run dev` renders a screen.*
+- **M0 — Scaffold (complete).** Bun workspace, `packages/core` + `packages/laziergit`, OpenTUI React hello-world booting in the terminal, typecheck/format scripts. *Done when: `bun run dev` renders a screen.*
 - **M1 — Extension kernel.** `defineExtension`, loader over runtime-plugin-support, `ctx` skeleton, Scope-based disposal, stale-ctx poisoning, hot reload, error containment, and a temporary debug layout that renders registered panes side-by-side. *Done when: saving a toy `.tsx` extension while the app runs updates the screen, and a thrown render error shows an error card instead of crashing.*
 - **M2 — UI framework.** Config-driven Layout (JSONC + schema + global→repo merge), focus model, keymap-backed Commands/keybindings, popup toolkit, status line, palette. *Done when: two toy panes are navigable and rearrangeable via config, with working per-pane keybindings and a palette.*
 - **M3 — Git service.** Exec layer, porcelain parsing, reactive GitState store, derived events, `ctx.git` + hooks. *Done when: a toy pane shows live branch/status that tracks external `git` commands run in another terminal within ~2s.*
