@@ -1,0 +1,33 @@
+{
+  "pi": {
+    "repo": "https://github.com/earendil-works/pi",
+    "sha": "216e672e7c9fc65682553394b74e483c0c9e47f7",
+    "note": "extension loader/lifecycle/event patterns — packages/coding-agent/src/core/extensions"
+  },
+  "opencode": {
+    "repo": "https://github.com/anomalyco/opencode",
+    "sha": "3a1c6df9e24672f0761a6ced18e1315d89334baf",
+    "sparse": [
+      "packages/opencode",
+      "packages/core",
+      "packages/tui",
+      "packages/plugin",
+      "packages/protocol",
+      "packages/client",
+      "packages/schema",
+      "packages/server",
+      "packages/sdk"
+    ],
+    "note": "Effect v4 patterns, dual-surface plugin API, features-as-plugins TUI"
+  },
+  "opentui": {
+    "repo": "https://github.com/anomalyco/opentui",
+    "sha": "9d7ad9fc9c6766178e2c04b5440e77ba9b3e5104",
+    "note": "React reconciler, slot registry + runtime plugin loading, @opentui/keymap, <diff> component"
+  },
+  "lazygit": {
+    "repo": "https://github.com/jesseduffield/lazygit",
+    "sha": "07745afc5772e6972f86b7757e017cdb8046327e",
+    "note": "functional spec — git argv building, porcelain parsing, custom-commands shim layer"
+  }
+}
