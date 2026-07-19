@@ -1,0 +1,134 @@
+# laziergit — Project Plan
+
+lazygit's workflow, pi's philosophy: a git TUI where the core is deliberately light and **every feature is an Extension** written in TypeScript against a polished public API. The API — not any individual feature — is the product. The test of success: you ask a coding agent for a new pane ("show GitHub Actions runs for my current branch") and it writes a `.ts(x)` file into `~/.config/laziergit/extensions/`, laziergit hot-reloads, and the feature exists.
+
+Vocabulary lives in [CONTEXT.md](./CONTEXT.md). Irreversible decisions live in [docs/adr/](./docs/adr/). The extension API specification lives in [docs/extension-api.md](./docs/extension-api.md). Research that grounds all of this lives in [docs/research/](./docs/research/).
+
+## Decisions at a glance
+
+| Decision | Choice | Where recorded |
+|---|---|---|
+| Audience | Personal-first, public-shaped API | this doc |
+| Core boundary | Everything is an extension; core has zero git features | [ADR-0001](./docs/adr/0001-everything-is-an-extension.md) |
+| Trust model | In-process, full trust; error boundaries, no sandbox | ADR-0001 |
+| Runtime | Bun only | [ADR-0003](./docs/adr/0003-bun-only-react-on-opentui.md) |
+| TUI | `@opentui/react` (React 19), staying React despite opencode using Solid | ADR-0003 |
+| Effect | v4 beta, core-internal only; public API is Promise-first with `ctx.effect` escape hatch | [ADR-0002](./docs/adr/0002-promise-first-public-api-effect-internal.md) |
+| Extension anatomy | `defineExtension({...})` default export; lone `.ts(x)` file or package dir | [extension-api.md](./docs/extension-api.md) |
+| Extension locations | `~/.config/laziergit/extensions/` + `<repo>/.laziergit/extensions/`, hot reload | extension-api.md |
+| Layout | Config-owned (`config.jsonc` places pane ids); extensions ship overridable hints | this doc |
+| Ext-to-ext | Extensions export typed APIs; bundled extensions must expose extension points | extension-api.md |
+| Git state | Core-owned reactive store + hooks; `ctx.git.raw` escape hatch; shell out to system git | this doc |
+| Config | JSONC + published JSON Schema, global → repo merge | this doc |
+| v1 scope | Daily-driver loop bundled; gh-workflows as the acceptance test | this doc |
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  laziergit process (Bun, single process)                       │
+│                                                                │
+│  ┌──────────────────────── Core ────────────────────────────┐  │
+│  │ Extension kernel   loader (OpenTUI runtime-plugin-       │  │
+│  │                    support), lifecycle, hot reload,      │  │
+│  │                    per-extension Scope → auto-disposal   │  │
+│  │ UI framework       config-driven Layout, Pane slots,     │  │
+│  │                    focus, popups, statusline, palette    │  │
+│  │ Input              @opentui/keymap → Command dispatch    │  │
+│  │ Git service        argv builder → system git, porcelain  │  │
+│  │                    parsing, reactive GitState store,     │  │
+│  │                    derived events                        │  │
+│  │ Config             JSONC load/merge/validate (schemas    │  │
+│  │                    contributed by extensions)            │  │
+│  └───────────────────── (Effect v4 inside) ─────────────────┘  │
+│                              │ Extension Context (ctx)         │
+│                              │ Promise-first public API        │
+│  ┌───────────────────────────┴──────────────────────────────┐  │
+│  │ Bundled Extensions: status · files · branches · commits  │  │
+│  │ · stash · diff · commit-flow · sync                      │  │
+│  │ User Extensions: ~/.config/laziergit/extensions/*,       │  │
+│  │ <repo>/.laziergit/extensions/*                           │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Core internals (implementation defaults)
+
+- **Extension loading** builds on OpenTUI's `runtime-plugin-support` (external TS/TSX modules resolving against the host's React instance — proven inside bun-compiled binaries) with `"laziergit"` registered as a host-provided module. We wrap it behind our own loader API so core is not coupled to it.
+- **Lifecycle**: activation runs in `needs`-graph order. Every `ctx` registration is tracked in a per-extension Effect `Scope`; deactivation closes the Scope and unwinds everything (Obsidian Component / opencode v2 precedent). On hot reload, the old `ctx` is **poisoned** — every member access throws a descriptive "stale context" error (pi's trick; exemptions and the async-tail rule in [extension-api.md §5.3](./docs/extension-api.md)) — so captured references fail loudly instead of corrupting state.
+- **Error containment**: pane render errors hit a React error boundary (pane shows an error card, app survives); command and menu-item errors surface as toasts + log entries; event-handler errors are caught per-handler and logged.
+- **Git service** shells out to the system `git` binary via an argv builder (never string-concatenated shell), parses porcelain formats, and retries on `index.lock` contention — all lazygit-proven patterns (see `vendor/lazygit`). Refresh strategy is lazygit's, not naive fs-watching: refresh-after-every-mutation plus a cheap ~2s fingerprint poll (`git for-each-ref` + `.git/HEAD` read). One canonical `GitState` snapshot feeds both the React hooks and the event bus, so panes never disagree mid-render.
+- **Keybindings** ride `@opentui/keymap` (focus-scoped layers, `g`/`gg` sequence disambiguation, leader keys, command catalog). Extensions register Commands; keybindings — user-remappable in config — map keys to Commands per pane context. The cheat-sheet/help overlay falls out of the command catalog.
+- **Menus are data** (Magit transient precedent): action menus are declarative structures owned by whichever extension defines them, and other extensions splice entries in. This is what makes bundled extensions extensible rather than walled gardens.
+- **Single process** for v1. Git exec is already async; if the UI thread ever measurably suffers, the opencode pattern (backend in a Bun Worker with an RPC-tunneled in-memory server) is the known escape route.
+
+## Repository layout
+
+```
+packages/
+  laziergit/        # the public API package — the ONLY thing extensions import:
+                    # defineExtension, all public types, React hooks
+  core/             # the host: bootstrap, extension kernel, UI framework,
+                    # git service, config; bin entry (`laziergit`)
+extensions/         # Bundled Extensions, one package each, public API only:
+  status/  files/  branches/  commits/  stash/  diff/  commit-flow/  sync/
+docs/
+  extension-api.md  # the API specification (crown jewel)
+  adr/              # decision records
+  research/         # verified research the plan is grounded in
+scripts/
+  vendor.ts         # fetches vendor/ at pinned SHAs (vendor-pins.json)
+vendor/             # gitignored reference repos: pi, opencode, opentui, lazygit
+CONTEXT.md          # glossary / ubiquitous language
+```
+
+Bun workspaces; `packages/laziergit` has no dependency on `packages/core` (types + factories only) — core depends on it, never the reverse. That keeps the public surface honest: if a bundled extension needs something, it must arrive through the public package.
+
+## The extension API
+
+Specified in [docs/extension-api.md](./docs/extension-api.md) — produced by a multi-agent design pass (three competing drafts, judged, synthesized, then adversarially verified by agents writing real extensions against it before repair). Non-negotiable properties:
+
+1. **Learnable from types + one example.** The primary extension authors are coding agents; inference must carry everything (config schema → typed values, event name → payload type, exported API → consumer type) with no manual generics at use sites.
+2. **Every registration is disposable, automatically.** Hot reload correctness is not optional.
+3. **One way to do things.** Smallest surface that satisfies the contract; conveniences must earn their place.
+4. **Bundled extensions must be extensible** — row decorations, menu splicing, exported APIs. The Magit property.
+5. **Would ship to strangers.** Personal-first, but no API shortcuts that would be disqualifying in public.
+
+## v1 scope
+
+**Bundled**: status, files (staging), branches, commits (log), stash, diff, commit-flow, sync (push/pull/fetch) — the everyday loop identified from lazygit's operation inventory.
+
+**Explicitly post-v1** (they become extensions later, which is the point of the architecture): interactive rebase (requires the self-as-`GIT_SEQUENCE_EDITOR` daemon trick — documented in `docs/research/lazygit-surface.md`), cherry-pick, bisect, worktrees, submodules, reflog, custom patch editing; npm-published extension distribution; programmatic theming; `bun build --compile` single-binary releases.
+
+**Acceptance test**: with laziergit running, write the gh-workflows pane (GitHub Actions runs for the current branch, refresh on branch change, keybinding to open in browser) as a normal user in `~/.config/laziergit/extensions/` — no core or bundled-code changes, hot-reloaded live, in under an hour. v1 is done when that passes and laziergit replaces lazygit as the daily driver.
+
+## Build order
+
+Each milestone ends with something runnable; "done when" is the gate.
+
+- **M0 — Scaffold.** Bun workspace, `packages/core` + `packages/laziergit`, OpenTUI React hello-world booting in the terminal, typecheck/format scripts. *Done when: `bun run dev` renders a screen.*
+- **M1 — Extension kernel.** `defineExtension`, loader over runtime-plugin-support, `ctx` skeleton, Scope-based disposal, stale-ctx poisoning, hot reload, error containment, and a temporary debug layout that renders registered panes side-by-side. *Done when: saving a toy `.tsx` extension while the app runs updates the screen, and a thrown render error shows an error card instead of crashing.*
+- **M2 — UI framework.** Config-driven Layout (JSONC + schema + global→repo merge), focus model, keymap-backed Commands/keybindings, popup toolkit, status line, palette. *Done when: two toy panes are navigable and rearrangeable via config, with working per-pane keybindings and a palette.*
+- **M3 — Git service.** Exec layer, porcelain parsing, reactive GitState store, derived events, `ctx.git` + hooks. *Done when: a toy pane shows live branch/status that tracks external `git` commands run in another terminal within ~2s.*
+- **M4 — Bundled extensions.** The eight, roughly status → files → branches → commits → stash → diff → commit-flow → sync, each stress-feeding the API (selection model, decorations, menus, multi-pane focus). API changes surface here — make them, don't work around them. *Done when: the everyday loop works end-to-end on this repo.*
+- **M5 — Acceptance & polish.** Run the acceptance test cold, fix every friction it finds, sweep the visual design pass (opencode-grade aesthetics: theme tokens, spacing, borders, empty states). *Done when: the acceptance test passes and lazygit is uninstalled.*
+
+## Risks & mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Effect v4 is beta and churns | Contained: Effect never crosses the public API (ADR-0002); pin + patch like opencode does |
+| `@opentui/react` less production-exercised than Solid renderer | Stick to documented components; use its test-utils; vendored source for debugging; upstream issues watched |
+| No PTY/terminal-embedding pane in OpenTUI (opentui#440 open) | Data-panes cover the known wishlist (gh-workflows, devbox); interactive flows use full-screen suspend/resume; revisit when upstream lands |
+| Vendored repos move fast (opencode especially) | Pinned SHAs in `scripts/vendor-pins.json`; deliberate, reviewed bumps |
+| Hot-reload state corruption (the classic in-process plugin failure) | Scope-owned registrations + stale-ctx poisoning from day one (M1 gate, not a retrofit) |
+| lazygit-parity scope creep | v1 scope is fixed above; everything else is post-v1 *extensions* — the architecture makes deferral cheap |
+
+## Vendored references (`bun scripts/vendor.ts`)
+
+| Repo | Why it's here |
+|---|---|
+| `vendor/pi` (earendil-works/pi) | Extension loader/lifecycle/event patterns; stale-ctx poisoning; 79 example extensions |
+| `vendor/opencode` (anomalyco/opencode, sparse) | Effect v4 idioms; dual Effect/Promise plugin API; features-as-plugins TUI |
+| `vendor/opentui` (anomalyco/opentui) | React reconciler, slot registries + runtime plugin loading, `@opentui/keymap`, `<diff>` component |
+| `vendor/lazygit` (jesseduffield/lazygit) | The functional spec; git argv building, porcelain parsing, refresh strategy |
