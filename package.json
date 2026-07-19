@@ -15,6 +15,8 @@
       "@types/react": "19.2.0",
       "effect": "4.0.0-beta.83",
       "oxfmt": "0.41.0",
+      "oxlint": "1.74.0",
+      "oxlint-tsgolint": "0.25.0",
       "react": "19.2.0",
       "typescript": "5.9.3"
     }
@@ -22,13 +24,16 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --cwd packages/core dev",
-    "format": "oxfmt --write packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json",
-    "format:check": "oxfmt --check packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json",
+    "format": "oxfmt --write packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
+    "format:check": "oxfmt --check packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
+    "lint": "oxlint packages extensions scripts",
     "typecheck": "bun run --filter '*' typecheck"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
     "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
     "typescript": "catalog:"
   },
   "overrides": {
