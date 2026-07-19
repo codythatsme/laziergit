@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "laziergit-workspace",
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "packages/*",
+      "extensions/*"
+    ],
+    "catalog": {
+      "@opentui/core": "0.4.4",
+      "@opentui/keymap": "0.4.4",
+      "@opentui/react": "0.4.4",
+      "@types/bun": "1.3.5",
+      "@types/react": "19.2.0",
+      "effect": "4.0.0-beta.83",
+      "oxfmt": "0.41.0",
+      "react": "19.2.0",
+      "typescript": "5.9.3"
+    }
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --cwd packages/core dev",
+    "format": "oxfmt --write packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json",
+    "format:check": "oxfmt --check packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json",
+    "typecheck": "bun run --filter '*' typecheck"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "oxfmt": "catalog:",
+    "typescript": "catalog:"
+  },
+  "overrides": {
+    "@opentui/core": "catalog:",
+    "@opentui/keymap": "catalog:",
+    "@opentui/react": "catalog:"
+  },
+  "packageManager": "bun@1.3.5"
+}

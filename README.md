@@ -2,7 +2,7 @@
 
 lazygit's workflow, pi's philosophy: a git TUI with a deliberately light core where **every feature is a TypeScript extension** — including the built-in ones. Ask a coding agent for a new pane; it writes a `.ts(x)` file; laziergit hot-reloads; the feature exists.
 
-Status: **planning / pre-M0**. Start here:
+Status: **M0 scaffold complete; M1 is next**. Start here:
 
 - [PLAN.md](./PLAN.md) — architecture, repository layout, v1 scope, build order
 - [docs/extension-api.md](./docs/extension-api.md) — the extension API specification (the crown jewel)
@@ -13,5 +13,9 @@ Status: **planning / pre-M0**. Start here:
 Stack: Bun · OpenTUI + React · Effect (core-internal) · system git.
 
 ```sh
+bun install
+bun run dev             # Ctrl+C exits
+bun run typecheck
+
 bun scripts/vendor.ts   # fetch pinned reference repos into vendor/ (gitignored)
 ```
