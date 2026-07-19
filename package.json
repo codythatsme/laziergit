@@ -27,6 +27,7 @@
     "format": "oxfmt --write packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
     "format:check": "oxfmt --check packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
     "lint": "oxlint packages extensions scripts",
+    "test": "bun test ./packages",
     "typecheck": "bun run --filter '*' typecheck"
   },
   "devDependencies": {

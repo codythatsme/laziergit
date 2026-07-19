@@ -1753,9 +1753,13 @@ realized as data flow rather than a slot.
 menus, events, statusline segments, subscriptions — attaches to it on creation; the returned
 `Disposable` is only for *early* teardown. Hot reload = file save → deactivate ripple (below) →
 `deactivate?()` with ctx still live → close scope (registrations unwind in reverse order,
-fibers interrupted) → re-import with a cache-busting query param (Bun) → `activate` with a
-fresh ctx. The old ctx and every API object hanging off it is then **poisoned**: every member
-*access* (properties included, so `ctx.config` and `ctx.git.state` too) throws
+fibers interrupted) → re-import from a generation-unique source copy → `activate` with a
+fresh ctx. (OpenTUI's runtime rewrite loader canonicalizes query strings before Bun's module
+cache sees them, so query-parameter cache busting does not work here. A sibling source copy
+preserves relative imports and local dependency resolution; directory Extensions copy their
+whole source tree so imported helpers reload too.) The old ctx and every API object hanging off
+it is then **poisoned**: every member *access* (properties included, so `ctx.config` and
+`ctx.git.state` too) throws
 `StaleContextError` carrying `{ extension, reason: "reload" | "deactivated" | "quit" }` (a
 trick borrowed from pi, the coding agent whose in-process extension host pioneered it —
 applied wholesale). Three deliberate exceptions: `ctx.signal` stays readable (it is the
@@ -1932,7 +1936,7 @@ Full trust, no sandbox — containment is structural, per surface:
 | Commands + `keys` / `useCommand` | `@opentui/keymap` command catalog + `registerLayer({ commands, bindings })`; pane scoping → layer targeted at the pane renderable (`targetMode: "focus-within"`), re-targeted by pane id when a remount replaces the renderable; `useCommand` re-points handlers via a latest-ref; palette = `getCommands()`, cheat sheet = `createBindingLookup` extras; `mod+` via the mod-bindings addon, `<leader>` via the leader addon |
 | Menus | plain data + one generic popup component; an open menu pushes a modal high-priority keymap layer |
 | Registrations / `onDispose` | Effect `Scope` per activation; `dispose()` = early finalizer run; consumed-API proxy attaches foreign Disposables to the caller's scope |
-| Hot reload | fs watcher → reverse-topo deactivate → poison (`assertActive` behind every ctx member) → re-import with cache-bust → topo activate |
+| Hot reload | extension-directory fingerprint poll → reverse-topo deactivate → poison (`assertActive` behind every ctx member) → re-import from a generation-unique source copy → topo activate |
 | `ctx.git` / `useGit` | git plumbing service (shell-out, Effect-internal) + snapshot store; React via `useSyncExternalStore`; ~2s repo-fingerprint poll (`for-each-ref` + `.git/HEAD`) + post-helper refresh |
 | `ctx.events` | store snapshot diff per refresh cycle (coalesced — one event per changed slice), sequential dispatch, per-handler catch |
 | `"laziergit"` module | `ensureRuntimePluginSupport({ additional: { laziergit } })` from `@opentui/react/runtime-plugin-support/configure`, imported before anything else — the FIRST install must carry the extra specifier: a later install that adds one the first lacked throws, while later installs without extras are compatible no-ops — so extension imports share the Core's React/OpenTUI/laziergit instances; works in `bun build --compile` binaries |

@@ -2,5 +2,8 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "options": {
     "typeAware": true
+  },
+  "rules": {
+    "typescript/no-redundant-type-constituents": "off"
   }
 }
