@@ -10,26 +10,36 @@ import type { PaneSlots } from "./extension/pane-host"
 export async function main() {
   ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
 
-  const renderer = await createCliRenderer({ exitOnCtrlC: true })
-  const registry = createReactSlotRegistry<PaneSlots, PluginContext>(renderer, {})
-  const kernel = new ExtensionKernel({ repoRoot: process.cwd(), registry })
-  registry.configure({
-    onPluginError(failure) {
-      kernel.diagnostics.report({
-        extension: failure.pluginId.replace(/^pane:/, ""),
-        phase: "render",
-        message: failure.error.message,
-        error: failure.error,
-      })
-    },
+  let renderer: Awaited<ReturnType<typeof createCliRenderer>> | undefined
+  let kernel: ExtensionKernel | undefined
+  let rendererDestroyed = false
+  let resolveRendererDestroyed: () => void = () => undefined
+  const rendererDestruction = new Promise<void>((resolve) => {
+    resolveRendererDestroyed = resolve
   })
 
-  renderer.once("destroy", () => {
-    void kernel.stop()
-  })
+  try {
+    renderer = await createCliRenderer({
+      exitOnCtrlC: true,
+      onDestroy() {
+        rendererDestroyed = true
+        resolveRendererDestroyed()
+      },
+    })
+    const registry = createReactSlotRegistry<PaneSlots, PluginContext>(renderer, {})
+    kernel = new ExtensionKernel({ repoRoot: process.cwd(), registry })
 
-  createRoot(renderer).render(<App kernel={kernel} />)
-  await kernel.start()
+    createRoot(renderer).render(<App kernel={kernel} />)
+    await kernel.start()
+    await rendererDestruction
+  } finally {
+    try {
+      await kernel?.stop()
+    } finally {
+      if (renderer && !rendererDestroyed) renderer.destroy()
+      if (renderer) await rendererDestruction
+    }
+  }
 }
 
 if (import.meta.main) {

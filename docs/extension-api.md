@@ -47,15 +47,18 @@ resolves against the host's React and OpenTUI instances. Three import rules:
   laziergit does not re-export UI primitives — OpenTUI's component set *is* the component set
   (quick reference in §1.8).
 
-**Directory form.** A directory extension is a folder with a `package.json`; the entry point is
-its `main` field (default `index.ts`, then `index.tsx`). It may carry its own `node_modules` —
-Bun installs and resolves local dependencies normally — but `laziergit`, `react`,
-`react/jsx-runtime`, `@opentui/react`, and `@opentui/core` always resolve to the host's
-instances regardless of what is installed locally (the runtime module hooks match those exact
-specifiers for every importer), so a locally installed React can never fork the tree. Name
-collisions: a repo extension shadows a same-named global extension (repo wins, diagnostic
-logged — the same precedence as config); two same-named extensions in the same scope are a load
-error for the second.
+**Directory form.** A directory Extension is a folder with a `package.json`; the entry point is
+its `main` field (default `index.ts`, then `index.tsx`). It may carry helpers, assets, and its own
+`node_modules` — Bun installs and resolves local dependencies normally. A lone-file Extension is
+self-contained: only that file is copied for cache-busted import, so helpers and assets require
+directory form. `laziergit`, `react`, `react/jsx-runtime`, `@opentui/react`, and `@opentui/core`
+always resolve to the host's instances regardless of what is installed locally (the runtime
+module hooks match those exact specifiers for every importer), so a locally installed React can
+never fork the tree. Top-level symbolic links to Extension files or directories are supported;
+status and identity keep the logical linked path while loading and fingerprinting follow the
+canonical target, including retargets and repairs. Name collisions: a repo Extension shadows a
+same-named global Extension (repo wins, diagnostic logged — the same precedence as config); two
+same-named Extensions in the same scope are a load error for the second.
 
 The smallest complete extension (a palette command that opens the repo on GitHub):
 
@@ -99,7 +102,6 @@ declare module "laziergit" {
   import type { ComponentType } from "react";
   import type * as Effect from "effect/Effect";
   import type * as Stream from "effect/Stream";
-  import type { ManagedRuntime, Context } from "effect"; // effect 4.0.0-beta: Context.Key is the v3 Context.Tag rename
 ```
 
 ### 1.1 Primitives
@@ -343,7 +345,7 @@ declare module "laziergit" {
     readonly extensions: ExtensionHub<Needs>;
 
     /** Escape hatch into the Effect-native core. Never needed for normal extensions. */
-    readonly effect: EffectEscape;
+    readonly effect: EffectEscape<TName>;
 
     /**
      * Aborted when this activation ends (reload / disable / quit). The
@@ -722,8 +724,12 @@ tagged with the extension name, and routed to the log file / debug pane.
     EventMap[K] extends void ? [] : [payload: EventMap[K]];
 
   /**
-   * Pub/sub over {@link EventMap}. Handler errors are caught, logged, and never
-   * break other subscribers. Subscriptions auto-dispose with your extension.
+   * Pub/sub over {@link EventMap}. `emit` snapshots subscribers immediately;
+   * each subscription then receives its own FIFO queue, so a slow or retired
+   * handler cannot block another subscription or a fresh activation. Disposal
+   * excludes future snapshots and skips captured-but-not-started deliveries.
+   * Handler errors are caught and logged per delivery. Subscriptions
+   * auto-dispose with your Extension.
    */
   export interface EventBus<TName extends string = string> {
     /**
@@ -785,10 +791,11 @@ tagged with the extension name, and routed to the log file / debug pane.
     register(spec: CommandSpec<TName>): Disposable;
 
     /**
-     * Invoke any registered command by id — yours or another extension's.
-     * Pane-scoped commands focus their pane first (focus-then-run). Rejects
-     * if the id is unknown, or if a pane-scoped command's pane has no live
-     * instance right now.
+     * Invoke any registered Command by id — yours or another Extension's.
+     * Pane-scoped Commands focus their Pane first (focus-then-run). Rejects if
+     * the id is unknown, or if a pane-scoped Command's Pane has no live
+     * instance right now. Once `run` starts, its failures are diagnosed and
+     * notified but contained, so this Promise resolves.
      */
     execute(id: string): Promise<void>;
   }
@@ -1264,36 +1271,37 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
   }
 
   /** Effect-native face of the event bus. */
-  export interface EventsService {
-    readonly publish: <K extends keyof EventMap & string>(
+  export interface EventsService<TName extends string = string> {
+    /** Publish only this Extension's own ScopedId events. */
+    readonly publish: <K extends keyof EventMap & ScopedId<TName>>(
       event: K,
       ...payload: EventPayload<K>
     ) => Effect.Effect<void>;
     readonly stream: <K extends keyof EventMap & string>(event: K) => Stream.Stream<EventMap[K]>;
   }
 
-  export type CoreServices = GitService | EventsService;
-
   /**
-   * The one Effect door. Core is Effect v4 internally; `runtime.runPromise(...)`
-   * executes effects against the live core services, fiber-supervised inside
-   * your extension's scope — fibers you fork are interrupted on
-   * deactivate/reload. Service keys use Effect v4's `Context.Key` (the v3
-   * `Context.Tag` rename). Plain-async extensions never need this. Caveat:
-   * these type names track the Effect v4 BETA and pin to the version
-   * laziergit vendors — the one section of this surface typed against a
-   * moving target; expect it to shift with the beta.
+   * The one Effect door. Core is Effect v4 internally, but the public escape
+   * hatch exposes only bound services plus `runPromise` for fully-provided
+   * Effects. Raw ManagedRuntime access and service keys stay private so Core's
+   * service graph cannot leak into Extensions. Work is supervised by the
+   * activation lifetime and interrupted on deactivate/reload. Plain-async
+   * Extensions never need this. Caveat: these Effect and Stream type names pin
+   * to the Effect v4 beta version laziergit vendors, so this opt-in surface is
+   * intentionally version-coupled while the ordinary API remains Promise-first.
    */
-  export interface EffectEscape {
-    readonly runtime: ManagedRuntime.ManagedRuntime<CoreServices, never>;
-    readonly keys: {
-      readonly Git: Context.Key<GitService, GitService>;
-      readonly Events: Context.Key<EventsService, EventsService>;
-    };
+  export interface EffectEscape<TName extends string = string> {
+    readonly git: GitService;
+    readonly events: EventsService<TName>;
+    readonly runPromise: <A, E>(effect: Effect.Effect<A, E, never>) => Promise<A>;
   }
 
 } // declare module "laziergit"
 ```
+
+**Implementation status.** M1 publishes this narrowed shape so Extensions compile against the
+intended boundary, but `ctx.effect` remains an explicit unavailable placeholder until M3 installs
+the Git and Effect service graph. Access fails immediately rather than exposing a partial runtime.
 
 ---
 
@@ -1749,12 +1757,13 @@ realized as data flow rather than a slot.
 
 ### 5.3 Disposal and hot reload
 
-`ctx` **is** a scope (internally an Effect `Scope`). Every registration — commands, panes,
-menus, events, statusline segments, subscriptions — attaches to it on creation; the returned
-`Disposable` is only for *early* teardown. Hot reload = file save → deactivate ripple (below) →
-`deactivate?()` with ctx still live → close scope (registrations unwind in reverse order,
-fibers interrupted) → re-import from a generation-unique source copy → `activate` with a
-fresh ctx. (OpenTUI's runtime rewrite loader canonicalizes query strings before Bun's module
+`ctx` **is** a per-activation scope: one internal Effect `Scope` owns a removable JavaScript
+finalizer/supervision registry. Every registration — Commands, Panes, menus, events, statusline
+segments, subscriptions — attaches to it on creation; the returned `Disposable` is only for
+*early* teardown. Hot reload = file save → deactivate ripple (below) → `deactivate?()` with ctx
+still live → synchronously mark stale and close the scope (registrations unwind sequentially in
+reverse order, async cleanup is awaited, fibers interrupted) → re-import from a
+generation-unique source copy → `activate` with a fresh ctx. (OpenTUI's runtime rewrite loader canonicalizes query strings before Bun's module
 cache sees them, so query-parameter cache busting does not work here. A sibling source copy
 preserves relative imports and local dependency resolution; directory Extensions copy their
 whole source tree so imported helpers reload too.) The old ctx and every API object hanging off
@@ -1799,11 +1808,11 @@ pre-reload target object is ever handed to post-reload code.
 
 Two rules make cross-extension registrations safe with zero author effort:
 
-1. `ctx.extensions.get(...)` returns a core-owned proxy of the provider's API. Any
-   `Disposable` returned through that proxy is auto-attached to the **caller's** scope — so
-   `branches.decorateRows(...)` in github-prs is cleaned up when *github-prs* reloads, not
-   leaked into the branches extension. (This is why `Disposable` is object-shaped rather than a
-   bare function: the proxy can recognize it structurally.)
+1. `ctx.extensions.get(...)` returns a Core-owned proxy of the provider's API, including callable
+   APIs. Method and function results share one processor: PromiseLike values are supervised, and
+   any `Disposable` they return (including callable values with `dispose`) is auto-attached to the
+   **caller's** scope — so `branches.decorateRows(...)` in github-prs is cleaned up when
+   *github-prs* reloads, not leaked into the branches Extension.
 2. **Ripple restart.** `needs` forms a DAG — a cycle fails activation of every extension in it
    with an error naming the cycle, never a deadlock. Activation runs in topological order,
    deactivation in reverse. When a provider hot-reloads, its dependents deactivate *before* the
@@ -1859,8 +1868,9 @@ decision that events derive from the same store is the type definition itself, s
 there when you need the diff. Core events are emitted only by core; `emit` is typed
 `ScopedId<TName>` (compile error) and runtime-checked (dynamic names), so no extension can
 spoof another's events. `void`-payload events get a zero-argument `emit` via the `EventPayload`
-tuple trick rather than a nullable payload. Handler errors are caught per-handler and logged;
-one broken subscriber never starves the rest.
+tuple trick rather than a nullable payload. `emit` snapshots subscriptions synchronously, then
+each subscription advances its own FIFO queue. Handler errors are caught per delivery and logged;
+a slow, failed, or retired subscriber never starves another subscription or fresh activation.
 
 ### 5.6 Config schema → typed values
 
@@ -1935,10 +1945,10 @@ Full trust, no sandbox — containment is structural, per surface:
 | `ctx.panes.register` / statusline segments | `@opentui/react` slot registry plugin per pane/segment; the Layout renders one slot per configured id; the registry's built-in error boundary + failure placeholder provide containment for free |
 | Commands + `keys` / `useCommand` | `@opentui/keymap` command catalog + `registerLayer({ commands, bindings })`; pane scoping → layer targeted at the pane renderable (`targetMode: "focus-within"`), re-targeted by pane id when a remount replaces the renderable; `useCommand` re-points handlers via a latest-ref; palette = `getCommands()`, cheat sheet = `createBindingLookup` extras; `mod+` via the mod-bindings addon, `<leader>` via the leader addon |
 | Menus | plain data + one generic popup component; an open menu pushes a modal high-priority keymap layer |
-| Registrations / `onDispose` | Effect `Scope` per activation; `dispose()` = early finalizer run; consumed-API proxy attaches foreign Disposables to the caller's scope |
-| Hot reload | extension-directory fingerprint poll → reverse-topo deactivate → poison (`assertActive` behind every ctx member) → re-import from a generation-unique source copy → topo activate |
+| Registrations / `onDispose` | Effect `Scope` per activation owning a removable LIFO finalizer/supervision registry; `dispose()` = early finalizer run; consumed-API proxy attaches foreign Disposables to the caller's scope |
+| Hot reload | linked-target-aware extension fingerprint poll → reverse-topo deactivate → synchronous stale mark → lease-backed generation copy import → topo activate; serialized reload tails heal after failures |
 | `ctx.git` / `useGit` | git plumbing service (shell-out, Effect-internal) + snapshot store; React via `useSyncExternalStore`; ~2s repo-fingerprint poll (`for-each-ref` + `.git/HEAD`) + post-helper refresh |
-| `ctx.events` | store snapshot diff per refresh cycle (coalesced — one event per changed slice), sequential dispatch, per-handler catch |
+| `ctx.events` | emit-time subscription snapshot; per-subscription FIFO delivery; disposal skips queued work; per-delivery catch |
 | `"laziergit"` module | `ensureRuntimePluginSupport({ additional: { laziergit } })` from `@opentui/react/runtime-plugin-support/configure`, imported before anything else — the FIRST install must carry the extra specifier: a later install that adds one the first lacked throws, while later installs without extras are compatible no-ops — so extension imports share the Core's React/OpenTUI/laziergit instances; works in `bun build --compile` binaries |
 
 ### 5.11 Deliberately absent
@@ -1954,8 +1964,9 @@ Full trust, no sandbox — containment is structural, per surface:
   reintroducing exactly the staleness `needs` + ripple restart exist to prevent; declare the need.
 - **Semver ranges on `needs`** — extensions are source-compiled TS checked against the host's
   declarations at import; a version-negotiation layer buys nothing an activation error doesn't.
-- **Config-change / theme-change events** — both are "extension reloads" by definition (§5.6);
-  theme changes reflow through `useTheme` automatically. `ctx.config` is a constant plain object.
+- **Config-change / theme-change events** — config changes reload affected Extensions (§5.6),
+  while Theme replacement publishes through a per-kernel external store and reflows through
+  `useTheme` without reactivation or remount. `ctx.config` is a constant plain object.
 - **An imperative statusline API** (`set(key, {text, tone})`) — segments are React components
   like every other UI surface; one paradigm, and `useGit` replaces manual event wiring.
 - **A blessed list/table component kit** — OpenTUI's primitives plus `useCommand` cover it; the

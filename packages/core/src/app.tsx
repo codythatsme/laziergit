@@ -1,13 +1,14 @@
 import type { PluginErrorEvent } from "@opentui/core"
 import { Slot, useKeyboard, useRenderer } from "@opentui/react"
+import { RuntimeProvider } from "@laziergit/runtime-bridge"
 import { basename } from "node:path"
 import { useSyncExternalStore } from "react"
+import { useTheme, type Theme } from "laziergit"
 
 import type { ExtensionKernel } from "./extension/kernel"
 import type { PaneEntry } from "./extension/pane-host"
-import { defaultTheme as theme } from "./extension/theme"
 
-function stateColor(state: "loading" | "active" | "failed" | "shadowed") {
+function stateColor(state: "loading" | "active" | "failed" | "shadowed", theme: Theme) {
   if (state === "active") return theme.success
   if (state === "failed") return theme.danger
   if (state === "shadowed") return theme.warning
@@ -15,6 +16,7 @@ function stateColor(state: "loading" | "active" | "failed" | "shadowed") {
 }
 
 function PaneErrorCard({ failure }: { failure: PluginErrorEvent }) {
+  const theme = useTheme()
   return (
     <box flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center" padding={1}>
       <text content="Pane crashed" style={{ fg: theme.danger }} />
@@ -25,6 +27,7 @@ function PaneErrorCard({ failure }: { failure: PluginErrorEvent }) {
 }
 
 function DebugPane({ kernel, pane }: { kernel: ExtensionKernel; pane: PaneEntry }) {
+  const theme = useTheme()
   const focused = kernel.panes.focused === pane.id
 
   return (
@@ -57,8 +60,9 @@ function DebugPane({ kernel, pane }: { kernel: ExtensionKernel; pane: PaneEntry 
   )
 }
 
-export function App({ kernel }: { kernel: ExtensionKernel }) {
+function AppShell({ kernel }: { kernel: ExtensionKernel }) {
   const renderer = useRenderer()
+  const theme = useTheme()
   const extensions = useSyncExternalStore(kernel.subscribe, kernel.getSnapshot, kernel.getSnapshot)
   const panes = useSyncExternalStore(kernel.panes.subscribe, kernel.panes.getSnapshot, kernel.panes.getSnapshot)
   const diagnostics = useSyncExternalStore(
@@ -69,7 +73,15 @@ export function App({ kernel }: { kernel: ExtensionKernel }) {
 
   useKeyboard((key) => {
     if (key.name === "r") void kernel.reload()
-    if (key.name === "q") renderer.destroy()
+    if (key.name === "q") {
+      void (async () => {
+        try {
+          await kernel.stop()
+        } finally {
+          renderer.destroy()
+        }
+      })()
+    }
   })
 
   const active = extensions.filter((extension) => extension.state === "active").length
@@ -96,7 +108,7 @@ export function App({ kernel }: { kernel: ExtensionKernel }) {
             <text
               key={extension.key}
               content={`${extension.state.padEnd(8)} ${extension.name ?? basename(extension.path)}${extension.message ? ` — ${extension.message}` : ""}`}
-              style={{ fg: stateColor(extension.state), marginTop: 1 }}
+              style={{ fg: stateColor(extension.state, theme), marginTop: 1 }}
             />
           ))}
         </box>
@@ -116,5 +128,13 @@ export function App({ kernel }: { kernel: ExtensionKernel }) {
         />
       </box>
     </box>
+  )
+}
+
+export function App({ kernel }: { kernel: ExtensionKernel }) {
+  return (
+    <RuntimeProvider runtime={kernel.runtime}>
+      <AppShell kernel={kernel} />
+    </RuntimeProvider>
   )
 }

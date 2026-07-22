@@ -1,26 +1,31 @@
-import { copyFile, cp, mkdir, readdir, rm, stat, symlink } from "node:fs/promises"
-import { basename, dirname, isAbsolute, join, relative } from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
+import { mkdir } from "node:fs/promises"
+import { pathToFileURL } from "node:url"
 import type { PluginContext, SlotRegistry } from "@opentui/core"
+import { assertExtensionDefinition } from "@laziergit/runtime-bridge"
 import type { ReactNode } from "react"
-import type { Extension, ExtensionSpec } from "laziergit"
-import type { InternalRuntime } from "laziergit/internal"
+import type { CommandSpec, Disposable, EventMap, Extension, Theme } from "laziergit"
 
 import { ActivationScope } from "./activation-scope"
 import { CommandHost } from "./command-host"
-import { createExtensionContext, type ContextHosts } from "./context"
-import { Diagnostics, normalizeError } from "./diagnostics"
+import { createExtensionContext, type ContextHosts, type ExtensionApiLookup } from "./context"
+import { Diagnostics, normalizeError, type DiagnosticPhase } from "./diagnostics"
 import {
   defaultExtensionDirectories,
   discoverExtensions,
+  extensionTreeFingerprint,
   type ExtensionCandidate,
   type ExtensionDirectories,
+  type ExtensionDiscoveryFailure,
+  type ExtensionDiscoveryResult,
+  type ExtensionSourceScope,
 } from "./discovery"
 import { EventHost } from "./event-host"
 import { GitPlaceholder } from "./git-placeholder"
+import { ImportCopyCache, type ImportCopyLease } from "./import-copy-cache"
+import { createNotifier } from "./notifier"
 import { PaneHost, type PaneSlots } from "./pane-host"
 import { MenuHost, StatuslineHost } from "./registry-hosts"
-import { defaultTheme } from "./theme"
+import { ThemeStore } from "./theme"
 
 export type ExtensionLoadState = "loading" | "active" | "failed" | "shadowed"
 
@@ -36,6 +41,7 @@ export interface ExtensionStatus {
 interface ImportedExtension {
   readonly candidate: ExtensionCandidate
   readonly extension: Extension
+  readonly lease: ImportCopyLease
 }
 
 interface Activation {
@@ -52,128 +58,49 @@ export interface ExtensionKernelOptions {
   readonly debounceMs?: number
 }
 
+interface InternalRuntime {
+  readonly git: GitPlaceholder
+  readonly events: {
+    subscribe<K extends keyof EventMap & string>(
+      extension: string,
+      event: K,
+      handler: (payload: EventMap[K]) => void | Promise<void>,
+    ): Disposable
+  }
+  readonly commands: {
+    registerComponent(extension: string, paneId: string, spec: Omit<CommandSpec, "pane">): Disposable
+  }
+  readonly theme: {
+    getSnapshot(): Theme
+    subscribe(listener: () => void): () => void
+  }
+}
+
 function candidateKey(candidate: ExtensionCandidate): string {
   return `${candidate.scope}:${candidate.rootPath}`
 }
 
-interface ImportCopy {
-  readonly entryPath: string
-  readonly rootPath: string
+function failureKey(failure: ExtensionDiscoveryFailure): string {
+  return `${failure.scope}:${failure.rootPath}`
 }
 
-function reloadCopyPath(path: string, generation: number): string {
-  return join(dirname(path), `.laziergit-cache-${process.pid}-${generation}-${Date.now()}-${basename(path)}`)
-}
-
-async function linkDirectoryEntries(source: string, target: string, omitted: ReadonlySet<string>): Promise<void> {
-  let entries
-  try {
-    entries = await readdir(source, { withFileTypes: true })
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return
-    throw error
-  }
-
-  await mkdir(target, { recursive: true })
-  await Promise.all(
-    entries
-      .filter((entry) => !omitted.has(entry.name))
-      .map((entry) => symlink(join(source, entry.name), join(target, entry.name))),
-  )
-}
-
-async function createNodeModulesOverlay(copyRoot: string, sourceRoot?: string): Promise<void> {
-  const overlay = join(copyRoot, "node_modules")
-  const sourceNodeModules = sourceRoot ? join(sourceRoot, "node_modules") : undefined
-  if (sourceNodeModules) {
-    await linkDirectoryEntries(sourceNodeModules, overlay, new Set(["@opentui", "react"]))
-    await linkDirectoryEntries(join(sourceNodeModules, "@opentui"), join(overlay, "@opentui"), new Set(["react"]))
-  }
-
-  const hostReact = dirname(fileURLToPath(import.meta.resolve("react")))
-  const hostOpenTuiReact = dirname(fileURLToPath(import.meta.resolve("@opentui/react")))
-  await mkdir(join(overlay, "@opentui"), { recursive: true })
-  await Promise.all([
-    symlink(hostReact, join(overlay, "react"), "dir"),
-    symlink(hostOpenTuiReact, join(overlay, "@opentui", "react"), "dir"),
-  ])
-}
-
-async function createImportCopy(candidate: ExtensionCandidate, generation: number): Promise<ImportCopy> {
-  if (candidate.rootPath === candidate.entryPath) {
-    const copyRoot = reloadCopyPath(candidate.entryPath, generation)
-    try {
-      await mkdir(copyRoot)
-      const entryPath = join(copyRoot, basename(candidate.entryPath))
-      await copyFile(candidate.entryPath, entryPath)
-      await createNodeModulesOverlay(copyRoot)
-      return { entryPath, rootPath: copyRoot }
-    } catch (error) {
-      await rm(copyRoot, { recursive: true, force: true })
-      throw error
-    }
-  }
-
-  const entryRelativePath = relative(candidate.rootPath, candidate.entryPath)
-  if (isAbsolute(entryRelativePath) || entryRelativePath.startsWith("..")) {
-    throw new TypeError(`Directory extension entry must be inside ${candidate.rootPath}`)
-  }
-
-  const copyRoot = reloadCopyPath(candidate.rootPath, generation)
-  try {
-    await cp(candidate.rootPath, copyRoot, {
-      recursive: true,
-      filter: (source) => {
-        const name = basename(source)
-        return name !== "node_modules" && !name.startsWith(".laziergit-cache-")
+function discoveryFailure(directory: string, scope: ExtensionSourceScope, error: unknown): ExtensionDiscoveryResult {
+  return {
+    candidates: [],
+    failures: [
+      {
+        path: directory,
+        rootPath: directory,
+        scope,
+        error: normalizeError(error),
       },
-    })
-    await createNodeModulesOverlay(copyRoot, candidate.rootPath)
-    return { entryPath: join(copyRoot, entryRelativePath), rootPath: copyRoot }
-  } catch (error) {
-    await rm(copyRoot, { recursive: true, force: true })
-    throw error
+    ],
   }
-}
-
-function isExtension(value: unknown): value is Extension {
-  if (!value || typeof value !== "object" || !("spec" in value)) return false
-  const spec = value.spec as Partial<
-    ExtensionSpec<string, import("laziergit").ConfigSchema, readonly string[], unknown>
-  >
-  return typeof spec.name === "string" && typeof spec.activate === "function"
-}
-
-async function extensionTreeFingerprint(directories: readonly string[]): Promise<string> {
-  const entries: string[] = []
-
-  const visit = async (directory: string): Promise<void> => {
-    let children
-    try {
-      children = await readdir(directory, { withFileTypes: true })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return
-      throw error
-    }
-
-    for (const child of children.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (child.name === "node_modules" || child.name.startsWith(".laziergit-cache-")) continue
-      const path = join(directory, child.name)
-      if (child.isDirectory()) {
-        await visit(path)
-        continue
-      }
-      const metadata = await stat(path)
-      entries.push(`${path}:${metadata.size}:${metadata.mtimeMs}`)
-    }
-  }
-
-  for (const directory of directories) await visit(directory)
-  return entries.join("\n")
 }
 
 export class ExtensionKernel {
   readonly diagnostics = new Diagnostics()
+  readonly theme = new ThemeStore()
   readonly panes: PaneHost
   readonly events: EventHost
   readonly commands: CommandHost
@@ -186,7 +113,8 @@ export class ExtensionKernel {
   readonly #debounceMs: number
   readonly #listeners = new Set<() => void>()
   readonly #activations = new Map<string, Activation>()
-  readonly #importCopies = new Set<string>()
+  readonly #notifier = createNotifier()
+  readonly #importCopies: ImportCopyCache
   readonly runtime: InternalRuntime
   #activationOrder: string[] = []
   #snapshot: readonly ExtensionStatus[] = []
@@ -194,8 +122,9 @@ export class ExtensionKernel {
   #reloadTimer: ReturnType<typeof setTimeout> | undefined
   #watchTimer: ReturnType<typeof setInterval> | undefined
   #watchFingerprint = ""
-  #watchScanRunning = false
-  #reloadQueue = Promise.resolve()
+  #watchScan: Promise<void> | undefined
+  #reloadTail: Promise<void> = Promise.resolve()
+  #stopPromise: Promise<void> | undefined
   #stopped = false
 
   constructor(options: ExtensionKernelOptions) {
@@ -203,9 +132,20 @@ export class ExtensionKernel {
     this.#directories = options.directories ?? defaultExtensionDirectories(options.repoRoot)
     this.#watchEnabled = options.watch ?? true
     this.#debounceMs = options.debounceMs ?? 80
-    this.panes = new PaneHost(options.registry)
+
+    this.panes = new PaneHost(options.registry, this.diagnostics)
     this.events = new EventHost(this.diagnostics)
-    this.commands = new CommandHost(this.diagnostics, (id) => this.panes.focus(id))
+    this.commands = new CommandHost(this.diagnostics, (id) => this.panes.focus(id), this.#notifier)
+    this.#importCopies = new ImportCopyCache({
+      directories: [this.#directories.global, this.#directories.repo],
+      diagnose: (diagnostic) => {
+        this.#diagnose({
+          phase: diagnostic.phase,
+          message: diagnostic.message,
+          error: diagnostic.error,
+        })
+      },
+    })
     this.runtime = {
       git: this.git,
       events: {
@@ -214,9 +154,9 @@ export class ExtensionKernel {
       commands: {
         registerComponent: (extension, paneId, spec) => this.commands.registerComponent(extension, paneId, spec),
       },
-      theme: defaultTheme,
+      theme: this.theme,
     }
-    this.panes.setRuntime(this.runtime)
+
     this.panes.setFocusListener((paneId, previous) => {
       this.events.emit("app.pane.focused", { paneId, previous })
     })
@@ -234,84 +174,135 @@ export class ExtensionKernel {
       mkdir(this.#directories.global, { recursive: true }),
       mkdir(this.#directories.repo, { recursive: true }),
     ])
+    if (this.#stopped) return
+
+    await this.#importCopies.sweepStale()
+    if (this.#stopped) return
+
     await this.reload()
-    if (this.#watchEnabled) await this.#startWatcher()
+    if (this.#watchEnabled && !this.#stopped) await this.#startWatcher()
   }
 
   reload(): Promise<void> {
-    this.#reloadQueue = this.#reloadQueue.then(() => this.#reloadNow())
-    return this.#reloadQueue
+    const transaction = this.#reloadTail.then(() => this.#runReload())
+    this.#reloadTail = transaction.then(
+      () => undefined,
+      () => undefined,
+    )
+    return transaction
   }
 
-  async stop(): Promise<void> {
-    if (this.#stopped) return
+  stop(): Promise<void> {
+    if (this.#stopPromise) return this.#stopPromise
+
     this.#stopped = true
-    if (this.#reloadTimer) clearTimeout(this.#reloadTimer)
-    if (this.#watchTimer) clearInterval(this.#watchTimer)
-    await this.#reloadQueue
-    await this.#deactivateAll("quit")
-    await this.#cleanupImportCopies()
-    this.panes.finishReload(this.#activationOrder)
+    if (this.#reloadTimer) {
+      clearTimeout(this.#reloadTimer)
+      this.#reloadTimer = undefined
+    }
+    if (this.#watchTimer) {
+      clearInterval(this.#watchTimer)
+      this.#watchTimer = undefined
+    }
+
+    this.#stopPromise = this.#stopNow()
+    return this.#stopPromise
   }
 
-  getExtensionApi(name: string): unknown {
-    return this.#activations.get(name)?.api
+  getExtensionApi(name: string): ExtensionApiLookup {
+    const activation = this.#activations.get(name)
+    return activation ? { state: "live", api: activation.api } : { state: "missing" }
+  }
+
+  async #runReload(): Promise<void> {
+    if (this.#stopped) return
+    try {
+      await this.#reloadNow()
+    } catch (error) {
+      const normalized = normalizeError(error)
+      this.#diagnose({ phase: "reload", message: normalized.message, error: normalized })
+    }
   }
 
   async #reloadNow(): Promise<void> {
     if (this.#stopped) return
-    const previousNames = [...this.#activationOrder]
-    this.panes.prepareReload(previousNames)
-    await this.#deactivateAll("reload")
-    await this.#cleanupImportCopies()
-    this.#publish(this.#snapshot.map((status) => ({ ...status, state: "loading" as const, message: undefined })))
 
-    const imported = await this.#importAll()
-    const selected = this.#selectByName(imported)
-    await this.#activateAll(selected)
-    this.panes.finishReload(previousNames)
+    const previousOwners = [...this.#activationOrder]
+    this.panes.prepareReload(previousOwners)
+    try {
+      await this.#deactivateAll("reload")
+      if (this.#stopped) return
+
+      this.#publish(this.#snapshot.map((status) => ({ ...status, state: "loading" as const, message: undefined })))
+      const imported = await this.#importAll()
+      if (this.#stopped) {
+        await Promise.all(imported.map((item) => item.lease.release()))
+        return
+      }
+
+      const selected = await this.#selectByName(imported)
+      if (this.#stopped) {
+        await Promise.all([...selected.values()].map((item) => item.lease.release()))
+        return
+      }
+
+      await this.#activateAll(selected)
+    } finally {
+      this.panes.finishReload(previousOwners)
+    }
+  }
+
+  async #discover(directory: string, scope: ExtensionSourceScope): Promise<ExtensionDiscoveryResult> {
+    try {
+      return await discoverExtensions(directory, scope)
+    } catch (error) {
+      return discoveryFailure(directory, scope, error)
+    }
   }
 
   async #importAll(): Promise<readonly ImportedExtension[]> {
     this.#reloadGeneration += 1
-    let candidates: readonly ExtensionCandidate[] = []
-    try {
-      const [global, repo] = await Promise.all([
-        discoverExtensions(this.#directories.global, "global"),
-        discoverExtensions(this.#directories.repo, "repo"),
-      ])
-      candidates = [...global, ...repo]
-    } catch (error) {
-      const normalized = normalizeError(error)
-      this.diagnostics.report({ phase: "discover", message: normalized.message, error: normalized })
-    }
+    const [global, repo] = await Promise.all([
+      this.#discover(this.#directories.global, "global"),
+      this.#discover(this.#directories.repo, "repo"),
+    ])
 
     const statuses: ExtensionStatus[] = []
     const imported: ImportedExtension[] = []
-    for (const candidate of candidates) {
+    for (const failure of [...global.failures, ...repo.failures]) {
+      statuses.push({
+        key: failureKey(failure),
+        path: failure.path,
+        scope: failure.scope,
+        state: "failed",
+        message: failure.error.message,
+      })
+      this.#diagnose({
+        phase: "discover",
+        message: `${failure.path}: ${failure.error.message}`,
+        error: failure.error,
+      })
+    }
+
+    for (const candidate of [...global.candidates, ...repo.candidates]) {
+      if (this.#stopped) break
       const key = candidateKey(candidate)
-      let importCopy: ImportCopy | undefined
+      let lease: ImportCopyLease | undefined
       try {
-        // OpenTUI's runtime-module rewrite loader canonicalizes source paths.
-        // A unique sibling copy keeps Bun's module cache honest while preserving
-        // relative imports, import.meta.url assets, and local dependency resolution.
-        importCopy = await createImportCopy(candidate, this.#reloadGeneration)
-        const url = pathToFileURL(importCopy.entryPath)
-        const module = (await import(url.href)) as { default?: unknown }
-        if (!isExtension(module.default)) {
-          throw new TypeError("Default export must be defineExtension({...})")
-        }
-        imported.push({ candidate, extension: module.default })
-        this.#importCopies.add(importCopy.rootPath)
+        lease = await this.#importCopies.acquire(candidate, this.#reloadGeneration)
+        const module = (await import(pathToFileURL(lease.entryPath).href)) as { default?: unknown }
+        assertExtensionDefinition(module.default)
+        const extension = module.default as Extension
+        imported.push({ candidate, extension, lease })
         statuses.push({
           key,
           path: candidate.entryPath,
           scope: candidate.scope,
-          name: module.default.spec.name,
+          name: extension.spec.name,
           state: "loading",
         })
       } catch (error) {
-        if (importCopy) await rm(importCopy.rootPath, { recursive: true, force: true })
+        if (lease) await lease.release()
         const normalized = normalizeError(error)
         statuses.push({
           key,
@@ -320,7 +311,7 @@ export class ExtensionKernel {
           state: "failed",
           message: normalized.message,
         })
-        this.diagnostics.report({
+        this.#diagnose({
           phase: "import",
           message: `${candidate.entryPath}: ${normalized.message}`,
           error: normalized,
@@ -331,7 +322,7 @@ export class ExtensionKernel {
     return imported
   }
 
-  #selectByName(imported: readonly ImportedExtension[]): ReadonlyMap<string, ImportedExtension> {
+  async #selectByName(imported: readonly ImportedExtension[]): Promise<ReadonlyMap<string, ImportedExtension>> {
     const selected = new Map<string, ImportedExtension>()
     const byScope = new Map<string, ImportedExtension>()
 
@@ -344,6 +335,7 @@ export class ExtensionKernel {
           "failed",
           `Duplicate extension name "${name}" in ${item.candidate.scope} scope`,
         )
+        await item.lease.release()
         continue
       }
       byScope.set(scopeKey, item)
@@ -356,8 +348,10 @@ export class ExtensionKernel {
       if (current.candidate.scope === "global" && item.candidate.scope === "repo") {
         this.#updateStatus(current.candidate, "shadowed", `Shadowed by repo extension "${name}"`)
         selected.set(name, item)
+        await current.lease.release()
       } else {
         this.#updateStatus(item.candidate, "shadowed", `Shadowed by repo extension "${name}"`)
+        await item.lease.release()
       }
     }
     return selected
@@ -367,6 +361,7 @@ export class ExtensionKernel {
     const order: string[] = []
     const state = new Map<string, "visiting" | "visited">()
     const blocked = new Map<string, string>()
+    const pending = new Set(selected.values())
 
     const visit = (name: string, stack: readonly string[]): boolean => {
       if (state.get(name) === "visited") return !blocked.has(name)
@@ -407,32 +402,58 @@ export class ExtensionKernel {
       menus: this.#menus,
       statusline: this.#statusline,
       git: this.git,
+      notifier: this.#notifier,
       getExtensionApi: (name) => this.getExtensionApi(name),
     }
 
-    for (const name of order) {
-      const item = selected.get(name)
-      if (!item) continue
-      const reason = blocked.get(name)
-      const failedNeed = (item.extension.spec.needs ?? []).find((need) => !this.#activations.has(need))
-      if (reason || failedNeed) {
-        this.#updateStatus(item.candidate, "failed", reason ?? `Required extension "${failedNeed}" failed`)
-        continue
-      }
+    const releasePending = async (item: ImportedExtension): Promise<void> => {
+      pending.delete(item)
+      await item.lease.release()
+    }
 
-      const scope = new ActivationScope(name, this.diagnostics)
-      const context = createExtensionContext(name, item.extension.spec.config, scope, hosts)
-      try {
-        const api = await item.extension.spec.activate(context as never)
-        this.#activations.set(name, { imported: item, scope, api })
-        this.#activationOrder.push(name)
-        this.#updateStatus(item.candidate, "active")
-      } catch (error) {
-        const normalized = normalizeError(error)
-        await scope.close("deactivated")
-        this.#updateStatus(item.candidate, "failed", normalized.message)
-        this.diagnostics.report({ extension: name, phase: "activate", message: normalized.message, error: normalized })
+    try {
+      for (const name of order) {
+        const item = selected.get(name)
+        if (!item) continue
+        const reason = blocked.get(name)
+        const failedNeed = (item.extension.spec.needs ?? []).find((need) => !this.#activations.has(need))
+        if (reason || failedNeed) {
+          this.#updateStatus(item.candidate, "failed", reason ?? `Required extension "${failedNeed}" failed`)
+          await releasePending(item)
+          continue
+        }
+
+        let scope: ActivationScope | undefined
+        try {
+          scope = new ActivationScope(name, this.diagnostics)
+          const context = createExtensionContext(name, item.extension.spec.config, scope, hosts)
+          const api = await item.extension.spec.activate(context as never)
+          this.#activations.set(name, { imported: item, scope, api })
+          this.#activationOrder.push(name)
+          pending.delete(item)
+          this.#updateStatus(item.candidate, "active")
+        } catch (error) {
+          const normalized = normalizeError(error)
+          if (scope) {
+            try {
+              await scope.close("deactivated")
+            } catch (closeError) {
+              const closeFailure = normalizeError(closeError)
+              this.#diagnose({
+                extension: name,
+                phase: "dispose",
+                message: closeFailure.message,
+                error: closeFailure,
+              })
+            }
+          }
+          await releasePending(item)
+          this.#updateStatus(item.candidate, "failed", normalized.message)
+          this.#diagnose({ extension: name, phase: "activate", message: normalized.message, error: normalized })
+        }
       }
+    } finally {
+      await Promise.all([...pending].map((item) => item.lease.release()))
     }
   }
 
@@ -440,52 +461,120 @@ export class ExtensionKernel {
     for (const name of [...this.#activationOrder].reverse()) {
       const activation = this.#activations.get(name)
       if (!activation) continue
-      if (activation.imported.extension.spec.deactivate) {
-        try {
-          await activation.imported.extension.spec.deactivate()
-        } catch (error) {
-          const normalized = normalizeError(error)
-          this.diagnostics.report({
-            extension: name,
-            phase: "deactivate",
-            message: normalized.message,
-            error: normalized,
-          })
-        }
+
+      try {
+        await activation.imported.extension.spec.deactivate?.()
+      } catch (error) {
+        const normalized = normalizeError(error)
+        this.#diagnose({
+          extension: name,
+          phase: "deactivate",
+          message: normalized.message,
+          error: normalized,
+        })
       }
-      await activation.scope.close(reason)
+
+      try {
+        await activation.scope.close(reason)
+      } catch (error) {
+        const normalized = normalizeError(error)
+        this.#diagnose({
+          extension: name,
+          phase: "dispose",
+          message: normalized.message,
+          error: normalized,
+        })
+      }
+
       this.#activations.delete(name)
+
+      try {
+        await activation.imported.lease.release()
+      } catch (error) {
+        const normalized = normalizeError(error)
+        this.#diagnose({
+          extension: name,
+          phase: "cache",
+          message: normalized.message,
+          error: normalized,
+        })
+      }
     }
     this.#activationOrder = []
   }
 
-  async #cleanupImportCopies(): Promise<void> {
-    await Promise.all([...this.#importCopies].map((path) => rm(path, { recursive: true, force: true })))
-    this.#importCopies.clear()
-  }
-
   async #startWatcher(): Promise<void> {
-    this.#watchFingerprint = await extensionTreeFingerprint([this.#directories.global, this.#directories.repo])
+    const fingerprint = await extensionTreeFingerprint([this.#directories.global, this.#directories.repo])
+    if (this.#stopped) return
+
+    this.#watchFingerprint = fingerprint
+    if (this.#stopped) return
     this.#watchTimer = setInterval(() => void this.#pollForChanges(), Math.max(25, this.#debounceMs))
   }
 
-  async #pollForChanges(): Promise<void> {
-    if (this.#stopped || this.#watchScanRunning) return
-    this.#watchScanRunning = true
+  #pollForChanges(): Promise<void> {
+    if (this.#stopped) return Promise.resolve()
+    if (this.#watchScan) return this.#watchScan
+
+    let scan: Promise<void>
+    scan = this.#scanForChanges().finally(() => {
+      if (this.#watchScan === scan) this.#watchScan = undefined
+    })
+    this.#watchScan = scan
+    return scan
+  }
+
+  async #scanForChanges(): Promise<void> {
     try {
       const fingerprint = await extensionTreeFingerprint([this.#directories.global, this.#directories.repo])
-      if (fingerprint === this.#watchFingerprint) return
+      if (this.#stopped || fingerprint === this.#watchFingerprint) return
+
       this.#watchFingerprint = fingerprint
+      if (this.#stopped) return
       if (this.#reloadTimer) clearTimeout(this.#reloadTimer)
+      if (this.#stopped) return
       this.#reloadTimer = setTimeout(() => {
         this.#reloadTimer = undefined
-        void this.reload()
+        if (!this.#stopped) void this.reload()
       }, this.#debounceMs)
     } catch (error) {
       const normalized = normalizeError(error)
-      this.diagnostics.report({ phase: "watch", message: normalized.message, error: normalized })
-    } finally {
-      this.#watchScanRunning = false
+      this.#diagnose({ phase: "watch", message: normalized.message, error: normalized })
+    }
+  }
+
+  async #stopNow(): Promise<void> {
+    const owners = [...this.#activationOrder]
+
+    await this.#attemptShutdown("watch scan", async () => {
+      await this.#watchScan
+    })
+    await this.#attemptShutdown("reload queue", async () => {
+      await this.#reloadTail
+    })
+    await this.#attemptShutdown("Extension deactivation", async () => {
+      await this.#deactivateAll("quit")
+    })
+    await this.#attemptShutdown("event delivery", async () => {
+      await this.events.drain()
+    })
+    await this.#attemptShutdown("import-copy cleanup", async () => {
+      await this.#importCopies.releaseAll()
+    })
+    await this.#attemptShutdown("Pane reload cleanup", async () => {
+      this.panes.finishReload(owners)
+    })
+    await this.#attemptShutdown("Pane listener cleanup", async () => {
+      this.panes.stop()
+    })
+  }
+
+  async #attemptShutdown(label: string, operation: () => void | Promise<void>): Promise<void> {
+    try {
+      await operation()
+    } catch (error) {
+      const normalized = normalizeError(error)
+      this.#diagnose({ phase: "shutdown", message: `${label}: ${normalized.message}`, error: normalized })
     }
   }
 
@@ -496,6 +585,25 @@ export class ExtensionKernel {
 
   #publish(snapshot: readonly ExtensionStatus[]): void {
     this.#snapshot = snapshot
-    for (const listener of this.#listeners) listener()
+    for (const listener of Array.from(this.#listeners)) {
+      try {
+        listener()
+      } catch {
+        // Snapshot observers cannot poison activation, reload, or shutdown.
+      }
+    }
+  }
+
+  #diagnose(input: {
+    readonly extension?: string
+    readonly phase: DiagnosticPhase
+    readonly message: string
+    readonly error?: Error
+  }): void {
+    try {
+      this.diagnostics.report(input)
+    } catch {
+      // Diagnostics are observers and cannot poison kernel lifecycle work.
+    }
   }
 }

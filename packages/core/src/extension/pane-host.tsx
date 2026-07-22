@@ -1,9 +1,10 @@
+import { PaneRuntimeProvider } from "@laziergit/runtime-bridge"
 import type { PluginContext, SlotRegistry } from "@opentui/core"
 import type { ReactNode } from "react"
 import { createElement } from "react"
-import { PaneRuntimeProvider, RuntimeProvider, type InternalRuntime } from "laziergit/internal"
 import type { PaneHandle, PaneProps, PaneSpec } from "laziergit"
 
+import type { Diagnostics } from "./diagnostics"
 import { assertScopedId } from "./id"
 
 export type PaneSlots = Record<string, PaneProps>
@@ -25,17 +26,31 @@ export class PaneHost {
   readonly #entries = new Map<string, MutablePaneEntry>()
   readonly #listeners = new Set<() => void>()
   readonly #reloadingOwners = new Set<string>()
-  #runtime: InternalRuntime | undefined
+  readonly #pluginOwners = new Map<string, string>()
+  readonly #disposePluginErrorListener: () => void
   #snapshot: readonly PaneEntry[] = []
   #focused: string | null = null
   #onFocus: ((paneId: string, previous: string | null) => void) | undefined
+  #stopped = false
 
-  constructor(registry: SlotRegistry<ReactNode, PaneSlots, PluginContext>) {
+  constructor(registry: SlotRegistry<ReactNode, PaneSlots, PluginContext>, diagnostics?: Diagnostics) {
     this.registry = registry
-  }
-
-  setRuntime(runtime: InternalRuntime): void {
-    this.#runtime = runtime
+    this.#disposePluginErrorListener = diagnostics
+      ? registry.onPluginError((failure) => {
+          const owner = this.#pluginOwners.get(failure.pluginId)
+          if (!owner) return
+          try {
+            diagnostics.report({
+              extension: owner,
+              phase: "render",
+              message: failure.error.message,
+              error: failure.error,
+            })
+          } catch {
+            // Registry error reporting cannot feed a failure back into the registry.
+          }
+        })
+      : () => {}
   }
 
   setFocusListener(listener: (paneId: string, previous: string | null) => void): void {
@@ -55,29 +70,33 @@ export class PaneHost {
 
   register(owner: string, spec: PaneSpec): PaneHandle {
     assertScopedId(owner, spec.id)
-    const runtime = this.#runtime
-    if (!runtime) throw new Error("Pane runtime is not initialized")
 
     const existing = this.#entries.get(spec.id)
     if (existing?.state === "active") throw new Error(`Pane "${spec.id}" is already registered`)
     if (existing && existing.owner !== owner) throw new Error(`Pane "${spec.id}" belongs to "${existing.owner}"`)
 
     const registration = Symbol(spec.id)
-    const unregisterPlugin = this.registry.register({
-      id: `pane:${spec.id}`,
-      slots: {
-        [spec.id]: (_context, props) =>
-          createElement(
-            RuntimeProvider,
-            { runtime },
+    const pluginId = `pane:${spec.id}`
+    const previousOwner = this.#pluginOwners.get(pluginId)
+    this.#pluginOwners.set(pluginId, owner)
+    let unregisterPlugin: () => void
+    try {
+      unregisterPlugin = this.registry.register({
+        id: pluginId,
+        slots: {
+          [spec.id]: (_context, props) =>
             createElement(
               PaneRuntimeProvider,
               { value: { extension: owner, paneId: spec.id } },
               createElement(spec.component, props),
             ),
-          ),
-      },
-    })
+        },
+      })
+    } catch (error) {
+      if (previousOwner) this.#pluginOwners.set(pluginId, previousOwner)
+      else this.#pluginOwners.delete(pluginId)
+      throw error
+    }
 
     this.#entries.set(spec.id, {
       id: spec.id,
@@ -118,7 +137,11 @@ export class PaneHost {
     const previous = this.#focused
     this.#focused = id
     this.#publish()
-    this.#onFocus?.(id, previous)
+    try {
+      this.#onFocus?.(id, previous)
+    } catch {
+      // Focus observers cannot change Pane focus semantics.
+    }
   }
 
   prepareReload(owners: readonly string[]): void {
@@ -138,6 +161,17 @@ export class PaneHost {
     this.#publish()
   }
 
+  stop(): void {
+    if (this.#stopped) return
+    this.#stopped = true
+    try {
+      this.#disposePluginErrorListener()
+    } catch {
+      // Registry listener cleanup is best-effort during shutdown.
+    }
+    this.#pluginOwners.clear()
+  }
+
   #firstActivePane(): string | null {
     return [...this.#entries.values()].find((pane) => pane.state === "active")?.id ?? null
   }
@@ -151,6 +185,12 @@ export class PaneHost {
         const order = (left.placement?.order ?? 100) - (right.placement?.order ?? 100)
         return order !== 0 ? order : left.id.localeCompare(right.id)
       })
-    for (const listener of this.#listeners) listener()
+    for (const listener of Array.from(this.#listeners)) {
+      try {
+        listener()
+      } catch {
+        // Snapshot observers cannot poison registration or reload.
+      }
+    }
   }
 }

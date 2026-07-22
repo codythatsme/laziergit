@@ -13,6 +13,7 @@
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
+    "@laziergit/runtime-bridge": "workspace:*",
     "@opentui/core": "catalog:",
     "@opentui/react": "catalog:",
     "effect": "catalog:",

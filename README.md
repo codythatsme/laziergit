@@ -16,8 +16,10 @@ Stack: Bun · OpenTUI + React · Effect (core-internal) · system git.
 bun install
 bun run dev             # Ctrl+C exits
 bun run test
+bun run test:runtime     # focused hot-reload lifecycle fixture
 bun run typecheck
 bun run lint
+bun run verify           # format, lint, typecheck, and tests
 
 bun scripts/vendor.ts   # fetch pinned reference repos into vendor/ (gitignored)
 ```

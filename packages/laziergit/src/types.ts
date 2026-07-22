@@ -1,10 +1,7 @@
-import type { Context, ManagedRuntime } from "effect"
+import { createExtensionDefinition } from "@laziergit/runtime-bridge"
 import type * as Effect from "effect/Effect"
 import type * as Stream from "effect/Stream"
 import type { ComponentType } from "react"
-
-const extensionNamePattern = /^[a-z][a-z0-9-]*$/
-const reservedExtensionNames = new Set(["app", "git"])
 
 export interface Disposable {
   dispose(): void
@@ -35,17 +32,7 @@ export function defineExtension<
   const Needs extends readonly NeedName[] = readonly [],
   Api = void,
 >(spec: ExtensionSpec<TName, Config, Needs, Api>): Extension<TName, Config, Needs, Api> {
-  if (!extensionNamePattern.test(spec.name) || reservedExtensionNames.has(spec.name)) {
-    throw new TypeError(
-      `Invalid extension name "${spec.name}". Use lowercase kebab-case; "app" and "git" are reserved.`,
-    )
-  }
-
-  if (typeof spec.activate !== "function") {
-    throw new TypeError(`Extension "${spec.name}" must provide activate(ctx)`)
-  }
-
-  return Object.freeze({ spec })
+  return createExtensionDefinition(spec)
 }
 
 export interface ExtensionSpec<
@@ -87,7 +74,7 @@ export interface ExtensionContext<
   readonly popups: PopupToolkit
   readonly statusline: Statusline<TName>
   readonly extensions: ExtensionHub<Needs>
-  readonly effect: EffectEscape
+  readonly effect: EffectEscape<TName>
   readonly signal: AbortSignal
   exec(command: string, args?: readonly string[], options?: ExecOptions): Promise<ExecOutput>
   open(url: string): Promise<void>
@@ -496,17 +483,16 @@ export interface GitService {
   readonly changes: Stream.Stream<GitState>
 }
 
-export interface EventsService {
-  readonly publish: <K extends keyof EventMap & string>(event: K, ...payload: EventPayload<K>) => Effect.Effect<void>
+export interface EventsService<TName extends string = string> {
+  readonly publish: <K extends keyof EventMap & ScopedId<TName>>(
+    event: K,
+    ...payload: EventPayload<K>
+  ) => Effect.Effect<void>
   readonly stream: <K extends keyof EventMap & string>(event: K) => Stream.Stream<EventMap[K]>
 }
 
-export type CoreServices = GitService | EventsService
-
-export interface EffectEscape {
-  readonly runtime: ManagedRuntime.ManagedRuntime<CoreServices, never>
-  readonly keys: {
-    readonly Git: Context.Key<GitService, GitService>
-    readonly Events: Context.Key<EventsService, EventsService>
-  }
+export interface EffectEscape<TName extends string = string> {
+  readonly git: GitService
+  readonly events: EventsService<TName>
+  readonly runPromise: <A, E>(effect: Effect.Effect<A, E, never>) => Promise<A>
 }

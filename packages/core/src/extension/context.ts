@@ -23,7 +23,10 @@ import type { EventHost } from "./event-host"
 import { GitPlaceholder, gitUnavailable } from "./git-placeholder"
 import { assertScopedId } from "./id"
 import type { PaneHost } from "./pane-host"
+import { bindNotifier, type Notifier } from "./notifier"
 import type { MenuHost, StatuslineHost } from "./registry-hosts"
+
+export type ExtensionApiLookup = { readonly state: "live"; readonly api: unknown } | { readonly state: "missing" }
 
 export interface ContextHosts {
   readonly repoRoot: string
@@ -34,7 +37,8 @@ export interface ContextHosts {
   readonly menus: MenuHost
   readonly statusline: StatuslineHost
   readonly git: GitPlaceholder
-  getExtensionApi(name: string): unknown
+  readonly notifier: Notifier
+  getExtensionApi(name: string): ExtensionApiLookup
 }
 
 interface InternalConfigOption extends ConfigOption {
@@ -78,10 +82,35 @@ function unavailableEffectEscape(): EffectEscape {
   ) as EffectEscape
 }
 
-function guardConsumedApi(api: unknown, scope: ActivationScope): unknown {
-  if ((typeof api !== "object" || api === null) && typeof api !== "function") return api
+function isObjectLike(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function"
+}
 
-  return new Proxy(api as object, {
+function isDisposable(value: unknown): value is Disposable {
+  if (!isObjectLike(value)) return false
+  return typeof Reflect.get(value, "dispose") === "function"
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  if (!isObjectLike(value)) return false
+  return typeof Reflect.get(value, "then") === "function"
+}
+
+function processExportedApiResult(result: unknown, scope: ActivationScope): unknown {
+  if (isDisposable(result)) {
+    return attachDisposable(scope, result, "refresh" in result ? ["dispose", "refresh"] : ["dispose"])
+  }
+  if (isPromiseLike(result)) {
+    const processed = Promise.resolve(result).then((value) => processExportedApiResult(value, scope))
+    return scope.supervise(processed)
+  }
+  return result
+}
+
+function guardConsumedApi(api: unknown, scope: ActivationScope): unknown {
+  if (!isObjectLike(api)) return api
+
+  return new Proxy(api, {
     get(target, property, receiver) {
       scope.assertActive()
       const member = Reflect.get(target, property, receiver) as unknown
@@ -89,17 +118,12 @@ function guardConsumedApi(api: unknown, scope: ActivationScope): unknown {
 
       return (...args: unknown[]) => {
         scope.assertActive()
-        const result = Reflect.apply(member, target, args) as unknown
-        if (result && typeof result === "object" && "dispose" in result) {
-          return attachDisposable(
-            scope,
-            result as Disposable,
-            "refresh" in result ? ["dispose", "refresh"] : ["dispose"],
-          )
-        }
-        if (result instanceof Promise) return scope.supervise(result)
-        return result
+        return processExportedApiResult(Reflect.apply(member, target, args), scope)
       }
+    },
+    apply(target, thisArg, args) {
+      scope.assertActive()
+      return processExportedApiResult(Reflect.apply(target as (...values: unknown[]) => unknown, thisArg, args), scope)
     },
   })
 }
@@ -204,9 +228,7 @@ export function createExtensionContext(
     prompt: () => scope.supervise(Promise.reject(new Error("Popups arrive in M2"))),
     select: <T>() => scope.supervise<T | undefined>(Promise.reject(new Error("Popups arrive in M2"))),
     menu: () => scope.supervise(Promise.reject(new Error("Popups arrive in M2"))),
-    notify(message, level = "info") {
-      console.error(`[${extension}] ${level}: ${message}`)
-    },
+    notify: bindNotifier(hosts.notifier, extension),
   })
 
   const statusline = scope.guard<Statusline>({
@@ -256,9 +278,9 @@ export function createExtensionContext(
     statusline,
     extensions: scope.guard({
       get(name: string) {
-        const api = hosts.getExtensionApi(name)
-        if (api === undefined) throw new Error(`Required extension "${name}" has no live API`)
-        return guardConsumedApi(api, scope)
+        const lookup = hosts.getExtensionApi(name)
+        if (lookup.state === "missing") throw new Error(`Required extension "${name}" has no live API`)
+        return guardConsumedApi(lookup.api, scope)
       },
     } as object) as never,
     effect: scope.guard(unavailableEffectEscape()),

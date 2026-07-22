@@ -4,17 +4,35 @@ import { StaleContextError, type Disposable, type StaleReason } from "laziergit"
 import { normalizeError, type Diagnostics } from "./diagnostics"
 
 type Finalizer = () => void | Promise<void>
+type FinalizerState = "pending" | "running" | "done" | "detached"
+
+interface FinalizerRecord {
+  finalizer: Finalizer | undefined
+  state: FinalizerState
+  completion: Promise<void> | undefined
+}
+
+const completed = Promise.resolve()
 
 export class ActivationScope {
   readonly #controller = new AbortController()
   readonly #effectScope = Scope.makeUnsafe("sequential")
   readonly #diagnostics: Diagnostics
+  readonly #finalizers: FinalizerRecord[] = []
   readonly extension: string
   #reason: StaleReason | undefined
+  #closePromise: Promise<void> | undefined
 
   constructor(extension: string, diagnostics: Diagnostics) {
     this.extension = extension
     this.#diagnostics = diagnostics
+
+    Effect.runSync(
+      Scope.addFinalizer(
+        this.#effectScope,
+        Effect.promise(() => this.#drain()),
+      ),
+    )
   }
 
   get signal(): AbortSignal {
@@ -26,64 +44,58 @@ export class ActivationScope {
   }
 
   assertActive(): void {
-    if (this.#reason) throw new StaleContextError(this.extension, this.#reason)
+    if (this.#reason !== undefined) throw new StaleContextError(this.extension, this.#reason)
   }
 
   track(finalizer: Finalizer): Disposable {
-    let disposed = false
-    const run = async () => {
-      if (disposed) return
-      disposed = true
-      try {
-        await finalizer()
-      } catch (error) {
-        const normalized = normalizeError(error)
-        this.#diagnostics.report({
-          extension: this.extension,
-          phase: "dispose",
-          message: normalized.message,
-          error: normalized,
-        })
-      }
-    }
-
-    Effect.runSync(Scope.addFinalizer(this.#effectScope, Effect.promise(run)))
+    this.assertActive()
+    const record = this.#register(finalizer)
 
     return {
-      dispose() {
-        void run()
+      dispose: () => {
+        void this.#run(record)
       },
     }
   }
 
-  supervise<T>(promise: Promise<T>, cancel?: () => void): Promise<T> {
+  supervise<T>(promise: PromiseLike<T>, cancel?: () => void): Promise<T> {
     this.assertActive()
 
     return new Promise<T>((resolve, reject) => {
-      let parked = false
-      const registration = this.track(() => {
-        parked = true
-        cancel?.()
+      let settlement: { resolve(value: T): void; reject(error: unknown): void } | undefined = {
+        resolve,
+        reject,
+      }
+      const registration = this.#register(() => {
+        settlement = undefined
+        return cancel?.()
       })
 
-      promise.then(
+      Promise.resolve(promise).then(
         (value) => {
-          registration.dispose()
-          if (!parked && this.active) resolve(value)
+          const current = settlement
+          if (!current || !this.active || !this.#detach(registration)) return
+          settlement = undefined
+          current.resolve(value)
         },
         (error: unknown) => {
-          registration.dispose()
-          if (!parked && this.active) reject(error)
+          const current = settlement
+          if (!current || !this.active || !this.#detach(registration)) return
+          settlement = undefined
+          current.reject(error)
         },
       )
     })
   }
 
-  async close(reason: StaleReason): Promise<void> {
-    if (this.#reason) return
-    this.#controller.abort(reason)
-    await Effect.runPromise(Scope.close(this.#effectScope, Exit.void))
+  close(reason: StaleReason): Promise<void> {
+    if (this.#closePromise) return this.#closePromise
+
     this.#reason = reason
+    const closePromise = Promise.resolve().then(() => Effect.runPromise(Scope.close(this.#effectScope, Exit.void)))
+    this.#closePromise = closePromise
+    this.#controller.abort(reason)
+    return closePromise
   }
 
   guard<T extends object>(target: T, staleNoops: readonly PropertyKey[] = []): T {
@@ -105,6 +117,89 @@ export class ActivationScope {
           return Reflect.apply(member, value, args) as unknown
         }
       },
+      apply(value, thisArg, args) {
+        assertActive()
+        return Reflect.apply(value as (...values: unknown[]) => unknown, thisArg, args) as unknown
+      },
     })
+  }
+
+  #register(finalizer: Finalizer): FinalizerRecord {
+    const record: FinalizerRecord = {
+      finalizer,
+      state: "pending",
+      completion: undefined,
+    }
+    this.#finalizers.push(record)
+    return record
+  }
+
+  #detach(record: FinalizerRecord): boolean {
+    if (record.state !== "pending") return false
+
+    record.state = "detached"
+    record.finalizer = undefined
+    this.#remove(record)
+    return true
+  }
+
+  #remove(record: FinalizerRecord): void {
+    const index = this.#finalizers.indexOf(record)
+    if (index !== -1) this.#finalizers.splice(index, 1)
+  }
+
+  #run(record: FinalizerRecord): Promise<void> {
+    if (record.state === "running") return record.completion ?? completed
+    if (record.state !== "pending") return completed
+
+    record.state = "running"
+    const finalizer = record.finalizer
+    record.finalizer = undefined
+
+    let resolveCompletion: () => void = () => undefined
+    const completion = new Promise<void>((resolve) => {
+      resolveCompletion = resolve
+    })
+    record.completion = completion
+
+    const finish = () => {
+      this.#remove(record)
+      record.state = "done"
+      record.completion = undefined
+      resolveCompletion()
+    }
+
+    try {
+      Promise.resolve(finalizer?.()).then(finish, (error: unknown) => {
+        this.#reportFinalizerFailure(error)
+        finish()
+      })
+    } catch (error) {
+      this.#reportFinalizerFailure(error)
+      finish()
+    }
+
+    return completion
+  }
+
+  async #drain(): Promise<void> {
+    while (this.#finalizers.length > 0) {
+      const record = this.#finalizers.pop()
+      if (record) await this.#run(record)
+    }
+  }
+
+  #reportFinalizerFailure(error: unknown): void {
+    try {
+      const normalized = normalizeError(error)
+      this.#diagnostics.report({
+        extension: this.extension,
+        phase: "dispose",
+        message: normalized.message,
+        error: normalized,
+      })
+    } catch {
+      // Cleanup must continue even if diagnostics itself fails.
+    }
   }
 }

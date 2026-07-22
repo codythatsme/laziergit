@@ -8,6 +8,9 @@ export type DiagnosticPhase =
   | "command"
   | "render"
   | "watch"
+  | "reload"
+  | "cache"
+  | "shutdown"
 
 export interface Diagnostic {
   readonly extension?: string
@@ -33,15 +36,33 @@ export class Diagnostics {
     this.#entries = [...this.#entries, diagnostic].slice(-100)
 
     const prefix = diagnostic.extension ? `[${diagnostic.extension}]` : "[extensions]"
-    console.error(`${prefix} ${diagnostic.phase}: ${diagnostic.message}`)
-    if (diagnostic.error?.stack) console.error(diagnostic.error.stack)
+    try {
+      console.error(`${prefix} ${diagnostic.phase}: ${diagnostic.message}`)
+    } catch {
+      // Console reporters are observers and cannot block diagnostic publication.
+    }
+    try {
+      if (diagnostic.error?.stack) console.error(diagnostic.error.stack)
+    } catch {
+      // Stack formatting and console reporters are both best-effort.
+    }
 
-    for (const listener of this.#listeners) listener()
+    for (const listener of Array.from(this.#listeners)) {
+      try {
+        listener()
+      } catch {
+        // Diagnostics cannot recursively diagnose a failing diagnostic listener.
+      }
+    }
   }
 }
 
 export function normalizeError(error: unknown): Error {
   if (error instanceof Error) return error
   if (typeof error === "string") return new Error(error)
-  return new Error(String(error))
+  try {
+    return new Error(String(error))
+  } catch {
+    return new Error("Unknown error")
+  }
 }

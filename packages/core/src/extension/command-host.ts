@@ -2,6 +2,7 @@ import type { CommandSpec, Disposable } from "laziergit"
 
 import { normalizeError, type Diagnostics } from "./diagnostics"
 import { assertScopedId } from "./id"
+import { createNotifier, type Notifier } from "./notifier"
 
 interface RegisteredCommand {
   readonly owner: string
@@ -12,10 +13,12 @@ export class CommandHost {
   readonly #commands = new Map<string, RegisteredCommand>()
   readonly #diagnostics: Diagnostics
   readonly #focusPane: (id: string) => void
+  readonly #notify: Notifier
 
-  constructor(diagnostics: Diagnostics, focusPane: (id: string) => void) {
+  constructor(diagnostics: Diagnostics, focusPane: (id: string) => void, notify: Notifier = createNotifier()) {
     this.#diagnostics = diagnostics
     this.#focusPane = focusPane
+    this.#notify = notify
   }
 
   register(owner: string, spec: CommandSpec): Disposable {
@@ -44,13 +47,25 @@ export class CommandHost {
       await command.spec.run()
     } catch (error) {
       const normalized = normalizeError(error)
-      this.#diagnostics.report({
-        extension: command.owner,
-        phase: "command",
-        message: `${id}: ${normalized.message}`,
-        error: normalized,
-      })
-      throw normalized
+      try {
+        this.#diagnostics.report({
+          extension: command.owner,
+          phase: "command",
+          message: `${id}: ${normalized.message}`,
+          error: normalized,
+        })
+      } catch {
+        // Diagnostics are best-effort and do not change Command execution semantics.
+      }
+      try {
+        this.#notify({
+          extension: command.owner,
+          message: `${command.spec.title}: ${normalized.message}`,
+          level: "error",
+        })
+      } catch {
+        // Custom notification adapters are isolated from Command execution.
+      }
     }
   }
 }

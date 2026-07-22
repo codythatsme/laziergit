@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "laziergit",
+  "name": "@laziergit/runtime-bridge",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,14 +13,10 @@
   "scripts": {
     "typecheck": "tsc --project tsconfig.json"
   },
-  "dependencies": {
-    "@laziergit/runtime-bridge": "workspace:*"
-  },
   "devDependencies": {
     "@types/react": "catalog:"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.83",
     "react": ">=19.2.0"
   }
 }
