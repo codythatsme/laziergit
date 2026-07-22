@@ -15,6 +15,7 @@
   "dependencies": {
     "@laziergit/runtime-bridge": "workspace:*",
     "@opentui/core": "catalog:",
+    "@opentui/keymap": "catalog:",
     "@opentui/react": "catalog:",
     "effect": "catalog:",
     "laziergit": "workspace:*",

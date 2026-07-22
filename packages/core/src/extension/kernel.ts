@@ -1,12 +1,36 @@
-import { mkdir } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
+import { dirname } from "node:path"
 import { pathToFileURL } from "node:url"
-import type { PluginContext, SlotRegistry } from "@opentui/core"
+import type { CliRenderer, KeyEvent, PluginContext, Renderable, SlotRegistry } from "@opentui/core"
+import type { Keymap } from "@opentui/keymap"
+import { registerLeader } from "@opentui/keymap/addons"
+import { createOpenTuiKeymap } from "@opentui/keymap/opentui"
+import { createReactSlotRegistry } from "@opentui/react"
 import { assertExtensionDefinition } from "@laziergit/runtime-bridge"
 import type { ReactNode } from "react"
 import type { CommandSpec, Disposable, EventMap, Extension, Theme } from "laziergit"
 
+import {
+  defaultConfigFiles,
+  emptyConfig,
+  loadConfig,
+  readConfigDocuments,
+  resolveExtensionConfig,
+  type ConfigDocument,
+  type ConfigFiles,
+  type CoreConfig,
+  type LoadedConfig,
+} from "../config/config"
+import { buildConfigSchema } from "../config/schema"
+import { LayoutHost } from "../ui/layout"
+import { installKeymap, KeybindingHost } from "../ui/keybindings"
+import { MenuHost } from "../ui/menu-host"
+import { NotificationHost } from "../ui/notification-host"
+import { PopupHost, type CheatSheetEntry, type CheatSheetSection } from "../ui/popup-host"
+import { SlotOwners, type UiSlotRegistry, type UiSlots } from "../ui/slots"
+import { StatuslineHost } from "../ui/statusline-host"
 import { ActivationScope } from "./activation-scope"
-import { CommandHost } from "./command-host"
+import { CommandHost, type CommandEntry } from "./command-host"
 import { createExtensionContext, type ContextHosts, type ExtensionApiLookup } from "./context"
 import { Diagnostics, normalizeError, type DiagnosticPhase } from "./diagnostics"
 import {
@@ -23,8 +47,7 @@ import { EventHost } from "./event-host"
 import { GitPlaceholder } from "./git-placeholder"
 import { ImportCopyCache, type ImportCopyLease } from "./import-copy-cache"
 import { createNotifier } from "./notifier"
-import { PaneHost, type PaneSlots } from "./pane-host"
-import { MenuHost, StatuslineHost } from "./registry-hosts"
+import { PaneHost } from "./pane-host"
 import { ThemeStore } from "./theme"
 
 export type ExtensionLoadState = "loading" | "active" | "failed" | "shadowed"
@@ -52,10 +75,16 @@ interface Activation {
 
 export interface ExtensionKernelOptions {
   readonly repoRoot: string
-  readonly registry: SlotRegistry<ReactNode, PaneSlots, PluginContext>
+  readonly renderer: CliRenderer
   readonly directories?: ExtensionDirectories
+  readonly configFiles?: ConfigFiles
   readonly watch?: boolean
+  /** How long to wait for edits to settle before acting on them. */
   readonly debounceMs?: number
+  /** How often to look for changes. Separate from the settle delay, which it dwarfs. */
+  readonly pollMs?: number
+  /** Invoked by the `app.quit` Command; the process owner decides what quitting means. */
+  readonly onQuit?: () => void
 }
 
 interface InternalRuntime {
@@ -75,6 +104,9 @@ interface InternalRuntime {
     subscribe(listener: () => void): () => void
   }
 }
+
+/** Core's own Commands. "app" is a reserved Extension name, so these ids can never collide. */
+const coreOwner = "app"
 
 function candidateKey(candidate: ExtensionCandidate): string {
   return `${candidate.scope}:${candidate.rootPath}`
@@ -98,30 +130,66 @@ function discoveryFailure(directory: string, scope: ExtensionSourceScope, error:
   }
 }
 
+function documentFingerprint(documents: readonly ConfigDocument[]): string {
+  return documents.map((document) => `${document.path}\0${document.text ?? ""}`).join("\0\0")
+}
+
+/** Canonical in both section order and key order, so reformatting config reloads nothing. */
+function sectionFingerprint(config: LoadedConfig): string {
+  const sections = [...config.extensions]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, section]) => [name, JSON.stringify(section, Object.keys(section).sort())] as const)
+  return JSON.stringify(sections)
+}
+
+function cheatSheetEntries(entries: readonly CommandEntry[]): readonly CheatSheetEntry[] {
+  return entries.filter((entry) => entry.keys.length > 0).map((entry) => ({ keys: entry.keys, title: entry.title }))
+}
+
 export class ExtensionKernel {
   readonly diagnostics = new Diagnostics()
   readonly theme = new ThemeStore()
+  readonly registry: UiSlotRegistry
   readonly panes: PaneHost
+  readonly layout = new LayoutHost()
+  readonly popups = new PopupHost()
+  readonly notifications = new NotificationHost()
+  readonly statusline: StatuslineHost
+  readonly menus: MenuHost
   readonly events: EventHost
   readonly commands: CommandHost
+  readonly keymap: Keymap<Renderable, KeyEvent>
+  readonly keybindings: KeybindingHost<Renderable, KeyEvent>
   readonly git = new GitPlaceholder()
-  readonly #menus = new MenuHost()
-  readonly #statusline = new StatuslineHost()
+  readonly runtime: InternalRuntime
   readonly #repoRoot: string
   readonly #directories: ExtensionDirectories
+  readonly #configFiles: ConfigFiles
   readonly #watchEnabled: boolean
   readonly #debounceMs: number
+  readonly #pollMs: number
+  readonly #renderer: CliRenderer
+  readonly #onQuit: (() => void) | undefined
   readonly #listeners = new Set<() => void>()
   readonly #activations = new Map<string, Activation>()
-  readonly #notifier = createNotifier()
+  readonly #notifier = createNotifier(this.notifications.publish)
+  readonly #slotOwners = new SlotOwners()
+  readonly #disposeSlotErrors: () => void
   readonly #importCopies: ImportCopyCache
-  readonly runtime: InternalRuntime
+  readonly #disposeKeymap: () => void
+  #config: LoadedConfig = emptyConfig
+  #modalFocus: { readonly renderable: Renderable | null } | undefined
+  #leader: string | undefined
+  #disposeLeader: (() => void) | undefined
   #activationOrder: string[] = []
   #snapshot: readonly ExtensionStatus[] = []
   #reloadGeneration = 0
   #reloadTimer: ReturnType<typeof setTimeout> | undefined
   #watchTimer: ReturnType<typeof setInterval> | undefined
-  #watchFingerprint = ""
+  #watchTree = ""
+  #watchConfig = ""
+  #activatedTree = ""
+  #activatedSections = ""
   #watchScan: Promise<void> | undefined
   #reloadTail: Promise<void> = Promise.resolve()
   #stopPromise: Promise<void> | undefined
@@ -130,12 +198,27 @@ export class ExtensionKernel {
   constructor(options: ExtensionKernelOptions) {
     this.#repoRoot = options.repoRoot
     this.#directories = options.directories ?? defaultExtensionDirectories(options.repoRoot)
+    this.#configFiles = options.configFiles ?? defaultConfigFiles(options.repoRoot)
     this.#watchEnabled = options.watch ?? true
     this.#debounceMs = options.debounceMs ?? 80
+    this.#pollMs = options.pollMs ?? 250
+    this.#renderer = options.renderer
+    this.#onQuit = options.onQuit
 
-    this.panes = new PaneHost(options.registry, this.diagnostics)
+    this.registry = createReactSlotRegistry<UiSlots, PluginContext>(options.renderer, {})
+    this.#disposeSlotErrors = this.#slotOwners.watch(this.registry, this.diagnostics)
+    this.panes = new PaneHost(this.registry, this.#slotOwners)
+    this.statusline = new StatuslineHost(this.registry, this.#slotOwners)
+    this.menus = new MenuHost(this.diagnostics, this.popups, this.#notifier)
     this.events = new EventHost(this.diagnostics)
-    this.commands = new CommandHost(this.diagnostics, (id) => this.panes.focus(id), this.#notifier)
+    this.commands = new CommandHost(
+      this.diagnostics,
+      { focus: (paneId) => this.layout.focus(paneId), isLive: (paneId) => this.panes.isLive(paneId) },
+      this.#notifier,
+    )
+    this.keymap = createOpenTuiKeymap(options.renderer)
+    this.#disposeKeymap = installKeymap(this.keymap, { diagnostics: this.diagnostics })
+    this.keybindings = new KeybindingHost(this.keymap, this.diagnostics, (id) => this.#runCommand(id))
     this.#importCopies = new ImportCopyCache({
       directories: [this.#directories.global, this.#directories.repo],
       diagnose: (diagnostic) => {
@@ -157,9 +240,18 @@ export class ExtensionKernel {
       theme: this.theme,
     }
 
-    this.panes.setFocusListener((paneId, previous) => {
-      this.events.emit("app.pane.focused", { paneId, previous })
+    this.panes.subscribe(() => this.layout.setPanes(this.panes.getSnapshot()))
+    this.layout.setFocusListener((paneId, previous) => {
+      this.keybindings.setFocusedPane(paneId)
+      if (paneId !== null) this.events.emit("app.pane.focused", { paneId, previous })
     })
+    this.commands.subscribe(() => this.keybindings.sync(this.commands.getSnapshot()))
+    this.popups.setModalListener((open) => {
+      this.keybindings.setModalOpen(open)
+      this.#trackModalFocus(open)
+    })
+    this.#applyCoreConfig(emptyConfig.core)
+    this.#registerCoreCommands()
   }
 
   getSnapshot = (): readonly ExtensionStatus[] => this.#snapshot
@@ -180,7 +272,7 @@ export class ExtensionKernel {
     if (this.#stopped) return
 
     await this.reload()
-    if (this.#watchEnabled && !this.#stopped) await this.#startWatcher()
+    if (this.#watchEnabled && !this.#stopped) this.#startWatcher()
   }
 
   reload(): Promise<void> {
@@ -214,6 +306,135 @@ export class ExtensionKernel {
     return activation ? { state: "live", api: activation.api } : { state: "missing" }
   }
 
+  /** The palette, as a data list: every visible Command that could run right now. */
+  async openPalette(): Promise<void> {
+    const entries = this.commands.availableEntries()
+    const index = await this.popups.choose(coreOwner, {
+      title: "Commands",
+      placeholder: "Filter commands",
+      choices: entries.map((entry) => ({ label: entry.title, hint: entry.keys.join("  ") })),
+    }).promise
+
+    const entry = index === undefined ? undefined : entries[index]
+    if (entry) await this.commands.execute(entry.id)
+  }
+
+  openCheatSheet(): Promise<void> {
+    return this.popups.cheatSheet(coreOwner, "Keybindings", this.#cheatSheetSections()).promise
+  }
+
+  #registerCoreCommands(): void {
+    const register = (spec: CommandSpec): void => {
+      this.commands.register(coreOwner, spec)
+    }
+
+    register({ id: "app.palette", title: "Command palette", keys: "mod+p", run: () => this.openPalette() })
+    register({ id: "app.cheatsheet", title: "Keybindings", keys: "?", run: () => this.openCheatSheet() })
+    register({ id: "app.focus.next", title: "Focus next pane", keys: "tab", run: () => this.layout.focusStep(1) })
+    register({
+      id: "app.focus.previous",
+      title: "Focus previous pane",
+      keys: "shift+tab",
+      run: () => this.layout.focusStep(-1),
+    })
+    register({ id: "app.tab.next", title: "Next tab in pane", keys: "]", run: () => this.layout.cycleTab(1) })
+    register({ id: "app.tab.previous", title: "Previous tab in pane", keys: "[", run: () => this.layout.cycleTab(-1) })
+    register({ id: "app.reload", title: "Reload extensions", run: () => this.reload() })
+    register({ id: "app.quit", title: "Quit", keys: "q", run: () => this.#onQuit?.() })
+  }
+
+  #cheatSheetSections(): readonly CheatSheetSection[] {
+    const entries = this.commands.getSnapshot()
+    const focused = this.layout.focusedPaneId
+    const sections: CheatSheetSection[] = []
+
+    const globals = cheatSheetEntries(entries.filter((entry) => entry.pane === undefined))
+    if (globals.length > 0) sections.push({ title: "Global", entries: globals })
+
+    // Only Panes that exist right now: the cheat sheet answers "what can I press", so a
+    // Command bound into a Pane nothing registered has nothing to say here.
+    const panes = [
+      ...new Set(
+        entries.flatMap((entry) => (entry.pane !== undefined && this.panes.isLive(entry.pane) ? [entry.pane] : [])),
+      ),
+    ].sort((left, right) => (left === focused ? -1 : right === focused ? 1 : left.localeCompare(right)))
+    for (const pane of panes) {
+      const paneEntries = cheatSheetEntries(entries.filter((entry) => entry.pane === pane))
+      if (paneEntries.length > 0)
+        sections.push({ title: pane === focused ? `${pane} (focused)` : pane, entries: paneEntries })
+    }
+    return sections
+  }
+
+  /**
+   * OpenTUI has one focus slot, and a popup's own input claims it during the commit that
+   * mounts the popup — before any effect could look. So the Renderable to hand focus back
+   * to is captured here, on the transition into modal, which runs before that commit.
+   */
+  #trackModalFocus(open: boolean): void {
+    if (open) {
+      this.#modalFocus ??= { renderable: this.#renderer.currentFocusedRenderable }
+      return
+    }
+
+    const previous = this.#modalFocus?.renderable
+    this.#modalFocus = undefined
+    try {
+      if (previous && !previous.isDestroyed) previous.focus()
+    } catch (error) {
+      const normalized = normalizeError(error)
+      this.#diagnose({ phase: "render", message: `Restoring focus: ${normalized.message}`, error: normalized })
+    }
+  }
+
+  #runCommand(id: string): void {
+    void this.commands.execute(id).catch((error: unknown) => {
+      const normalized = normalizeError(error)
+      this.#diagnose({ phase: "command", message: `${id}: ${normalized.message}`, error: normalized })
+    })
+  }
+
+  #applyCoreConfig(core: CoreConfig): void {
+    this.theme.replace(core.theme)
+    this.layout.setConfig(core.layout)
+    this.commands.setKeybindings(core.keybindings)
+    this.statusline.setConfig(core.statusline)
+
+    if (this.#leader === core.leader) return
+    this.#leader = core.leader
+    this.#disposeLeader?.()
+    try {
+      this.#disposeLeader = registerLeader(this.keymap, { trigger: core.leader })
+    } catch (error) {
+      const normalized = normalizeError(error)
+      this.#disposeLeader = undefined
+      this.#diagnose({ phase: "config", message: `leader: ${normalized.message}`, error: normalized })
+    }
+  }
+
+  async #loadConfig(): Promise<LoadedConfig> {
+    let documents: readonly ConfigDocument[] = []
+    try {
+      documents = await readConfigDocuments(this.#configFiles)
+    } catch (error) {
+      const normalized = normalizeError(error)
+      this.#diagnose({ phase: "config", message: normalized.message, error: normalized })
+    }
+
+    const loaded = loadConfig(documents)
+    this.#config = loaded
+    this.#watchConfig = documentFingerprint(documents)
+    this.#activatedSections = sectionFingerprint(loaded)
+    this.#applyCoreConfig(loaded.core)
+    for (const problem of loaded.problems) {
+      this.#diagnose({
+        phase: "config",
+        message: problem.path ? `${problem.path}: ${problem.message}` : problem.message,
+      })
+    }
+    return loaded
+  }
+
   async #runReload(): Promise<void> {
     if (this.#stopped) return
     try {
@@ -228,12 +449,19 @@ export class ExtensionKernel {
     if (this.#stopped) return
 
     const previousOwners = [...this.#activationOrder]
+    // Core's own modals list Commands that are about to be torn down and re-registered.
+    this.popups.closeForExtension(coreOwner)
     this.panes.prepareReload(previousOwners)
     try {
       await this.#deactivateAll("reload")
       if (this.#stopped) return
 
       this.#publish(this.#snapshot.map((status) => ({ ...status, state: "loading" as const, message: undefined })))
+      await this.#loadConfig()
+      // Fingerprinted before reading a single Extension: an edit that lands mid-reload
+      // then differs from what was loaded, and the next poll picks it up.
+      this.#activatedTree = await this.#treeFingerprint()
+      this.#watchTree = this.#activatedTree
       const imported = await this.#importAll()
       if (this.#stopped) {
         await Promise.all(imported.map((item) => item.lease.release()))
@@ -246,9 +474,28 @@ export class ExtensionKernel {
         return
       }
 
+      await this.#publishSchema(selected)
       await this.#activateAll(selected)
     } finally {
       this.panes.finishReload(previousOwners)
+    }
+  }
+
+  async #publishSchema(selected: ReadonlyMap<string, ImportedExtension>): Promise<void> {
+    const schema = buildConfigSchema(
+      [...selected.values()].map((item) => ({
+        name: item.extension.spec.name,
+        description: item.extension.spec.description,
+        config: item.extension.spec.config,
+      })),
+    )
+    const path = `${dirname(this.#configFiles.global)}/config.schema.json`
+    try {
+      await mkdir(dirname(path), { recursive: true })
+      await writeFile(path, `${JSON.stringify(schema, null, 2)}\n`)
+    } catch (error) {
+      const normalized = normalizeError(error)
+      this.#diagnose({ phase: "config", message: `${path}: ${normalized.message}`, error: normalized })
     }
   }
 
@@ -399,8 +646,10 @@ export class ExtensionKernel {
       events: this.events,
       commands: this.commands,
       panes: this.panes,
-      menus: this.#menus,
-      statusline: this.#statusline,
+      layout: this.layout,
+      menus: this.menus,
+      popups: this.popups,
+      statusline: this.statusline,
       git: this.git,
       notifier: this.#notifier,
       getExtensionApi: (name) => this.getExtensionApi(name),
@@ -413,6 +662,7 @@ export class ExtensionKernel {
 
     try {
       for (const name of order) {
+        if (this.#stopped) break
         const item = selected.get(name)
         if (!item) continue
         const reason = blocked.get(name)
@@ -426,7 +676,11 @@ export class ExtensionKernel {
         let scope: ActivationScope | undefined
         try {
           scope = new ActivationScope(name, this.diagnostics)
-          const context = createExtensionContext(name, item.extension.spec.config, scope, hosts)
+          const config = resolveExtensionConfig(name, item.extension.spec.config, this.#config.extensions.get(name))
+          for (const problem of config.problems) {
+            this.#diagnose({ extension: name, phase: "config", message: `${problem.path}: ${problem.message}` })
+          }
+          const context = createExtensionContext(name, config.values, scope, hosts)
           const api = await item.extension.spec.activate(context as never)
           this.#activations.set(name, { imported: item, scope, api })
           this.#activationOrder.push(name)
@@ -486,6 +740,16 @@ export class ExtensionKernel {
         })
       }
 
+      // Closing the scope already dismissed the popups this Extension opened. This
+      // catches the other direction: menus opened by someone else that are showing
+      // this Extension's spliced items.
+      try {
+        this.popups.closeForExtension(name)
+      } catch (error) {
+        const normalized = normalizeError(error)
+        this.#diagnose({ extension: name, phase: "dispose", message: normalized.message, error: normalized })
+      }
+
       this.#activations.delete(name)
 
       try {
@@ -503,13 +767,13 @@ export class ExtensionKernel {
     this.#activationOrder = []
   }
 
-  async #startWatcher(): Promise<void> {
-    const fingerprint = await extensionTreeFingerprint([this.#directories.global, this.#directories.repo])
-    if (this.#stopped) return
+  #treeFingerprint(): Promise<string> {
+    return extensionTreeFingerprint([this.#directories.global, this.#directories.repo])
+  }
 
-    this.#watchFingerprint = fingerprint
-    if (this.#stopped) return
-    this.#watchTimer = setInterval(() => void this.#pollForChanges(), Math.max(25, this.#debounceMs))
+  /** The last reload already recorded what it loaded, so the watcher only starts the clock. */
+  #startWatcher(): void {
+    this.#watchTimer = setInterval(() => void this.#pollForChanges(), Math.max(25, this.#pollMs))
   }
 
   #pollForChanges(): Promise<void> {
@@ -526,20 +790,49 @@ export class ExtensionKernel {
 
   async #scanForChanges(): Promise<void> {
     try {
-      const fingerprint = await extensionTreeFingerprint([this.#directories.global, this.#directories.repo])
-      if (this.#stopped || fingerprint === this.#watchFingerprint) return
+      const [tree, documents] = await Promise.all([this.#treeFingerprint(), readConfigDocuments(this.#configFiles)])
+      const config = documentFingerprint(documents)
+      if (this.#stopped || (tree === this.#watchTree && config === this.#watchConfig)) return
 
-      this.#watchFingerprint = fingerprint
-      if (this.#stopped) return
+      this.#watchTree = tree
+      this.#watchConfig = config
       if (this.#reloadTimer) clearTimeout(this.#reloadTimer)
       if (this.#stopped) return
       this.#reloadTimer = setTimeout(() => {
         this.#reloadTimer = undefined
-        if (!this.#stopped) void this.reload()
+        if (!this.#stopped) void this.#applyChanges()
       }, this.#debounceMs)
     } catch (error) {
       const normalized = normalizeError(error)
       this.#diagnose({ phase: "watch", message: normalized.message, error: normalized })
+    }
+  }
+
+  /**
+   * Editing the Layout, theme, keybindings, or status line rearranges the live screen;
+   * only a changed Extension tree or a changed Extension config section — the two things
+   * an activation closes over — costs a reload.
+   */
+  async #applyChanges(): Promise<void> {
+    try {
+      const [tree, documents] = await Promise.all([this.#treeFingerprint(), readConfigDocuments(this.#configFiles)])
+      const loaded = loadConfig(documents)
+      if (tree !== this.#activatedTree || sectionFingerprint(loaded) !== this.#activatedSections) {
+        await this.reload()
+        return
+      }
+
+      this.#config = loaded
+      this.#applyCoreConfig(loaded.core)
+      for (const problem of loaded.problems) {
+        this.#diagnose({
+          phase: "config",
+          message: problem.path ? `${problem.path}: ${problem.message}` : problem.message,
+        })
+      }
+    } catch (error) {
+      const normalized = normalizeError(error)
+      this.#diagnose({ phase: "config", message: normalized.message, error: normalized })
     }
   }
 
@@ -564,8 +857,20 @@ export class ExtensionKernel {
     await this.#attemptShutdown("Pane reload cleanup", async () => {
       this.panes.finishReload(owners)
     })
-    await this.#attemptShutdown("Pane listener cleanup", async () => {
-      this.panes.stop()
+    await this.#attemptShutdown("slot error listener cleanup", () => {
+      this.#disposeSlotErrors()
+      this.#slotOwners.clear()
+    })
+    await this.#attemptShutdown("modal cleanup", () => {
+      this.popups.closeAll()
+    })
+    await this.#attemptShutdown("notification cleanup", () => {
+      this.notifications.stop()
+    })
+    await this.#attemptShutdown("keybinding cleanup", () => {
+      this.keybindings.stop()
+      this.#disposeLeader?.()
+      this.#disposeKeymap()
     })
   }
 

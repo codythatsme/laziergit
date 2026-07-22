@@ -26,7 +26,8 @@ interface InternalRuntime {
 
 interface PaneRuntime {
   readonly extension: string
-  readonly paneId: string
+  /** Absent for status line segments, which are components without a Pane to bind into. */
+  readonly paneId?: string
 }
 
 function useRuntime() {
@@ -75,17 +76,18 @@ export function useCommand(spec: Omit<CommandSpec, "pane">): void {
   const latest = useRef(spec)
   latest.current = spec
 
-  if (!pane) {
+  const paneId = pane?.paneId
+  if (!pane || paneId === undefined) {
     throw new Error("useCommand must be called inside a laziergit Pane")
   }
 
   useEffect(() => {
-    const registered = runtime.commands.registerComponent(pane.extension, pane.paneId, {
+    const registered = runtime.commands.registerComponent(pane.extension, paneId, {
       ...latest.current,
       run: () => latest.current.run(),
     })
     return () => registered.dispose()
-  }, [pane.extension, pane.paneId, runtime, spec.id])
+  }, [pane.extension, paneId, runtime, spec.id])
 }
 
 export function createCell<T>(initial: T): Cell<T> {

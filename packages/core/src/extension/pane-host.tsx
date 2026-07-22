@@ -1,13 +1,9 @@
 import { PaneRuntimeProvider } from "@laziergit/runtime-bridge"
-import type { PluginContext, SlotRegistry } from "@opentui/core"
-import type { ReactNode } from "react"
 import { createElement } from "react"
-import type { PaneHandle, PaneProps, PaneSpec } from "laziergit"
+import type { Disposable, PaneSpec } from "laziergit"
 
-import type { Diagnostics } from "./diagnostics"
+import { paneSlotName, type SlotOwners, type UiSlotRegistry } from "../ui/slots"
 import { assertScopedId } from "./id"
-
-export type PaneSlots = Record<string, PaneProps>
 
 export interface PaneEntry {
   readonly id: string
@@ -21,40 +17,21 @@ interface MutablePaneEntry extends PaneEntry {
   registration?: symbol
 }
 
+/**
+ * The Pane registry: which Panes exist, who owns them, and whether they are live.
+ * Where they appear and which one has focus is the Layout's business, not this one's.
+ */
 export class PaneHost {
-  readonly registry: SlotRegistry<ReactNode, PaneSlots, PluginContext>
+  readonly registry: UiSlotRegistry
+  readonly #owners: SlotOwners
   readonly #entries = new Map<string, MutablePaneEntry>()
   readonly #listeners = new Set<() => void>()
   readonly #reloadingOwners = new Set<string>()
-  readonly #pluginOwners = new Map<string, string>()
-  readonly #disposePluginErrorListener: () => void
   #snapshot: readonly PaneEntry[] = []
-  #focused: string | null = null
-  #onFocus: ((paneId: string, previous: string | null) => void) | undefined
-  #stopped = false
 
-  constructor(registry: SlotRegistry<ReactNode, PaneSlots, PluginContext>, diagnostics?: Diagnostics) {
+  constructor(registry: UiSlotRegistry, owners: SlotOwners) {
     this.registry = registry
-    this.#disposePluginErrorListener = diagnostics
-      ? registry.onPluginError((failure) => {
-          const owner = this.#pluginOwners.get(failure.pluginId)
-          if (!owner) return
-          try {
-            diagnostics.report({
-              extension: owner,
-              phase: "render",
-              message: failure.error.message,
-              error: failure.error,
-            })
-          } catch {
-            // Registry error reporting cannot feed a failure back into the registry.
-          }
-        })
-      : () => {}
-  }
-
-  setFocusListener(listener: (paneId: string, previous: string | null) => void): void {
-    this.#onFocus = listener
+    this.#owners = owners
   }
 
   getSnapshot = (): readonly PaneEntry[] => this.#snapshot
@@ -64,11 +41,11 @@ export class PaneHost {
     return () => this.#listeners.delete(listener)
   }
 
-  get focused(): string | null {
-    return this.#focused
+  isLive(id: string): boolean {
+    return this.#entries.get(id)?.state === "active"
   }
 
-  register(owner: string, spec: PaneSpec): PaneHandle {
+  register(owner: string, spec: PaneSpec): Disposable {
     assertScopedId(owner, spec.id)
 
     const existing = this.#entries.get(spec.id)
@@ -77,14 +54,14 @@ export class PaneHost {
 
     const registration = Symbol(spec.id)
     const pluginId = `pane:${spec.id}`
-    const previousOwner = this.#pluginOwners.get(pluginId)
-    this.#pluginOwners.set(pluginId, owner)
+    const previousOwner = this.#owners.ownerOf(pluginId)
+    this.#owners.claim(pluginId, owner)
     let unregisterPlugin: () => void
     try {
       unregisterPlugin = this.registry.register({
         id: pluginId,
         slots: {
-          [spec.id]: (_context, props) =>
+          [paneSlotName(spec.id)]: (_context, props) =>
             createElement(
               PaneRuntimeProvider,
               { value: { extension: owner, paneId: spec.id } },
@@ -93,8 +70,8 @@ export class PaneHost {
         },
       })
     } catch (error) {
-      if (previousOwner) this.#pluginOwners.set(pluginId, previousOwner)
-      else this.#pluginOwners.delete(pluginId)
+      if (previousOwner) this.#owners.claim(pluginId, previousOwner)
+      else this.#owners.release(pluginId, owner)
       throw error
     }
 
@@ -106,7 +83,6 @@ export class PaneHost {
       placement: spec.placement,
       registration,
     })
-    if (!this.#focused) this.#focused = spec.id
     this.#publish()
 
     let disposed = false
@@ -122,25 +98,9 @@ export class PaneHost {
           this.#entries.set(spec.id, { ...current, state: "reloading", registration: undefined })
         } else {
           this.#entries.delete(spec.id)
-          if (this.#focused === spec.id) this.#focused = this.#firstActivePane()
         }
         this.#publish()
       },
-      focus: () => this.focus(spec.id),
-    }
-  }
-
-  focus(id: string): void {
-    const pane = this.#entries.get(id)
-    if (!pane || pane.state !== "active") throw new Error(`Pane "${id}" has no live instance`)
-    if (this.#focused === id) return
-    const previous = this.#focused
-    this.#focused = id
-    this.#publish()
-    try {
-      this.#onFocus?.(id, previous)
-    } catch {
-      // Focus observers cannot change Pane focus semantics.
     }
   }
 
@@ -157,34 +117,11 @@ export class PaneHost {
     for (const [id, pane] of this.#entries) {
       if (pane.state === "reloading" && owners.includes(pane.owner)) this.#entries.delete(id)
     }
-    if (!this.#focused || !this.#entries.has(this.#focused)) this.#focused = this.#firstActivePane()
     this.#publish()
   }
 
-  stop(): void {
-    if (this.#stopped) return
-    this.#stopped = true
-    try {
-      this.#disposePluginErrorListener()
-    } catch {
-      // Registry listener cleanup is best-effort during shutdown.
-    }
-    this.#pluginOwners.clear()
-  }
-
-  #firstActivePane(): string | null {
-    return [...this.#entries.values()].find((pane) => pane.state === "active")?.id ?? null
-  }
-
   #publish(): void {
-    this.#snapshot = [...this.#entries.values()]
-      .map(({ registration: _registration, ...entry }) => entry)
-      .sort((left, right) => {
-        const column = (left.placement?.column ?? 0) - (right.placement?.column ?? 0)
-        if (column !== 0) return column
-        const order = (left.placement?.order ?? 100) - (right.placement?.order ?? 100)
-        return order !== 0 ? order : left.id.localeCompare(right.id)
-      })
+    this.#snapshot = [...this.#entries.values()].map(({ registration: _registration, ...entry }) => entry)
     for (const listener of Array.from(this.#listeners)) {
       try {
         listener()

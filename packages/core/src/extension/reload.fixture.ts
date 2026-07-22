@@ -1,6 +1,4 @@
-import type { PluginContext } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import { createReactSlotRegistry } from "@opentui/react"
 import { ensureRuntimePluginSupport } from "@opentui/react/runtime-plugin-support/configure"
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -8,7 +6,6 @@ import { join } from "node:path"
 import * as laziergitRuntime from "laziergit"
 
 import { ExtensionKernel } from "./kernel"
-import type { PaneSlots } from "./pane-host"
 
 ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
 
@@ -27,11 +24,11 @@ const global = join(directory, "global")
 const repo = join(directory, "repo")
 await Promise.all([mkdir(global), mkdir(repo)])
 const setup = await createTestRenderer({ width: 20, height: 8 })
-const registry = createReactSlotRegistry<PaneSlots, PluginContext>(setup.renderer, {})
 const kernel = new ExtensionKernel({
   repoRoot: directory,
-  registry,
+  renderer: setup.renderer,
   directories: { global, repo },
+  configFiles: { global: join(directory, "global.jsonc"), repo: join(directory, "repo.jsonc") },
   debounceMs: 10,
 })
 const entry = join(repo, "reload.ts")

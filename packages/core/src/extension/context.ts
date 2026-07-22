@@ -1,7 +1,6 @@
 import type {
   CommandRegistry,
-  ConfigOption,
-  ConfigSchema,
+  ConfigValue,
   Disposable,
   EffectEscape,
   EventBus,
@@ -16,6 +15,10 @@ import type {
   Statusline,
 } from "laziergit"
 
+import type { LayoutHost } from "../ui/layout"
+import type { MenuHost } from "../ui/menu-host"
+import type { PopupHandle, PopupHost } from "../ui/popup-host"
+import type { StatuslineHost } from "../ui/statusline-host"
 import type { ActivationScope } from "./activation-scope"
 import type { CommandHost } from "./command-host"
 import type { Diagnostics } from "./diagnostics"
@@ -24,7 +27,6 @@ import { GitPlaceholder, gitUnavailable } from "./git-placeholder"
 import { assertScopedId } from "./id"
 import type { PaneHost } from "./pane-host"
 import { bindNotifier, type Notifier } from "./notifier"
-import type { MenuHost, StatuslineHost } from "./registry-hosts"
 
 export type ExtensionApiLookup = { readonly state: "live"; readonly api: unknown } | { readonly state: "missing" }
 
@@ -34,29 +36,13 @@ export interface ContextHosts {
   readonly events: EventHost
   readonly commands: CommandHost
   readonly panes: PaneHost
+  readonly layout: LayoutHost
   readonly menus: MenuHost
+  readonly popups: PopupHost
   readonly statusline: StatuslineHost
   readonly git: GitPlaceholder
   readonly notifier: Notifier
   getExtensionApi(name: string): ExtensionApiLookup
-}
-
-interface InternalConfigOption extends ConfigOption {
-  readonly min?: number
-  readonly max?: number
-  readonly values?: readonly string[]
-}
-
-export function configDefaults(schema: ConfigSchema | undefined): Readonly<Record<string, unknown>> {
-  if (!schema) return Object.freeze({})
-  return Object.freeze(
-    Object.fromEntries(
-      Object.entries(schema).map(([key, value]) => [
-        key,
-        Array.isArray(value.default) ? Object.freeze([...value.default]) : value.default,
-      ]),
-    ),
-  )
 }
 
 function attachDisposable<T extends Disposable>(scope: ActivationScope, disposable: T, staleNoops = ["dispose"]): T {
@@ -69,6 +55,15 @@ function attachDisposable<T extends Disposable>(scope: ActivationScope, disposab
     },
   })
   return scope.guard(handle, staleNoops)
+}
+
+/**
+ * Modal flows belong to their caller. The popup is dismissed when the scope closes, and
+ * because the scope clears the pending settlement first, the dismissal's own resolution
+ * is dropped — the awaited call never settles rather than resuming on a stale ctx.
+ */
+function supervisePopup<T>(scope: ActivationScope, handle: PopupHandle<T>): Promise<T> {
+  return scope.supervise(handle.promise, () => handle.dismiss())
 }
 
 function unavailableEffectEscape(): EffectEscape {
@@ -176,7 +171,7 @@ function exec(
 
 export function createExtensionContext(
   extension: string,
-  schema: ConfigSchema | undefined,
+  config: Readonly<Record<string, ConfigValue>>,
   scope: ActivationScope,
   hosts: ContextHosts,
 ): ExtensionContext {
@@ -201,11 +196,11 @@ export function createExtensionContext(
 
   const panes = scope.guard<PaneRegistry>({
     register(spec) {
-      const raw = hosts.panes.register(extension, spec)
-      const tracked = scope.track(() => raw.dispose())
+      const registration = hosts.panes.register(extension, spec)
+      const tracked = scope.track(() => registration.dispose())
       const handle: PaneHandle = {
         dispose: () => tracked.dispose(),
-        focus: () => raw.focus(),
+        focus: () => hosts.layout.focus(spec.id),
       }
       return scope.guard(handle, ["dispose"])
     },
@@ -213,21 +208,51 @@ export function createExtensionContext(
 
   const menus = scope.guard<MenuRegistry>({
     register(spec) {
-      return attachDisposable(scope, hosts.menus.register(extension, spec))
+      const title = spec.title
+      return attachDisposable(
+        scope,
+        hosts.menus.register(extension, {
+          id: spec.id,
+          title: typeof title === "string" ? () => title : title,
+          groups: spec.groups,
+        }),
+      )
     },
     extend(id, splice) {
       return attachDisposable(scope, hosts.menus.extend(extension, id, splice))
     },
-    open() {
-      return scope.supervise(Promise.reject(new Error("Menus arrive in M2")))
+    open(id, target) {
+      // Documented as a rejection, so an unregistered id cannot throw synchronously past
+      // an `await` the caller wrote in good faith.
+      try {
+        return supervisePopup(scope, hosts.menus.open(extension, id, target))
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+      }
     },
   })
 
   const popups = scope.guard<PopupToolkit>({
-    confirm: () => scope.supervise(Promise.reject(new Error("Popups arrive in M2"))),
-    prompt: () => scope.supervise(Promise.reject(new Error("Popups arrive in M2"))),
-    select: <T>() => scope.supervise<T | undefined>(Promise.reject(new Error("Popups arrive in M2"))),
-    menu: () => scope.supervise(Promise.reject(new Error("Popups arrive in M2"))),
+    confirm(options) {
+      return supervisePopup(scope, hosts.popups.confirm(extension, options))
+    },
+    prompt(options) {
+      return supervisePopup(scope, hosts.popups.prompt(extension, options))
+    },
+    select(options) {
+      const handle = hosts.popups.choose(extension, {
+        title: options.title,
+        placeholder: options.placeholder,
+        choices: options.items.map((item) => ({ label: item.label, hint: item.hint })),
+      })
+      return scope.supervise(
+        handle.promise.then((index) => (index === undefined ? undefined : options.items[index]?.value)),
+        () => handle.dismiss(),
+      )
+    },
+    menu(options) {
+      return supervisePopup(scope, hosts.menus.adhoc(extension, options.title, options.groups))
+    },
     notify: bindNotifier(hosts.notifier, extension),
   })
 
@@ -268,7 +293,7 @@ export function createExtensionContext(
   const git = scope.guard(gitRaw)
 
   const raw: ExtensionContext = {
-    config: configDefaults(schema) as never,
+    config,
     git,
     events,
     commands,
@@ -316,8 +341,4 @@ export function createExtensionContext(
       }
     },
   })
-}
-
-export function readInternalConfigOption(option: ConfigOption): InternalConfigOption {
-  return option as InternalConfigOption
 }

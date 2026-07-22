@@ -2,7 +2,7 @@
 
 lazygit's workflow, pi's philosophy: a git TUI where the core is deliberately light and **every feature is an Extension** written in TypeScript against a polished public API. The API — not any individual feature — is the product. The test of success: you ask a coding agent for a new pane ("show GitHub Actions runs for my current branch") and it writes a `.ts(x)` file into `~/.config/laziergit/extensions/`, laziergit hot-reloads, and the feature exists.
 
-Vocabulary lives in [CONTEXT.md](./CONTEXT.md). Irreversible decisions live in [docs/adr/](./docs/adr/). The extension API specification lives in [docs/extension-api.md](./docs/extension-api.md). Research that grounds all of this lives in [docs/research/](./docs/research/).
+Vocabulary lives in [CONTEXT.md](./CONTEXT.md). Irreversible decisions live in [docs/adr/](./docs/adr/). The extension API specification lives in [docs/extension-api.md](./docs/extension-api.md); the user-facing config file is documented in [docs/config.md](./docs/config.md). Research that grounds all of this lives in [docs/research/](./docs/research/).
 
 ## Decisions at a glance
 
@@ -19,7 +19,7 @@ Vocabulary lives in [CONTEXT.md](./CONTEXT.md). Irreversible decisions live in [
 | Layout | Config-owned (`config.jsonc` places pane ids); extensions ship overridable hints | this doc |
 | Ext-to-ext | Extensions export typed APIs; bundled extensions must expose extension points | extension-api.md |
 | Git state | Core-owned reactive store + hooks; `ctx.git.raw` escape hatch; shell out to system git | this doc |
-| Config | JSONC + published JSON Schema, global → repo merge | this doc |
+| Config | JSONC + published JSON Schema, global → repo merge | [config.md](./docs/config.md) |
 | v1 scope | Daily-driver loop bundled; gh-workflows as the acceptance test | this doc |
 
 ## Architecture
@@ -58,7 +58,7 @@ Vocabulary lives in [CONTEXT.md](./CONTEXT.md). Irreversible decisions live in [
 - **Lifecycle**: activation runs in `needs`-graph order. Every `ctx` registration is tracked in a per-extension Effect `Scope`; deactivation closes the Scope and unwinds everything (Obsidian Component / opencode v2 precedent). On hot reload, the old `ctx` is **poisoned** — every member access throws a descriptive "stale context" error (pi's trick; exemptions and the async-tail rule in [extension-api.md §5.3](./docs/extension-api.md)) — so captured references fail loudly instead of corrupting state.
 - **Error containment**: pane render errors hit a React error boundary (pane shows an error card, app survives); command and menu-item errors surface as toasts + log entries; event-handler errors are caught per-handler and logged.
 - **Git service** shells out to the system `git` binary via an argv builder (never string-concatenated shell), parses porcelain formats, and retries on `index.lock` contention — all lazygit-proven patterns (see `vendor/lazygit`). Refresh strategy is lazygit's, not naive fs-watching: refresh-after-every-mutation plus a cheap ~2s fingerprint poll (`git for-each-ref` + `.git/HEAD` read). One canonical `GitState` snapshot feeds both the React hooks and the event bus, so panes never disagree mid-render.
-- **Keybindings** ride `@opentui/keymap` (focus-scoped layers, `g`/`gg` sequence disambiguation, leader keys, command catalog). Extensions register Commands; keybindings — user-remappable in config — map keys to Commands per pane context. The cheat-sheet/help overlay falls out of the command catalog.
+- **Keybindings** ride `@opentui/keymap` (focus-scoped layers, `g`/`gg` sequence disambiguation, leader keys, command catalog). Extensions register Commands; keybindings — user-remappable in config — map keys to Commands per pane context. The cheat-sheet/help overlay falls out of the command catalog. Layers are gated by a reactive matcher over laziergit's own focus model rather than by renderer focus, so which Pane owns the keyboard never depends on which Renderable happens to hold the cursor; `mod+` resolves to cmd only where the keyboard protocol can report it, and to ctrl everywhere else.
 - **Menus are data** (Magit transient precedent): action menus are declarative structures owned by whichever extension defines them, and other extensions splice entries in. This is what makes bundled extensions extensible rather than walled gardens.
 - **Single process** for v1. Git exec is already async; if the UI thread ever measurably suffers, the opencode pattern (backend in a Bun Worker with an RPC-tunneled in-memory server) is the known escape route.
 
@@ -74,6 +74,7 @@ extensions/         # Bundled Extensions, one package each, public API only:
   status/  files/  branches/  commits/  stash/  diff/  commit-flow/  sync/
 docs/
   extension-api.md  # the API specification (crown jewel)
+  config.md         # the user-facing config.jsonc reference
   adr/              # decision records
   research/         # verified research the plan is grounded in
 scripts/
@@ -108,7 +109,7 @@ Each milestone ends with something runnable; "done when" is the gate.
 
 - **M0 — Scaffold (complete).** Bun workspace, `packages/core` + `packages/laziergit`, OpenTUI React hello-world booting in the terminal, typecheck/format scripts. *Done when: `bun run dev` renders a screen.*
 - **M1 — Extension kernel (complete).** `defineExtension`, loader over runtime-plugin-support, per-activation Scope disposal/supervision, stale-ctx poisoning, lease-backed hot reload, candidate and observer containment, awaited shutdown, and a temporary debug Layout that renders registered Panes side-by-side. *Gate passed: normal ctx async work settles, reload failures heal without stuck Panes, repeated generations clean up exactly once, saving a toy `.tsx` Extension updates the screen, and a thrown render error shows an error card instead of crashing.*
-- **M2 — UI framework.** Config-driven Layout (JSONC + schema + global→repo merge), focus model, keymap-backed Commands/keybindings, popup toolkit, status line, palette. *Done when: two toy panes are navigable and rearrangeable via config, with working per-pane keybindings and a palette.*
+- **M2 — UI framework (complete).** Config-driven Layout (JSONC reader, published JSON Schema, global→repo merge — see [docs/config.md](./docs/config.md)), Layout-owned focus with tab groups, `@opentui/keymap` Commands/keybindings with user rebinding, the popup toolkit (confirm/prompt/select/menu/notify), data-driven menus with splicing, the status line, the palette, and the cheat sheet. *Gate passed: two toy Panes are placed and rearranged by config with no reactivation, tab walks focus, both Panes bind the same key and only the focused one fires, a config keybinding overrides the default, and the filtered palette focus-then-runs the Command it chose.*
 - **M3 — Git service.** Exec layer, porcelain parsing, reactive GitState store, derived events, `ctx.git` + hooks. *Done when: a toy pane shows live branch/status that tracks external `git` commands run in another terminal within ~2s.*
 - **M4 — Bundled extensions.** The eight, roughly status → files → branches → commits → stash → diff → commit-flow → sync, each stress-feeding the API (selection model, decorations, menus, multi-pane focus). API changes surface here — make them, don't work around them. *Done when: the everyday loop works end-to-end on this repo.*
 - **M5 — Acceptance & polish.** Run the acceptance test cold, fix every friction it finds, sweep the visual design pass (opencode-grade aesthetics: theme tokens, spacing, borders, empty states). *Done when: the acceptance test passes and lazygit is uninstalled.*

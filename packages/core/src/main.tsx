@@ -1,11 +1,10 @@
-import { createCliRenderer, type PluginContext } from "@opentui/core"
-import { createReactSlotRegistry, createRoot } from "@opentui/react"
+import { createCliRenderer } from "@opentui/core"
+import { createRoot } from "@opentui/react"
 import { ensureRuntimePluginSupport } from "@opentui/react/runtime-plugin-support/configure"
 import * as laziergitRuntime from "laziergit"
 
 import { App } from "./app"
 import { ExtensionKernel } from "./extension/kernel"
-import type { PaneSlots } from "./extension/pane-host"
 
 export async function main() {
   ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
@@ -21,13 +20,27 @@ export async function main() {
   try {
     renderer = await createCliRenderer({
       exitOnCtrlC: true,
+      // laziergit owns focus policy: a click must not move focus out from under a popup.
+      autoFocus: false,
       onDestroy() {
         rendererDestroyed = true
         resolveRendererDestroyed()
       },
     })
-    const registry = createReactSlotRegistry<PaneSlots, PluginContext>(renderer, {})
-    kernel = new ExtensionKernel({ repoRoot: process.cwd(), registry })
+    const activeRenderer = renderer
+    kernel = new ExtensionKernel({
+      repoRoot: process.cwd(),
+      renderer: activeRenderer,
+      onQuit: () => {
+        void (async () => {
+          try {
+            await kernel?.stop()
+          } finally {
+            activeRenderer.destroy()
+          }
+        })()
+      },
+    })
 
     createRoot(renderer).render(<App kernel={kernel} />)
     await kernel.start()

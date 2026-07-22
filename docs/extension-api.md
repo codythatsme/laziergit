@@ -1028,9 +1028,10 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
      * instance: extending an id that isn't registered (yet, or right now) is
      * legal, and the splice applies whenever the owner (re)registers — it
      * survives the owner's reloads and is disposed with YOUR extension.
-     * `group` names a group id to append to ({@link MenuGroup.id}); no match
-     * creates a new trailing group titled with it. Item key conflicts: later
-     * registration wins, with a logged diagnostic.
+     * `group` names a group id to append to ({@link MenuGroup.id}); no match —
+     * or no `group` at all — creates a new trailing group, titled with the id
+     * when there is one. Item key conflicts: later registration wins, with a
+     * logged diagnostic.
      */
     extend<Id extends keyof MenuMap & string>(
       id: Id,
@@ -1302,6 +1303,9 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
 **Implementation status.** M1 publishes this narrowed shape so Extensions compile against the
 intended boundary, but `ctx.effect` remains an explicit unavailable placeholder until M3 installs
 the Git and Effect service graph. Access fails immediately rather than exposing a partial runtime.
+`ctx.git` is in the same position: the store reads as an empty {@link GitState} and every write
+rejects until M3. Everything else on this page is live as of M2 — Commands and keybindings, Panes
+and the Layout, menus and splices, popups, the status line, the palette, and the cheat sheet.
 
 ---
 

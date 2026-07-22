@@ -1,66 +1,14 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test"
-import type { PluginContext } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
-import { createReactSlotRegistry, createRoot, type Root } from "@opentui/react"
-import { ensureRuntimePluginSupport } from "@opentui/react/runtime-plugin-support/configure"
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { afterEach, describe, expect, it, spyOn } from "bun:test"
+import { mkdir, readdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { act } from "react"
-import * as laziergitRuntime from "laziergit"
 import { StaleContextError, type ExtensionContext, type PaneHandle } from "laziergit"
 
-import { App } from "../app"
-import { ExtensionKernel } from "./kernel"
-import type { PaneSlots } from "./pane-host"
+import { createHarness, installHarnessLifecycle, renderApp, type Harness } from "../test-harness"
 
-interface Harness {
-  readonly directory: string
-  readonly global: string
-  readonly repo: string
-  readonly setup: Awaited<ReturnType<typeof createTestRenderer>>
-  readonly kernel: ExtensionKernel
-  root: Root | null
-}
+installHarnessLifecycle()
 
-interface HarnessOptions {
-  readonly watch?: boolean
-  readonly debounceMs?: number
-}
-
-const harnesses: Harness[] = []
-const actGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-let hadActEnvironment = false
-let previousActEnvironment: boolean | undefined
-
-beforeAll(() => {
-  ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
-  hadActEnvironment = Object.hasOwn(actGlobal, "IS_REACT_ACT_ENVIRONMENT")
-  previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT
-  actGlobal.IS_REACT_ACT_ENVIRONMENT = true
-})
-
-afterAll(() => {
-  if (hadActEnvironment) actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
-  else delete actGlobal.IS_REACT_ACT_ENVIRONMENT
-})
-
-afterEach(async () => {
-  for (const harness of harnesses.splice(0)) {
-    if (harness.root) {
-      await act(async () => {
-        await harness.kernel.stop()
-        harness.root?.unmount()
-        harness.root = null
-        harness.setup.renderer.destroy()
-      })
-    } else {
-      await harness.kernel.stop()
-      harness.setup.renderer.destroy()
-    }
-    await rm(harness.directory, { recursive: true, force: true })
-  }
-
+afterEach(() => {
   const globals = testGlobals()
   delete globals.__laziergitLifecycle
   delete globals.__laziergitOldContext
@@ -74,37 +22,6 @@ afterEach(async () => {
   delete globals.__laziergitWatcherActivations
   delete globals.__laziergitThemeMounts
 })
-
-async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
-  const directory = await mkdtemp(join(tmpdir(), "laziergit-m1-"))
-  const global = join(directory, "global")
-  const repo = join(directory, "repo")
-  await Promise.all([mkdir(global), mkdir(repo)])
-
-  let setup!: Awaited<ReturnType<typeof createTestRenderer>>
-  await act(async () => {
-    setup = await createTestRenderer({ width: 100, height: 28 })
-  })
-  const registry = createReactSlotRegistry<PaneSlots, PluginContext>(setup.renderer, {})
-  const kernel = new ExtensionKernel({
-    repoRoot: directory,
-    registry,
-    directories: { global, repo },
-    watch: options.watch ?? false,
-    debounceMs: options.debounceMs,
-  })
-  const harness = { directory, global, repo, setup, kernel, root: null }
-  harnesses.push(harness)
-  return harness
-}
-
-async function renderApp(harness: Harness): Promise<void> {
-  harness.root = createRoot(harness.setup.renderer)
-  act(() => harness.root?.render(<App kernel={harness.kernel} />))
-  await act(async () => harness.kernel.start())
-  await harness.setup.renderOnce()
-  await harness.setup.renderOnce()
-}
 
 function testGlobals() {
   return globalThis as typeof globalThis & {
@@ -710,7 +627,7 @@ describe("serialized reload recovery", () => {
   })
 })
 
-describe("M1 debug Layout", () => {
+describe("Application shell", () => {
   it("uses one root runtime provider and rerenders Theme consumers without remounting the Pane", async () => {
     const harness = await createHarness()
     testGlobals().__laziergitThemeMounts = 0
@@ -775,7 +692,7 @@ describe("M1 debug Layout", () => {
       await renderApp(harness)
       expect(harness.setup.captureCharFrame()).toContain("Pane crashed")
       expect(harness.setup.captureCharFrame()).toContain("toy render exploded")
-      expect(harness.setup.captureCharFrame()).toContain("M1 extension kernel")
+      expect(harness.setup.captureCharFrame()).toContain("mod+p palette")
       expect(errorMessages.some((message) => message.includes("not wrapped in act"))).toBe(false)
     } finally {
       errorSpy.mockRestore()

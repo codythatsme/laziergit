@@ -23,7 +23,7 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "bun run --cwd packages/core dev",
+    "dev": "bun packages/core/src/main.tsx",
     "format": "oxfmt --write packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
     "format:check": "oxfmt --check packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
     "lint": "oxlint packages extensions scripts",
