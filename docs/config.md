@@ -1,0 +1,143 @@
+# laziergit configuration
+
+laziergit reads two files, both optional, both JSONC (JSON plus `//` and `/* */` comments
+and trailing commas):
+
+| File | Scope |
+|---|---|
+| `~/.config/laziergit/config.jsonc` (or `$XDG_CONFIG_HOME/laziergit/config.jsonc`) | every repository |
+| `<repo>/.laziergit/config.jsonc` | this repository only |
+
+The repo file is merged over the global one **key by key**: objects merge, so a repo file
+can override one Extension option and leave the rest; arrays replace wholesale, so a repo
+Layout is never a confusing concatenation of two Layouts.
+
+Every value is validated. A value laziergit cannot use falls back to its default with a
+diagnostic naming the exact path (`extensions.gh-workflows.limit: Must be at most 100`) —
+bad config degrades one setting, it never blocks startup. A file that fails to parse is
+skipped entirely, with its line and column reported; the other file still applies.
+
+laziergit writes `config.schema.json` next to the global config on every load, covering the
+core sections plus one section per installed Extension. Point your editor at it:
+
+```jsonc
+{
+  "$schema": "./config.schema.json",
+}
+```
+
+## What a change costs
+
+Editing `layout`, `keybindings`, `theme`, `statusline`, or `leader` rearranges the running
+screen — no Extension is reloaded and no Pane loses its cursor. Editing anything under
+`extensions` reloads every Extension, because `ctx.config` is a constant snapshot for the
+lifetime of an activation (see [extension-api.md §5.6](./extension-api.md)) and reload is
+how a new snapshot is delivered. Reformatting the file — reordering keys, changing comments
+or whitespace — costs nothing: only the values are compared.
+
+## `layout` — where Panes go
+
+```jsonc
+{
+  "layout": {
+    "columns": [
+      ["status", "files", ["branches", "commits"]],
+      { "weight": 2, "cells": ["diff"] },
+    ],
+  },
+}
+```
+
+- A **column** is either an array of cells, or `{ "weight": <number>, "cells": [...] }`.
+  `weight` is that column's share of the screen width relative to the others (default `1`).
+- A **cell** is a Pane id (`"status"`), or an array of Pane ids that share the cell as tabs
+  (`["branches", "commits"]` — one visible at a time, `[`/`]` cycles them).
+- Cells stack top to bottom and share their column's height.
+
+Ids nothing has registered are skipped. A Pane the Layout never mentions still appears —
+it lands wherever its Extension's `placement` hint asks (`column`, `order`, `tabWith`),
+which is the whole point of hints: config wins where it speaks, hints decide the rest.
+Omit `layout` entirely and every Pane is placed by its hint.
+
+## `keybindings` — rebinding Commands
+
+```jsonc
+{
+  "keybindings": {
+    "gh-workflows.open-run": "enter",       // replace the Command's default keys
+    "files.stage": ["s", "space"],          // several keys for one Command
+    "app.quit": null,                        // unbind it
+  },
+}
+```
+
+The key is a Command id, the value a [key spec](./extension-api.md) (`"c"`, `"ctrl+r"`,
+`"gg"`, `"mod+p"`, `"<leader>p"`), an array of them, or `null` to unbind. A config binding
+replaces the Command's declared defaults rather than adding to them. When two Commands in
+the same scope claim one key, the later registration wins and the earlier one keeps its
+palette entry without the key; the swap is reported as a diagnostic.
+
+Core's own Commands, all rebindable:
+
+| Command | Default | |
+|---|---|---|
+| `app.palette` | `mod+p` | Command palette |
+| `app.cheatsheet` | `?` | Every key that is live right now |
+| `app.focus.next` / `app.focus.previous` | `tab` / `shift+tab` | Move between Panes |
+| `app.tab.next` / `app.tab.previous` | `]` / `[` | Cycle tabs inside the focused cell |
+| `app.reload` | — | Reload every Extension |
+| `app.quit` | `q` | Quit |
+
+## `leader` — the `<leader>` token
+
+```jsonc
+{ "leader": "space" }
+```
+
+The key that `<leader>` expands to in any key spec. Defaults to `space`.
+
+## `theme` — semantic color tokens
+
+```jsonc
+{
+  "theme": {
+    "accent": "#7aa2f7",
+    "selection": "#283457",
+  },
+}
+```
+
+Any subset of the tokens on `Theme` ([§1.8](./extension-api.md)); unlisted tokens keep
+their default. Extensions consume tokens through `useTheme()` and never pick raw colors,
+so one override retints every Pane at once.
+
+## `statusline` — segment order
+
+```jsonc
+{
+  "statusline": {
+    "left": ["status", "ci-status"],
+    "right": ["github-prs"],
+    "hidden": ["noisy-extension"],
+  },
+}
+```
+
+Ids listed in `left`/`right` come first, in the order written, overriding the segment's own
+`align`. Every other segment falls back to its declared `align` and `priority`. `hidden`
+removes a segment entirely. Ids nothing registered are ignored.
+
+## `extensions` — per-Extension options
+
+```jsonc
+{
+  "extensions": {
+    "gh-workflows": { "limit": 30 },
+  },
+}
+```
+
+One section per Extension name, holding the options that Extension declared with
+`option.*`. Values arrive on `ctx.config` fully typed and defaulted. An unknown option, or
+one of the wrong type or outside its declared range, is reported and replaced by its
+default.

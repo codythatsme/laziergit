@@ -1,97 +1,81 @@
-import { expect, it, spyOn } from "bun:test"
-import type { PluginContext, PluginErrorEvent, SlotRegistry } from "@opentui/core"
-import type { ReactNode } from "react"
+import { expect, it } from "bun:test"
 
-import { Diagnostics } from "./diagnostics"
-import { PaneHost, type PaneSlots } from "./pane-host"
+import { createFakeSlotRegistry } from "../test-harness"
+import { SlotOwners } from "../ui/slots"
+import { PaneHost } from "./pane-host"
 
-type Registry = SlotRegistry<ReactNode, PaneSlots, PluginContext>
-type Plugin = Parameters<Registry["register"]>[0]
-type PluginErrorListener = Parameters<Registry["onPluginError"]>[0]
-
-function createRegistry() {
-  const plugins = new Map<string, Plugin>()
-  const errorListeners = new Set<PluginErrorListener>()
-  const registry = {
-    register(plugin: Plugin) {
-      plugins.set(plugin.id, plugin)
-      return () => plugins.delete(plugin.id)
-    },
-    onPluginError(listener: PluginErrorListener) {
-      errorListeners.add(listener)
-      return () => errorListeners.delete(listener)
-    },
-  } as unknown as Registry
-
-  return {
-    registry,
-    get errorListenerCount() {
-      return errorListeners.size
-    },
-    report(pluginId: string, error: Error) {
-      const event: PluginErrorEvent = {
-        pluginId,
-        slot: pluginId.replace(/^pane:/, ""),
-        phase: "render",
-        source: "react",
-        error,
-        timestamp: Date.now(),
-      }
-      for (const listener of errorListeners) listener(event)
-    },
-  }
+function createHost() {
+  const fake = createFakeSlotRegistry()
+  const owners = new SlotOwners()
+  return { fake, owners, host: new PaneHost(fake.registry, owners) }
 }
 
-it("attributes delayed registry errors through the real Pane owner mapping", () => {
-  const fake = createRegistry()
-  const diagnostics = new Diagnostics()
-  const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
-  const host = new PaneHost(fake.registry, diagnostics)
+it("registers a Pane under its id and claims the plugin for its Extension", () => {
+  const { fake, owners, host } = createHost()
 
-  const pane = host.register("owner", {
-    id: "owner.deep.pane",
-    title: "Owned Pane",
-    component: () => null,
-  })
+  const pane = host.register("owner", { id: "owner.deep.pane", title: "Owned Pane", component: () => null })
+
+  expect(fake.pluginIds).toEqual(["pane:owner.deep.pane"])
+  expect(fake.slotsOf("pane:owner.deep.pane")).toEqual(["owner.deep.pane"])
+  expect(owners.ownerOf("pane:owner.deep.pane")).toBe("owner")
+  expect(host.isLive("owner.deep.pane")).toBe(true)
+
+  pane.dispose()
+  pane.dispose()
+  expect(fake.pluginIds).toEqual([])
+  expect(host.isLive("owner.deep.pane")).toBe(false)
+})
+
+it("refuses an id outside the owning Extension's scope, and a second live registration", () => {
+  const { host } = createHost()
+
+  expect(() => host.register("owner", { id: "other.pane", title: "Pane", component: () => null })).toThrow(
+    'Extension "owner" cannot register id "other.pane"; expected "owner" or "owner.*"',
+  )
+  host.register("owner", { id: "owner.pane", title: "Pane", component: () => null })
+  expect(() => host.register("owner", { id: "owner.pane", title: "Pane", component: () => null })).toThrow(
+    'Pane "owner.pane" is already registered',
+  )
+})
+
+it("holds a reloading Extension's Pane in place instead of collapsing its cell", () => {
+  const { host } = createHost()
+  const pane = host.register("owner", { id: "owner.pane", title: "Pane", component: () => null })
+
   host.prepareReload(["owner"])
   pane.dispose()
-  fake.report("pane:owner.deep.pane", new Error("render exploded after disposal"))
-
-  expect(diagnostics.getSnapshot()).toEqual([
-    expect.objectContaining({
-      extension: "owner",
-      phase: "render",
-      message: "render exploded after disposal",
-    }),
+  expect(host.getSnapshot()).toEqual([
+    expect.objectContaining({ id: "owner.pane", owner: "owner", state: "reloading" }),
   ])
+  expect(host.isLive("owner.pane")).toBe(false)
 
-  host.stop()
-  host.stop()
-  expect(fake.errorListenerCount).toBe(0)
-  fake.report("pane:owner.deep.pane", new Error("ignored after stop"))
-  expect(diagnostics.getSnapshot()).toHaveLength(1)
-  errorSpy.mockRestore()
-})
-
-it("contains diagnostic reporter failures from the registry listener", () => {
-  const fake = createRegistry()
-  const diagnostics = {
-    report() {
-      throw new Error("diagnostic observer exploded")
-    },
-  } as unknown as Diagnostics
-  const host = new PaneHost(fake.registry, diagnostics)
   host.register("owner", { id: "owner.pane", title: "Pane", component: () => null })
-
-  expect(() => fake.report("pane:owner.pane", new Error("render exploded"))).not.toThrow()
-  host.stop()
+  host.finishReload(["owner"])
+  expect(host.isLive("owner.pane")).toBe(true)
 })
 
-it("isolates snapshot and focus listener failures", () => {
-  const fake = createRegistry()
-  const host = new PaneHost(fake.registry)
+it("drops a Pane the reloading Extension never registered again", () => {
+  const { host } = createHost()
+  const pane = host.register("owner", { id: "owner.pane", title: "Pane", component: () => null })
+
+  host.prepareReload(["owner"])
+  pane.dispose()
+  host.finishReload(["owner"])
+
+  expect(host.getSnapshot()).toEqual([])
+})
+
+it("leaves no plugin claim behind when registration fails", () => {
+  const { fake, owners, host } = createHost()
+  fake.registry.register({ id: "pane:owner.pane", slots: {} })
+
+  expect(() => host.register("owner", { id: "owner.pane", title: "Pane", component: () => null })).toThrow()
+  expect(owners.ownerOf("pane:owner.pane")).toBeUndefined()
+})
+
+it("isolates snapshot listener failures", () => {
+  const { host } = createHost()
   host.register("owner", { id: "owner.one", title: "One", component: () => null })
-  host.register("owner", { id: "owner.two", title: "Two", component: () => null })
 
   let healthyCalls = 0
   host.subscribe(() => {
@@ -100,11 +84,9 @@ it("isolates snapshot and focus listener failures", () => {
   host.subscribe(() => {
     healthyCalls += 1
   })
-  host.setFocusListener(() => {
-    throw new Error("focus listener exploded")
-  })
 
-  expect(() => host.focus("owner.two")).not.toThrow()
-  expect(host.focused).toBe("owner.two")
+  expect(() => host.register("owner", { id: "owner.two", title: "Two", component: () => null })).not.toThrow()
   expect(healthyCalls).toBe(1)
+  expect(host.isLive("owner.two")).toBe(true)
+  expect(host.isLive("owner.missing")).toBe(false)
 })

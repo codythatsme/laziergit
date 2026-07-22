@@ -1,8 +1,12 @@
 import { expect, it, spyOn } from "bun:test"
 
-import { CommandHost } from "./command-host"
+import { CommandHost, type CommandPaneAccess } from "./command-host"
 import { Diagnostics } from "./diagnostics"
 import { bindNotifier, createNotifier, type Notification } from "./notifier"
+
+function panes(overrides: Partial<CommandPaneAccess> = {}): CommandPaneAccess {
+  return { focus: () => undefined, isLive: () => true, ...overrides }
+}
 
 async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
   try {
@@ -14,7 +18,7 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
 }
 
 it("rejects unknown Commands", async () => {
-  const host = new CommandHost(new Diagnostics(), () => {})
+  const host = new CommandHost(new Diagnostics(), panes())
 
   expect(await rejectionOf(host.execute("missing.command"))).toEqual(
     expect.objectContaining({ message: 'Unknown command "missing.command"' }),
@@ -23,9 +27,15 @@ it("rejects unknown Commands", async () => {
 
 it("rejects unavailable Pane focus without running the Command", async () => {
   let ran = false
-  const host = new CommandHost(new Diagnostics(), (id) => {
-    throw new Error(`Pane "${id}" has no live instance`)
-  })
+  const host = new CommandHost(
+    new Diagnostics(),
+    panes({
+      focus: (id) => {
+        throw new Error(`Pane "${id}" has no live instance`)
+      },
+      isLive: () => false,
+    }),
+  )
   host.register("owner", {
     id: "owner.command",
     title: "Pane command",
@@ -43,9 +53,14 @@ it("rejects unavailable Pane focus without running the Command", async () => {
 
 it("focuses an available Pane before running its Command", async () => {
   const order: string[] = []
-  const host = new CommandHost(new Diagnostics(), (id) => {
-    order.push(`focus:${id}`)
-  })
+  const host = new CommandHost(
+    new Diagnostics(),
+    panes({
+      focus: (id) => {
+        order.push(`focus:${id}`)
+      },
+    }),
+  )
   host.register("owner", {
     id: "owner.command",
     title: "Pane command",
@@ -63,11 +78,7 @@ it("diagnoses and notifies Command run errors while resolving execution", async 
   const diagnostics = new Diagnostics()
   const notifications: Notification[] = []
   const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
-  const host = new CommandHost(
-    diagnostics,
-    () => {},
-    (notification) => notifications.push(notification),
-  )
+  const host = new CommandHost(diagnostics, panes(), (notification) => notifications.push(notification))
   host.register("owner", {
     id: "owner.command",
     title: "Refresh data",
@@ -101,14 +112,10 @@ it("contains diagnostic and notifier failures", async () => {
       throw new Error("diagnostic observer exploded")
     },
   } as unknown as Diagnostics
-  const host = new CommandHost(
-    diagnostics,
-    () => {},
-    () => {
-      notified = true
-      throw new Error("notification publisher exploded")
-    },
-  )
+  const host = new CommandHost(diagnostics, panes(), () => {
+    notified = true
+    throw new Error("notification publisher exploded")
+  })
   host.register("owner", {
     id: "owner.command",
     title: "Broken command",
@@ -119,6 +126,56 @@ it("contains diagnostic and notifier failures", async () => {
 
   await host.execute("owner.command")
   expect(notified).toBe(true)
+})
+
+it("gives a key to the later registration, leaving the loser its palette row", () => {
+  const diagnostics = new Diagnostics()
+  const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+  const host = new CommandHost(diagnostics, panes())
+
+  host.register("first", { id: "first.stage", title: "Stage", keys: "s", run: () => {} })
+  host.register("second", { id: "second.stash", title: "Stash", keys: ["s", "S"], run: () => {} })
+
+  expect(host.getSnapshot().map((entry) => [entry.id, entry.keys])).toEqual([
+    ["first.stage", []],
+    ["second.stash", ["s", "S"]],
+  ])
+  expect(diagnostics.getSnapshot()).toEqual([
+    expect.objectContaining({ phase: "command", message: 'Key "s" moved from "first.stage" to "second.stash"' }),
+  ])
+  errorSpy.mockRestore()
+})
+
+it("keeps a key the user set in config out of a later Command's declared default", () => {
+  const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+  const host = new CommandHost(new Diagnostics(), panes())
+  host.setKeybindings(new Map([["first.quit", ["s"]]]))
+
+  host.register("first", { id: "first.quit", title: "Quit", keys: "q", run: () => {} })
+  host.register("second", { id: "second.stage", title: "Stage", keys: "s", run: () => {} })
+
+  expect(host.getSnapshot().map((entry) => [entry.id, entry.keys])).toEqual([
+    ["first.quit", ["s"]],
+    ["second.stage", []],
+  ])
+  errorSpy.mockRestore()
+})
+
+it("binds a key a Command claims twice only once", () => {
+  const host = new CommandHost(new Diagnostics(), panes())
+  host.register("owner", { id: "owner.one", title: "One", keys: ["j", "j"], run: () => {} })
+
+  expect(host.getSnapshot()[0]?.keys).toEqual(["j"])
+})
+
+it("offers the palette only visible Commands whose Pane is live", () => {
+  const host = new CommandHost(new Diagnostics(), panes({ isLive: (paneId) => paneId === "files" }))
+  host.register("owner", { id: "owner.global", title: "Global", run: () => {} })
+  host.register("owner", { id: "owner.hidden", title: "Hidden", hidden: true, run: () => {} })
+  host.register("owner", { id: "owner.live", title: "Live", pane: "files", run: () => {} })
+  host.register("owner", { id: "owner.dead", title: "Dead", pane: "gone", run: () => {} })
+
+  expect(host.availableEntries().map((entry) => entry.id)).toEqual(["owner.global", "owner.live"])
 })
 
 it("adapts one contained notifier to PopupToolkit.notify", () => {
