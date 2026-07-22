@@ -1,9 +1,9 @@
-import { afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test"
 import type { PluginContext } from "@opentui/core"
+import { createTestRenderer } from "@opentui/core/testing"
 import { createReactSlotRegistry, createRoot, type Root } from "@opentui/react"
 import { ensureRuntimePluginSupport } from "@opentui/react/runtime-plugin-support/configure"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { act } from "react"
@@ -23,40 +23,87 @@ interface Harness {
   root: Root | null
 }
 
+interface HarnessOptions {
+  readonly watch?: boolean
+  readonly debounceMs?: number
+}
+
 const harnesses: Harness[] = []
+const actGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+let hadActEnvironment = false
+let previousActEnvironment: boolean | undefined
 
 beforeAll(() => {
   ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
+  hadActEnvironment = Object.hasOwn(actGlobal, "IS_REACT_ACT_ENVIRONMENT")
+  previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = true
+})
+
+afterAll(() => {
+  if (hadActEnvironment) actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
+  else delete actGlobal.IS_REACT_ACT_ENVIRONMENT
 })
 
 afterEach(async () => {
   for (const harness of harnesses.splice(0)) {
-    await harness.kernel.stop()
-    act(() => {
-      harness.root?.unmount()
-      harness.root = null
+    if (harness.root) {
+      await act(async () => {
+        await harness.kernel.stop()
+        harness.root?.unmount()
+        harness.root = null
+        harness.setup.renderer.destroy()
+      })
+    } else {
+      await harness.kernel.stop()
       harness.setup.renderer.destroy()
-    })
+    }
     await rm(harness.directory, { recursive: true, force: true })
   }
+
+  const globals = testGlobals()
+  delete globals.__laziergitLifecycle
+  delete globals.__laziergitOldContext
+  delete globals.__laziergitOldHandle
+  delete globals.__laziergitDependentActivated
+  delete globals.__laziergitSurvivorActivated
+  delete globals.__laziergitEventTailRan
+  delete globals.__laziergitApiLog
+  delete globals.__laziergitCallableHandle
+  delete globals.__laziergitVoidObserved
+  delete globals.__laziergitWatcherActivations
+  delete globals.__laziergitThemeMounts
 })
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), "laziergit-m1-"))
   const global = join(directory, "global")
   const repo = join(directory, "repo")
   await Promise.all([mkdir(global), mkdir(repo)])
-  const setup = await createTestRenderer({ width: 100, height: 28 })
+
+  let setup!: Awaited<ReturnType<typeof createTestRenderer>>
+  await act(async () => {
+    setup = await createTestRenderer({ width: 100, height: 28 })
+  })
   const registry = createReactSlotRegistry<PaneSlots, PluginContext>(setup.renderer, {})
   const kernel = new ExtensionKernel({
     repoRoot: directory,
     registry,
     directories: { global, repo },
-    watch: false,
+    watch: options.watch ?? false,
+    debounceMs: options.debounceMs,
   })
   const harness = { directory, global, repo, setup, kernel, root: null }
   harnesses.push(harness)
   return harness
+}
+
+async function renderApp(harness: Harness): Promise<void> {
+  harness.root = createRoot(harness.setup.renderer)
+  act(() => harness.root?.render(<App kernel={harness.kernel} />))
+  await act(async () => harness.kernel.start())
+  await harness.setup.renderOnce()
+  await harness.setup.renderOnce()
 }
 
 function testGlobals() {
@@ -67,7 +114,62 @@ function testGlobals() {
     __laziergitDependentActivated?: boolean
     __laziergitSurvivorActivated?: boolean
     __laziergitEventTailRan?: boolean
+    __laziergitApiLog?: string[]
+    __laziergitCallableHandle?: (() => void) & { dispose(): void }
+    __laziergitVoidObserved?: boolean
+    __laziergitWatcherActivations?: number
+    __laziergitThemeMounts?: number
   }
+}
+
+async function cacheNames(harness: Harness): Promise<readonly string[]> {
+  const names = await Promise.all([readdir(harness.global), readdir(harness.repo)])
+  return names
+    .flat()
+    .filter((name) => name.startsWith(".laziergit-cache-"))
+    .sort()
+}
+
+async function runFixture(path: string, cwd: string, timeoutMs = 5_000): Promise<{ stdout: string; stderr: string }> {
+  const child = Bun.spawn([process.execPath, path], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env,
+  })
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        child.kill()
+        reject(new Error(`Fixture exceeded ${timeoutMs}ms`))
+      }, timeoutMs)
+    })
+    const stdout = new Response(child.stdout).text()
+    const stderr = new Response(child.stderr).text()
+    const exitCode = await Promise.race([child.exited, deadline])
+    const [stdoutText, stderrText] = await Promise.all([stdout, stderr])
+    if (exitCode !== 0) {
+      throw new Error(`Fixture exited ${exitCode}\nstdout:\n${stdoutText}\nstderr:\n${stderrText}`)
+    }
+    return { stdout: stdoutText, stderr: stderrText }
+  } finally {
+    if (timeout) clearTimeout(timeout)
+    child.kill()
+  }
+}
+
+function paneSource(body: string): string {
+  return `
+    /** @jsxImportSource @opentui/react */
+    import { defineExtension } from "laziergit"
+    export default defineExtension({
+      name: "recoverable",
+      activate(ctx) {
+        ${body}
+      },
+    })
+  `
 }
 
 describe("ExtensionKernel lifecycle", () => {
@@ -157,46 +259,59 @@ describe("ExtensionKernel lifecycle", () => {
     expect(() => oldHandle?.dispose()).not.toThrow()
   })
 
-  it("isolates activation and event-handler failures", async () => {
+  it("supports live void, callable, thenable, and callable Disposable Exported APIs", async () => {
     const harness = await createHarness()
-    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
-    testGlobals().__laziergitDependentActivated = false
-    testGlobals().__laziergitSurvivorActivated = false
-    testGlobals().__laziergitEventTailRan = false
+    testGlobals().__laziergitApiLog = []
+    testGlobals().__laziergitVoidObserved = false
 
     await Promise.all([
       writeFile(
-        join(harness.repo, "broken.ts"),
+        join(harness.repo, "void-provider.ts"),
         `
           import { defineExtension } from "laziergit"
+          export default defineExtension({ name: "void-provider", activate() {} })
+        `,
+      ),
+      writeFile(
+        join(harness.repo, "api-provider.ts"),
+        `
+          import { defineExtension } from "laziergit"
+          const log = (value: string) => (globalThis as any).__laziergitApiLog.push(value)
           export default defineExtension({
-            name: "broken",
-            activate() { throw new Error("activation exploded") },
+            name: "api-provider",
+            activate() {
+              return Object.assign(
+                (value: string) => ({ then(resolve: (value: string) => void) { resolve("call:" + value) } }),
+                {
+                  method() { return { then(resolve: (value: string) => void) { resolve("method:thenable") } } },
+                  handle() {
+                    return Object.assign(
+                      () => log("handle:call"),
+                      { dispose() { log("handle:dispose") } },
+                    )
+                  },
+                },
+              )
+            },
           })
         `,
       ),
       writeFile(
-        join(harness.repo, "dependent.ts"),
+        join(harness.repo, "api-consumer.ts"),
         `
           import { defineExtension } from "laziergit"
+          const log = (value: string) => (globalThis as any).__laziergitApiLog.push(value)
           export default defineExtension({
-            name: "dependent",
-            needs: ["broken"],
-            activate() { ;(globalThis as any).__laziergitDependentActivated = true },
-          })
-        `,
-      ),
-      writeFile(
-        join(harness.repo, "survivor.ts"),
-        `
-          import { defineExtension } from "laziergit"
-          export default defineExtension({
-            name: "survivor",
-            activate(ctx) {
-              ;(globalThis as any).__laziergitSurvivorActivated = true
-              ctx.events.on("survivor.tick" as any, () => { throw new Error("handler exploded") })
-              ctx.events.on("survivor.tick" as any, () => { ;(globalThis as any).__laziergitEventTailRan = true })
-              ctx.events.emit("survivor.tick" as any)
+            name: "api-consumer",
+            needs: ["void-provider", "api-provider"],
+            async activate(ctx) {
+              ;(globalThis as any).__laziergitVoidObserved = ctx.extensions.get("void-provider") === undefined
+              const api = ctx.extensions.get("api-provider") as any
+              log(await api("value"))
+              log(await api.method())
+              const handle = api.handle()
+              ;(globalThis as any).__laziergitCallableHandle = handle
+              handle()
             },
           })
         `,
@@ -204,62 +319,472 @@ describe("ExtensionKernel lifecycle", () => {
     ])
 
     await harness.kernel.start()
-    await harness.kernel.events.drain()
+    expect(harness.kernel.getExtensionApi("void-provider")).toEqual({ state: "live", api: undefined })
+    expect(testGlobals().__laziergitVoidObserved).toBe(true)
+    expect(testGlobals().__laziergitApiLog).toEqual(["call:value", "method:thenable", "handle:call"])
+    const oldHandle = testGlobals().__laziergitCallableHandle
 
-    expect(testGlobals().__laziergitDependentActivated).toBe(false)
-    expect(testGlobals().__laziergitSurvivorActivated).toBe(true)
-    expect(testGlobals().__laziergitEventTailRan).toBe(true)
-    expect(harness.kernel.getSnapshot().find((entry) => entry.name === "broken")?.message).toBe("activation exploded")
-    expect(harness.kernel.getSnapshot().find((entry) => entry.name === "dependent")?.message).toBe(
-      'Required extension "broken" failed',
+    await harness.kernel.reload()
+    expect(() => oldHandle?.()).toThrow(StaleContextError)
+    expect(() => oldHandle?.dispose()).not.toThrow()
+    expect(testGlobals().__laziergitApiLog).toEqual([
+      "call:value",
+      "method:thenable",
+      "handle:call",
+      "handle:dispose",
+      "call:value",
+      "method:thenable",
+      "handle:call",
+    ])
+  })
+
+  it("isolates activation and event-handler failures", async () => {
+    const harness = await createHarness()
+    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+    testGlobals().__laziergitDependentActivated = false
+    testGlobals().__laziergitSurvivorActivated = false
+    testGlobals().__laziergitEventTailRan = false
+
+    try {
+      await Promise.all([
+        writeFile(
+          join(harness.repo, "broken.ts"),
+          `
+            import { defineExtension } from "laziergit"
+            export default defineExtension({
+              name: "broken",
+              activate() { throw new Error("activation exploded") },
+            })
+          `,
+        ),
+        writeFile(
+          join(harness.repo, "dependent.ts"),
+          `
+            import { defineExtension } from "laziergit"
+            export default defineExtension({
+              name: "dependent",
+              needs: ["broken"],
+              activate() { ;(globalThis as any).__laziergitDependentActivated = true },
+            })
+          `,
+        ),
+        writeFile(
+          join(harness.repo, "survivor.ts"),
+          `
+            import { defineExtension } from "laziergit"
+            export default defineExtension({
+              name: "survivor",
+              activate(ctx) {
+                ;(globalThis as any).__laziergitSurvivorActivated = true
+                ctx.events.on("survivor.tick" as any, () => { throw new Error("handler exploded") })
+                ctx.events.on("survivor.tick" as any, () => { ;(globalThis as any).__laziergitEventTailRan = true })
+                ctx.events.emit("survivor.tick" as any)
+              },
+            })
+          `,
+        ),
+      ])
+
+      await harness.kernel.start()
+      await harness.kernel.events.drain()
+
+      expect(testGlobals().__laziergitDependentActivated).toBe(false)
+      expect(testGlobals().__laziergitSurvivorActivated).toBe(true)
+      expect(testGlobals().__laziergitEventTailRan).toBe(true)
+      expect(harness.kernel.getSnapshot().find((entry) => entry.name === "broken")?.message).toBe("activation exploded")
+      expect(harness.kernel.getSnapshot().find((entry) => entry.name === "dependent")?.message).toBe(
+        'Required extension "broken" failed',
+      )
+      expect(harness.kernel.diagnostics.getSnapshot().map((entry) => entry.phase)).toContain("event")
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it("attempts deactivate, scope cleanup, activation removal, and lease release independently", async () => {
+    const harness = await createHarness()
+    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+    testGlobals().__laziergitLifecycle = []
+
+    try {
+      await writeFile(
+        join(harness.repo, "cleanup.ts"),
+        `
+          import { defineExtension } from "laziergit"
+          const log = (value: string) => (globalThis as any).__laziergitLifecycle.push(value)
+          export default defineExtension({
+            name: "cleanup",
+            activate(ctx) {
+              ctx.onDispose(() => log("dispose:survivor"))
+              ctx.onDispose(() => { log("dispose:failure"); throw new Error("dispose exploded") })
+            },
+            deactivate() { log("deactivate"); throw new Error("deactivate exploded") },
+          })
+        `,
+      )
+
+      await harness.kernel.start()
+      expect(await cacheNames(harness)).toHaveLength(1)
+      await harness.kernel.stop()
+
+      expect(testGlobals().__laziergitLifecycle).toEqual(["deactivate", "dispose:failure", "dispose:survivor"])
+      expect(await cacheNames(harness)).toEqual([])
+      expect(harness.kernel.getExtensionApi("cleanup")).toEqual({ state: "missing" })
+      expect(harness.kernel.diagnostics.getSnapshot().map((entry) => entry.phase)).toEqual(
+        expect.arrayContaining(["deactivate", "dispose"]),
+      )
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it("keeps exactly one live cache generation across repeated reloads and removes it on stop", async () => {
+    const harness = await createHarness()
+    testGlobals().__laziergitLifecycle = []
+    await writeFile(
+      join(harness.repo, "repeat.ts"),
+      `
+        import { defineExtension } from "laziergit"
+        const log = (value: string) => (globalThis as any).__laziergitLifecycle.push(value)
+        export default defineExtension({
+          name: "repeat",
+          activate(ctx) { log("activate"); ctx.onDispose(() => log("dispose")) },
+          deactivate() { log("deactivate") },
+        })
+      `,
     )
-    expect(harness.kernel.diagnostics.getSnapshot().map((entry) => entry.phase)).toContain("event")
-    errorSpy.mockRestore()
+
+    await harness.kernel.start()
+    expect(await cacheNames(harness)).toHaveLength(1)
+    await harness.kernel.reload()
+    expect(await cacheNames(harness)).toHaveLength(1)
+    await harness.kernel.reload()
+    expect(await cacheNames(harness)).toHaveLength(1)
+
+    expect(testGlobals().__laziergitLifecycle).toEqual([
+      "activate",
+      "deactivate",
+      "dispose",
+      "activate",
+      "deactivate",
+      "dispose",
+      "activate",
+    ])
+
+    await harness.kernel.stop()
+    expect(await cacheNames(harness)).toEqual([])
+    expect(testGlobals().__laziergitLifecycle).toEqual([
+      "activate",
+      "deactivate",
+      "dispose",
+      "activate",
+      "deactivate",
+      "dispose",
+      "activate",
+      "deactivate",
+      "dispose",
+    ])
+  })
+
+  it("memoizes stop and prevents watcher rearm after shutdown begins", async () => {
+    const harness = await createHarness({ watch: true, debounceMs: 25 })
+    const entry = join(harness.repo, "watched.ts")
+    testGlobals().__laziergitWatcherActivations = 0
+    const source = (version: string) => `
+      import { defineExtension } from "laziergit"
+      export default defineExtension({
+        name: "watched",
+        activate() {
+          ;(globalThis as any).__laziergitWatcherActivations += 1
+          ;(globalThis as any).__laziergitWatcherVersion = "${version}"
+        },
+      })
+    `
+
+    await writeFile(entry, source("first"))
+    await harness.kernel.start()
+    await writeFile(entry, source("second"))
+    await Bun.sleep(30)
+
+    const firstStop = harness.kernel.stop()
+    const secondStop = harness.kernel.stop()
+    expect(secondStop).toBe(firstStop)
+    await firstStop
+    const activationsAfterStop = testGlobals().__laziergitWatcherActivations
+
+    await writeFile(entry, source("third"))
+    await Bun.sleep(120)
+    expect(testGlobals().__laziergitWatcherActivations).toBe(activationsAfterStop)
+    expect(await cacheNames(harness)).toEqual([])
+  })
+
+  it("contains throwing kernel observers without poisoning reload", async () => {
+    const harness = await createHarness()
+    let healthyNotifications = 0
+    harness.kernel.subscribe(() => {
+      throw new Error("observer exploded")
+    })
+    harness.kernel.subscribe(() => {
+      healthyNotifications += 1
+    })
+    await writeFile(
+      join(harness.repo, "observer.ts"),
+      `
+        import { defineExtension } from "laziergit"
+        export default defineExtension({ name: "observer", activate() {} })
+      `,
+    )
+
+    await harness.kernel.start()
+    await harness.kernel.reload()
+
+    expect(healthyNotifications).toBeGreaterThan(0)
+    expect(harness.kernel.getSnapshot()).toEqual([expect.objectContaining({ name: "observer", state: "active" })])
+  })
+})
+
+describe("Extension discovery and import boundary", () => {
+  it("reports malformed entries while valid siblings survive", async () => {
+    const harness = await createHarness()
+    await mkdir(join(harness.repo, "malformed"))
+    await writeFile(join(harness.repo, "malformed", "package.json"), "{")
+    await writeFile(
+      join(harness.repo, "survivor.ts"),
+      `
+        import { defineExtension } from "laziergit"
+        export default defineExtension({ name: "survivor", activate() {} })
+      `,
+    )
+
+    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+    try {
+      await harness.kernel.start()
+    } finally {
+      errorSpy.mockRestore()
+    }
+
+    expect(harness.kernel.getSnapshot()).toEqual([
+      expect.objectContaining({ path: join(harness.repo, "malformed"), state: "failed" }),
+      expect.objectContaining({ name: "survivor", state: "active" }),
+    ])
+    expect(await cacheNames(harness)).toHaveLength(1)
+  })
+
+  it("retains import-copy leases only for selected live activations", async () => {
+    const harness = await createHarness()
+    const source = (name: string, value: string) => `
+      import { defineExtension } from "laziergit"
+      export default defineExtension({
+        name: "${name}",
+        activate() { ;(globalThis as any).__selectedLease = "${value}" },
+      })
+    `
+    await Promise.all([
+      writeFile(join(harness.global, "shadow.ts"), source("shadow", "global")),
+      writeFile(join(harness.repo, "shadow.ts"), source("shadow", "repo")),
+      writeFile(join(harness.repo, "duplicate-a.ts"), source("duplicate", "first")),
+      writeFile(join(harness.repo, "duplicate-b.ts"), source("duplicate", "second")),
+    ])
+
+    await harness.kernel.start()
+
+    expect(harness.kernel.getSnapshot().filter((entry) => entry.state === "active")).toHaveLength(2)
+    expect(harness.kernel.getSnapshot().filter((entry) => entry.state === "shadowed")).toHaveLength(1)
+    expect(harness.kernel.getSnapshot().filter((entry) => entry.state === "failed")).toHaveLength(1)
+    expect(await cacheNames(harness)).toHaveLength(2)
+  })
+
+  it("rejects structurally valid objects that lack the shared brand", async () => {
+    const harness = await createHarness()
+    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+    try {
+      await writeFile(
+        join(harness.repo, "forged.ts"),
+        `
+          export default {
+            spec: {
+              name: "forged",
+              activate() {},
+            },
+          }
+        `,
+      )
+
+      await harness.kernel.start()
+      expect(harness.kernel.getSnapshot()).toEqual([
+        expect.objectContaining({ state: "failed", message: "Default export must be defineExtension({...})" }),
+      ])
+      expect(await cacheNames(harness)).toEqual([])
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it("keeps the narrowed Effect placeholder unavailable until M3", async () => {
+    const harness = await createHarness()
+    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+    try {
+      await writeFile(
+        join(harness.repo, "effect-user.ts"),
+        `
+          import { defineExtension } from "laziergit"
+          export default defineExtension({
+            name: "effect-user",
+            activate(ctx) { void ctx.effect.runPromise },
+          })
+        `,
+      )
+
+      await harness.kernel.start()
+      expect(harness.kernel.getSnapshot()).toEqual([
+        expect.objectContaining({
+          name: "effect-user",
+          state: "failed",
+          message: "ctx.effect services arrive with the Effect service graph in M3",
+        }),
+      ])
+      expect(await cacheNames(harness)).toEqual([])
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+})
+
+describe("serialized reload recovery", () => {
+  it("heals after an unexpected reload failure and always clears Pane reload state", async () => {
+    const harness = await createHarness()
+    const entry = join(harness.repo, "recoverable.tsx")
+    await writeFile(
+      entry,
+      paneSource(`
+        function RecoverablePane() { return <text>healthy</text> }
+        ctx.panes.register({ id: "recoverable", title: "Recoverable", component: RecoverablePane })
+      `),
+    )
+    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+
+    try {
+      await harness.kernel.start()
+      expect(harness.kernel.panes.getSnapshot()).toEqual([
+        expect.objectContaining({ id: "recoverable", state: "active" }),
+      ])
+
+      const originalFinish = harness.kernel.panes.finishReload.bind(harness.kernel.panes)
+      let failOnce = true
+      harness.kernel.panes.finishReload = (owners) => {
+        originalFinish(owners)
+        if (failOnce) {
+          failOnce = false
+          throw new Error("unexpected reload failure")
+        }
+      }
+      await harness.kernel.reload()
+      harness.kernel.panes.finishReload = originalFinish
+
+      expect(harness.kernel.diagnostics.getSnapshot()).toEqual([
+        expect.objectContaining({ phase: "reload", message: "unexpected reload failure" }),
+      ])
+
+      await writeFile(entry, paneSource(`throw new Error("activation failed")`))
+      await harness.kernel.reload()
+      expect(harness.kernel.panes.getSnapshot()).toEqual([])
+      expect(harness.kernel.getSnapshot()).toEqual([
+        expect.objectContaining({ name: "recoverable", state: "failed", message: "activation failed" }),
+      ])
+
+      await writeFile(
+        entry,
+        paneSource(`
+          function RecoverablePane() { return <text>recovered</text> }
+          ctx.panes.register({ id: "recoverable", title: "Recoverable", component: RecoverablePane })
+        `),
+      )
+      await harness.kernel.reload()
+      expect(harness.kernel.panes.getSnapshot()).toEqual([
+        expect.objectContaining({ id: "recoverable", state: "active" }),
+      ])
+      expect(harness.kernel.getSnapshot()).toEqual([expect.objectContaining({ name: "recoverable", state: "active" })])
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 })
 
 describe("M1 debug Layout", () => {
-  it("contains a thrown Pane without crashing the app", async () => {
+  it("uses one root runtime provider and rerenders Theme consumers without remounting the Pane", async () => {
     const harness = await createHarness()
-    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
-    const extensionPath = join(harness.repo, "toy.tsx")
-
+    testGlobals().__laziergitThemeMounts = 0
     await writeFile(
-      extensionPath,
+      join(harness.repo, "theme-pane.tsx"),
       `
         /** @jsxImportSource @opentui/react */
-        import { defineExtension } from "laziergit"
+        import { defineExtension, useTheme } from "laziergit"
+        import { useState } from "react"
         export default defineExtension({
-          name: "toy",
+          name: "theme-pane",
           activate(ctx) {
-            function ToyPane() { throw new Error("toy render exploded") }
-            ctx.panes.register({ id: "toy", title: "Toy", component: ToyPane })
+            function ThemePane() {
+              const theme = useTheme()
+              const [mount] = useState(() => ++(globalThis as any).__laziergitThemeMounts)
+              return <text>{theme.accent + ":mount:" + mount}</text>
+            }
+            ctx.panes.register({ id: "theme-pane", title: "Theme", component: ThemePane })
           },
         })
       `,
     )
 
-    harness.root = createRoot(harness.setup.renderer)
-    act(() => harness.root?.render(<App kernel={harness.kernel} />))
-    await act(async () => harness.kernel.start())
+    await renderApp(harness)
+    expect(harness.setup.captureCharFrame()).toContain(`${harness.kernel.theme.getSnapshot().accent}:mount:1`)
+    expect(testGlobals().__laziergitThemeMounts).toBe(1)
+
+    await act(async () => {
+      harness.kernel.theme.replace({ ...harness.kernel.theme.getSnapshot(), accent: "#abcdef" })
+    })
     await harness.setup.renderOnce()
     await harness.setup.renderOnce()
-    expect(harness.setup.captureCharFrame()).toContain("Pane crashed")
-    expect(harness.setup.captureCharFrame()).toContain("toy render exploded")
-    expect(harness.setup.captureCharFrame()).toContain("M1 extension kernel")
-    errorSpy.mockRestore()
+
+    expect(harness.setup.captureCharFrame()).toContain("#abcdef:mount:1")
+    expect(testGlobals().__laziergitThemeMounts).toBe(1)
   })
 
-  it("hot reloads changed source under the real Bun runtime", () => {
-    const fixture = join(import.meta.dir, "reload.fixture.ts")
-    const result = Bun.spawnSync([process.execPath, fixture], {
-      cwd: join(import.meta.dir, "../.."),
-      stdout: "pipe",
-      stderr: "pipe",
-      env: process.env,
+  it("contains a thrown Pane without crashing the app", async () => {
+    const harness = await createHarness()
+    const errorMessages: string[] = []
+    const errorSpy = spyOn(console, "error").mockImplementation((...args) => {
+      errorMessages.push(args.map(String).join(" "))
     })
+    const extensionPath = join(harness.repo, "toy.tsx")
 
-    expect(result.stderr.toString()).toBe("")
-    expect(result.exitCode).toBe(0)
+    try {
+      await writeFile(
+        extensionPath,
+        `
+          /** @jsxImportSource @opentui/react */
+          import { defineExtension } from "laziergit"
+          export default defineExtension({
+            name: "toy",
+            activate(ctx) {
+              function ToyPane() { throw new Error("toy render exploded") }
+              ctx.panes.register({ id: "toy", title: "Toy", component: ToyPane })
+            },
+          })
+        `,
+      )
+
+      await renderApp(harness)
+      expect(harness.setup.captureCharFrame()).toContain("Pane crashed")
+      expect(harness.setup.captureCharFrame()).toContain("toy render exploded")
+      expect(harness.setup.captureCharFrame()).toContain("M1 extension kernel")
+      expect(errorMessages.some((message) => message.includes("not wrapped in act"))).toBe(false)
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it("hot reloads changed source under the real Bun runtime", async () => {
+    const fixture = join(import.meta.dir, "reload.fixture.ts")
+    const result = await runFixture(fixture, join(import.meta.dir, "../.."))
+    expect(result.stderr).toBe("")
   })
 })

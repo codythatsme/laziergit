@@ -1,10 +1,36 @@
+import { PaneRuntimeContext, RuntimeContext } from "@laziergit/runtime-bridge"
 import { useContext, useEffect, useRef, useSyncExternalStore } from "react"
 
-import { PaneRuntimeContext, RuntimeContext } from "./internal"
-import type { Cell, CommandSpec, EventMap, GitState, Theme } from "./types"
+import type { Cell, CommandSpec, Disposable, EventMap, GitState, Theme } from "./types"
+
+interface InternalRuntime {
+  readonly git: {
+    getSnapshot(): GitState
+    subscribe(listener: () => void): () => void
+  }
+  readonly events: {
+    subscribe<K extends keyof EventMap & string>(
+      extension: string,
+      event: K,
+      handler: (payload: EventMap[K]) => void | Promise<void>,
+    ): Disposable
+  }
+  readonly commands: {
+    registerComponent(extension: string, paneId: string, spec: Omit<CommandSpec, "pane">): Disposable
+  }
+  readonly theme: {
+    getSnapshot(): Theme
+    subscribe(listener: () => void): () => void
+  }
+}
+
+interface PaneRuntime {
+  readonly extension: string
+  readonly paneId: string
+}
 
 function useRuntime() {
-  const runtime = useContext(RuntimeContext)
+  const runtime = useContext(RuntimeContext) as InternalRuntime | null
   if (!runtime) {
     throw new Error("laziergit hooks must be called from a component rendered by laziergit")
   }
@@ -31,7 +57,7 @@ export function useEvent<K extends keyof EventMap & string>(
   handler: (payload: EventMap[K]) => void | Promise<void>,
 ): void {
   const runtime = useRuntime()
-  const pane = useContext(PaneRuntimeContext)
+  const pane = useContext(PaneRuntimeContext) as PaneRuntime | null
   const latest = useRef(handler)
   latest.current = handler
 
@@ -45,7 +71,7 @@ export function useEvent<K extends keyof EventMap & string>(
 
 export function useCommand(spec: Omit<CommandSpec, "pane">): void {
   const runtime = useRuntime()
-  const pane = useContext(PaneRuntimeContext)
+  const pane = useContext(PaneRuntimeContext) as PaneRuntime | null
   const latest = useRef(spec)
   latest.current = spec
 
@@ -87,5 +113,10 @@ export function createCell<T>(initial: T): Cell<T> {
 }
 
 export function useTheme(): Theme {
-  return useRuntime().theme
+  const runtime = useRuntime()
+  return useSyncExternalStore(
+    (listener) => runtime.theme.subscribe(listener),
+    () => runtime.theme.getSnapshot(),
+    () => runtime.theme.getSnapshot(),
+  )
 }

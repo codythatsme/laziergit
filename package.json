@@ -28,7 +28,9 @@
     "format:check": "oxfmt --check packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
     "lint": "oxlint packages extensions scripts",
     "test": "bun test ./packages",
-    "typecheck": "bun run --filter '*' typecheck"
+    "test:runtime": "bun packages/core/src/extension/reload.fixture.ts",
+    "typecheck": "bun run --filter '*' typecheck",
+    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
   },
   "devDependencies": {
     "@types/bun": "catalog:",

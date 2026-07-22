@@ -19,6 +19,7 @@
         "laziergit": "./src/main.tsx",
       },
       "dependencies": {
+        "@laziergit/runtime-bridge": "workspace:*",
         "@opentui/core": "catalog:",
         "@opentui/react": "catalog:",
         "effect": "catalog:",
@@ -32,11 +33,24 @@
     "packages/laziergit": {
       "name": "laziergit",
       "version": "0.0.0",
+      "dependencies": {
+        "@laziergit/runtime-bridge": "workspace:*",
+      },
       "devDependencies": {
         "@types/react": "catalog:",
       },
       "peerDependencies": {
         "effect": "4.0.0-beta.83",
+        "react": ">=19.2.0",
+      },
+    },
+    "packages/runtime-bridge": {
+      "name": "@laziergit/runtime-bridge",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+      "peerDependencies": {
         "react": ">=19.2.0",
       },
     },
@@ -61,6 +75,8 @@
   },
   "packages": {
     "@laziergit/core": ["@laziergit/core@workspace:packages/core"],
+
+    "@laziergit/runtime-bridge": ["@laziergit/runtime-bridge@workspace:packages/runtime-bridge"],
 
     "@msgpackr-extract/msgpackr-extract-darwin-arm64": ["@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ=="],
 

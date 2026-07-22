@@ -1,0 +1,288 @@
+import * as fs from "node:fs/promises"
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path"
+import { fileURLToPath } from "node:url"
+
+import type { ExtensionCandidate } from "./discovery"
+
+export type ProcessState = "live" | "dead" | "unknown"
+export type ProcessStateProbe = (pid: number) => ProcessState
+
+export interface ImportCopyCacheDiagnostic {
+  readonly phase: "cache"
+  readonly message: string
+  readonly error: Error
+}
+
+export interface ImportCopyCacheOptions {
+  readonly directories: readonly string[]
+  readonly diagnose?: (diagnostic: ImportCopyCacheDiagnostic) => void
+  readonly processState?: ProcessStateProbe
+  readonly platform?: NodeJS.Platform
+}
+
+export interface ImportCopyLease {
+  readonly entryPath: string
+  readonly rootPath: string
+  release(): Promise<void>
+}
+
+const CACHE_NAME = /^\.laziergit-cache-(\d+)-(\d+)-(\d+)-(.+)$/
+
+function normalizeError(error: unknown): Error {
+  if (error instanceof Error) return error
+  if (typeof error === "string") return new Error(error)
+  return new Error(String(error))
+}
+
+function errorCode(error: unknown): string | undefined {
+  const code = (error as NodeJS.ErrnoException).code
+  return typeof code === "string" ? code : undefined
+}
+
+function defaultProcessState(pid: number): ProcessState {
+  if (pid === process.pid) return "live"
+  try {
+    process.kill(pid, 0)
+    return "live"
+  } catch (error) {
+    return errorCode(error) === "ESRCH" ? "dead" : "unknown"
+  }
+}
+
+function cacheOwnerPid(name: string): number | undefined {
+  const match = CACHE_NAME.exec(name)
+  if (!match) return undefined
+  const pid = Number(match[1])
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
+}
+
+function isPathInside(rootPath: string, childPath: string): boolean {
+  const childRelativePath = relative(rootPath, childPath)
+  return (
+    childRelativePath === "" ||
+    (!isAbsolute(childRelativePath) && childRelativePath !== ".." && !childRelativePath.startsWith(`..${sep}`))
+  )
+}
+
+function directoryLinkType(platform: NodeJS.Platform): "dir" | "junction" {
+  return platform === "win32" ? "junction" : "dir"
+}
+
+async function linkPath(sourcePath: string, targetPath: string, platform: NodeJS.Platform): Promise<void> {
+  const metadata = await fs.stat(sourcePath)
+  await fs.symlink(sourcePath, targetPath, metadata.isDirectory() ? directoryLinkType(platform) : "file")
+}
+
+async function linkDirectoryEntries(
+  sourcePath: string,
+  targetPath: string,
+  omitted: ReadonlySet<string>,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  let entries
+  try {
+    entries = await fs.readdir(sourcePath, { withFileTypes: true })
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return
+    throw error
+  }
+
+  await fs.mkdir(targetPath, { recursive: true })
+  await Promise.all(
+    entries
+      .filter((entry) => !omitted.has(entry.name))
+      .map((entry) => linkPath(join(sourcePath, entry.name), join(targetPath, entry.name), platform)),
+  )
+}
+
+function hostPackageRoot(specifier: string): string {
+  return dirname(fileURLToPath(import.meta.resolve(specifier)))
+}
+
+async function createNodeModulesOverlay(
+  copyRoot: string,
+  sourceRoot: string | undefined,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  const overlayPath = join(copyRoot, "node_modules")
+  if (sourceRoot) {
+    const sourceNodeModulesPath = join(sourceRoot, "node_modules")
+    await linkDirectoryEntries(sourceNodeModulesPath, overlayPath, new Set(["@opentui", "react"]), platform)
+    await linkDirectoryEntries(
+      join(sourceNodeModulesPath, "@opentui"),
+      join(overlayPath, "@opentui"),
+      new Set(["core", "react"]),
+      platform,
+    )
+  }
+
+  await fs.mkdir(join(overlayPath, "@opentui"), { recursive: true })
+  await Promise.all([
+    linkPath(hostPackageRoot("react"), join(overlayPath, "react"), platform),
+    linkPath(hostPackageRoot("@opentui/react"), join(overlayPath, "@opentui", "react"), platform),
+    linkPath(hostPackageRoot("@opentui/core"), join(overlayPath, "@opentui", "core"), platform),
+  ])
+}
+
+class ImportCopyLeaseImplementation implements ImportCopyLease {
+  #releasePromise: Promise<void> | undefined
+
+  constructor(
+    readonly entryPath: string,
+    readonly rootPath: string,
+    private readonly releaseLease: (lease: ImportCopyLeaseImplementation) => Promise<void>,
+  ) {}
+
+  release(): Promise<void> {
+    this.#releasePromise ??= this.releaseLease(this)
+    return this.#releasePromise
+  }
+}
+
+/**
+ * Owns generation-unique import copies. A lone-file Extension copies only that file, so
+ * helpers and assets require directory form. Copies remain live until their lease is released.
+ */
+export class ImportCopyCache {
+  readonly #directories: readonly string[]
+  readonly #diagnose: ((diagnostic: ImportCopyCacheDiagnostic) => void) | undefined
+  readonly #processState: ProcessStateProbe
+  readonly #platform: NodeJS.Platform
+  readonly #leases = new Set<ImportCopyLeaseImplementation>()
+  readonly #ownedPaths = new Set<string>()
+  readonly #cleanupInFlight = new Map<string, Promise<void>>()
+  #sequence = 0
+
+  constructor(options: ImportCopyCacheOptions) {
+    this.#directories = options.directories
+    this.#diagnose = options.diagnose
+    this.#processState = options.processState ?? defaultProcessState
+    this.#platform = options.platform ?? process.platform
+  }
+
+  get activeLeaseCount(): number {
+    return this.#leases.size
+  }
+
+  async sweepStale(): Promise<void> {
+    for (const directory of this.#directories) {
+      let entries
+      try {
+        entries = await fs.readdir(directory, { withFileTypes: true })
+      } catch (error) {
+        if (errorCode(error) !== "ENOENT") this.#report(`Failed to scan import-copy cache root ${directory}`, error)
+        continue
+      }
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const pid = cacheOwnerPid(entry.name)
+        if (pid === undefined || pid === process.pid) continue
+
+        let state: ProcessState = "unknown"
+        try {
+          state = this.#processState(pid)
+        } catch (error) {
+          this.#report(`Failed to determine owner of import copy ${join(directory, entry.name)}`, error)
+        }
+        if (state !== "dead") continue
+
+        const path = join(directory, entry.name)
+        try {
+          await fs.rm(path, { recursive: true })
+        } catch (error) {
+          this.#report(`Failed to remove stale import copy ${path}`, error)
+        }
+      }
+    }
+  }
+
+  async acquire(candidate: ExtensionCandidate, generation: number): Promise<ImportCopyLease> {
+    if (!Number.isSafeInteger(generation) || generation < 0) {
+      throw new TypeError(`Import-copy generation must be a non-negative safe integer: ${generation}`)
+    }
+
+    const copyRoot = this.#copyRoot(candidate, generation)
+    this.#ownedPaths.add(copyRoot)
+
+    try {
+      let entryPath: string
+      if (candidate.rootPath === candidate.entryPath) {
+        await fs.mkdir(copyRoot)
+        entryPath = join(copyRoot, basename(candidate.sourceEntryPath))
+        await fs.copyFile(candidate.sourceEntryPath, entryPath)
+        await createNodeModulesOverlay(copyRoot, undefined, this.#platform)
+      } else {
+        const entryRelativePath = relative(candidate.sourceRootPath, candidate.sourceEntryPath)
+        if (entryRelativePath === "" || !isPathInside(candidate.sourceRootPath, candidate.sourceEntryPath)) {
+          throw new TypeError(`Directory extension entry must be inside ${candidate.sourceRootPath}`)
+        }
+
+        await fs.cp(candidate.sourceRootPath, copyRoot, {
+          recursive: true,
+          filter: (sourcePath) => {
+            if (sourcePath === candidate.sourceRootPath) return true
+            const name = basename(sourcePath)
+            return name !== "node_modules" && !name.startsWith(".laziergit-cache-")
+          },
+        })
+        await createNodeModulesOverlay(copyRoot, candidate.sourceRootPath, this.#platform)
+        entryPath = join(copyRoot, entryRelativePath)
+      }
+
+      const lease = new ImportCopyLeaseImplementation(entryPath, copyRoot, (current) => this.#release(current))
+      this.#leases.add(lease)
+      return lease
+    } catch (error) {
+      await this.#cleanupPath(copyRoot)
+      throw error
+    }
+  }
+
+  async releaseAll(): Promise<void> {
+    const leases = [...this.#leases]
+    const leasePaths = new Set(leases.map((lease) => lease.rootPath))
+    await Promise.all(leases.map((lease) => lease.release()))
+
+    const orphanedPaths = [...this.#ownedPaths].filter((path) => !leasePaths.has(path))
+    await Promise.all(orphanedPaths.map((path) => this.#cleanupPath(path)))
+  }
+
+  #copyRoot(candidate: ExtensionCandidate, generation: number): string {
+    this.#sequence += 1
+    const name = `.laziergit-cache-${process.pid}-${generation}-${Date.now()}-${this.#sequence}-${basename(candidate.rootPath)}`
+    return join(dirname(candidate.rootPath), name)
+  }
+
+  async #release(lease: ImportCopyLeaseImplementation): Promise<void> {
+    this.#leases.delete(lease)
+    await this.#cleanupPath(lease.rootPath)
+  }
+
+  #cleanupPath(path: string): Promise<void> {
+    const current = this.#cleanupInFlight.get(path)
+    if (current) return current
+
+    const cleanup = (async () => {
+      try {
+        await fs.rm(path, { recursive: true, force: true })
+        this.#ownedPaths.delete(path)
+      } catch (error) {
+        this.#report(`Failed to clean import copy ${path}`, error)
+      } finally {
+        this.#cleanupInFlight.delete(path)
+      }
+    })()
+    this.#cleanupInFlight.set(path, cleanup)
+    return cleanup
+  }
+
+  #report(message: string, error: unknown): void {
+    if (!this.#diagnose) return
+    try {
+      this.#diagnose({ phase: "cache", message, error: normalizeError(error) })
+    } catch {
+      // Diagnostics must never replace an import or cleanup failure.
+    }
+  }
+}

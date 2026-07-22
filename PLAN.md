@@ -107,7 +107,7 @@ Specified in [docs/extension-api.md](./docs/extension-api.md) — produced by a 
 Each milestone ends with something runnable; "done when" is the gate.
 
 - **M0 — Scaffold (complete).** Bun workspace, `packages/core` + `packages/laziergit`, OpenTUI React hello-world booting in the terminal, typecheck/format scripts. *Done when: `bun run dev` renders a screen.*
-- **M1 — Extension kernel (complete).** `defineExtension`, loader over runtime-plugin-support, `ctx` skeleton, Scope-based disposal, stale-ctx poisoning, hot reload, error containment, and a temporary debug layout that renders registered panes side-by-side. *Gate passed: saving a toy `.tsx` extension while the app runs updates the screen, and a thrown render error shows an error card instead of crashing.*
+- **M1 — Extension kernel (complete).** `defineExtension`, loader over runtime-plugin-support, per-activation Scope disposal/supervision, stale-ctx poisoning, lease-backed hot reload, candidate and observer containment, awaited shutdown, and a temporary debug Layout that renders registered Panes side-by-side. *Gate passed: normal ctx async work settles, reload failures heal without stuck Panes, repeated generations clean up exactly once, saving a toy `.tsx` Extension updates the screen, and a thrown render error shows an error card instead of crashing.*
 - **M2 — UI framework.** Config-driven Layout (JSONC + schema + global→repo merge), focus model, keymap-backed Commands/keybindings, popup toolkit, status line, palette. *Done when: two toy panes are navigable and rearrangeable via config, with working per-pane keybindings and a palette.*
 - **M3 — Git service.** Exec layer, porcelain parsing, reactive GitState store, derived events, `ctx.git` + hooks. *Done when: a toy pane shows live branch/status that tracks external `git` commands run in another terminal within ~2s.*
 - **M4 — Bundled extensions.** The eight, roughly status → files → branches → commits → stash → diff → commit-flow → sync, each stress-feeding the API (selection model, decorations, menus, multi-pane focus). API changes surface here — make them, don't work around them. *Done when: the everyday loop works end-to-end on this repo.*
@@ -117,7 +117,7 @@ Each milestone ends with something runnable; "done when" is the gate.
 
 | Risk | Mitigation |
 |---|---|
-| Effect v4 is beta and churns | Contained: Effect never crosses the public API (ADR-0002); pin + patch like opencode does |
+| Effect v4 is beta and churns | Contained: ordinary APIs are Promise-first; only the narrow, opt-in `ctx.effect` types are version-coupled (ADR-0002); pin + patch like opencode does |
 | `@opentui/react` less production-exercised than Solid renderer | Stick to documented components; use its test-utils; vendored source for debugging; upstream issues watched |
 | No PTY/terminal-embedding pane in OpenTUI (opentui#440 open) | Data-panes cover the known wishlist (gh-workflows, devbox); interactive flows use full-screen suspend/resume; revisit when upstream lands |
 | Vendored repos move fast (opencode especially) | Pinned SHAs in `scripts/vendor-pins.json`; deliberate, reviewed bumps |
