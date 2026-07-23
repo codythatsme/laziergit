@@ -2044,7 +2044,7 @@ Full trust, no sandbox — containment is structural, per surface:
   the `.d.ts` an agent learns from — forgetting `.cwd(ctx.git.root)` on `Bun.$` is the kind of
   silent bug types exist to prevent.
 
-### 5.12 What the git store watches, and two states its types cannot spell
+### 5.12 What the git store watches, and three states its types cannot spell
 
 **Watching.** There is no fs-watching of `.git` (ADR-0001's git-service note, and lazygit's
 own conclusion). The store refreshes after every write laziergit issues, and otherwise on a
@@ -2062,8 +2062,8 @@ terminal regains focus — switching back from the terminal you just ran `git` i
 likeliest moment for the screen to be stale and the least tolerable moment to wait out an
 interval.
 
-**Two gaps, named rather than hidden.** Both are cases where git has a state the v1 model
-cannot represent, and both are candidates for the M4 pass where the Bundled Extensions put
+**Three gaps, named rather than hidden.** Each is a case where git has a state the v1 model
+cannot represent, and each is a candidate for the M4 pass where the Bundled Extensions put
 real pressure on these types:
 
 - **Unborn HEAD.** A repository with no commits has no oid, and `Head.oid: string` has no
@@ -2075,3 +2075,19 @@ real pressure on these types:
   — the same shape as a perfectly in-sync branch, which is the one thing a branches Pane
   most wants to distinguish. One added field (`gone: boolean`, or a variant) fixes it, and it
   is cheaper now than after Extensions depend on the current shape.
+- **Which side of a conflict.** Porcelain v2 spells an unmerged path as `UU`, `AA`, `DU`,
+  `UD`, `AU`, `UA`, or `DD` — both-modified, both-added, deleted-by-us, and so on —
+  and `ChangeKind` has one `"conflicted"` value to put it in, so the store keeps the path and
+  drops which side did what. That is enough for v1's conflict UX (below) and not enough for
+  the lazygit-grade one: "both added" and "modified by us, deleted by them" want different
+  actions offered. The fix is a variant on `FileChange` carrying the pair, and it should land
+  with the conflicts UI rather than ahead of it.
+
+**Conflicts in v1: show and delegate.** The bundled `files` extension surfaces conflicted
+paths as their own group, offers "open in editor" and "stage resolved" from `files.actions`,
+and otherwise stays out of the way — resolution happens in the user's editor or `git
+mergetool`. It is deliberately less than lazygit, which renders a pick-ours / pick-theirs /
+pick-both hunk picker; that is post-v1 (PLAN.md) and is the work that will want both the
+conflict-kind variant above and the patch-level staging surface §5.11 leaves out. Nothing here
+is privileged: a third-party extension can register a conflicts Pane and splice into
+`files.actions` today, on exactly the API the bundled one uses.
