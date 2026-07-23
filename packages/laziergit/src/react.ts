@@ -1,12 +1,17 @@
 import { PaneRuntimeContext, RuntimeContext } from "@laziergit/runtime-bridge"
-import { useContext, useEffect, useRef, useSyncExternalStore } from "react"
+import { useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react"
 
 import type { Cell, CommandSpec, Disposable, EventMap, GitState, Theme } from "./types"
 
+/**
+ * The host contract these hooks consume. `this: void` throughout because
+ * {@link useSyncExternalStore} calls them unbound — which is why every host declares them
+ * as bound arrow properties.
+ */
 interface InternalRuntime {
   readonly git: {
-    getSnapshot(): GitState
-    subscribe(listener: () => void): () => void
+    getSnapshot(this: void): GitState
+    subscribe(this: void, listener: () => void): () => void
   }
   readonly events: {
     subscribe<K extends keyof EventMap & string>(
@@ -19,8 +24,8 @@ interface InternalRuntime {
     registerComponent(extension: string, paneId: string, spec: Omit<CommandSpec, "pane">): Disposable
   }
   readonly theme: {
-    getSnapshot(): Theme
-    subscribe(listener: () => void): () => void
+    getSnapshot(this: void): Theme
+    subscribe(this: void, listener: () => void): () => void
   }
 }
 
@@ -38,19 +43,46 @@ function useRuntime() {
   return runtime
 }
 
+/**
+ * Selector-aware `useSyncExternalStore`.
+ *
+ * Two layers of memoization, and both are load-bearing. Within one selector identity the
+ * selection is computed once per store snapshot — React calls `getSnapshot` several times
+ * per render, and the store guarantees a stable snapshot object between publishes, so the
+ * selector runs once. Across renders, `committed` carries the value React last rendered,
+ * which is what `isEqual` compares against: that is what keeps a derived object (`(s) =>
+ * s.status.staged.map(...)`) from re-rendering forever, even though an inline selector has
+ * a fresh identity on every render and resets the inner memo.
+ *
+ * Keying the memo on `selector` is what makes a selector that closes over props correct —
+ * a changed selector must not keep returning the previous one's value.
+ */
 export function useGit<T>(selector: (state: GitState) => T, isEqual: (a: T, b: T) => boolean = Object.is): T {
   const runtime = useRuntime()
-  const selected = useRef(selector(runtime.git.getSnapshot()))
+  const committed = useRef<{ value: T } | null>(null)
 
-  return useSyncExternalStore(
-    (listener) => runtime.git.subscribe(listener),
-    () => {
-      const next = selector(runtime.git.getSnapshot())
-      if (!isEqual(selected.current, next)) selected.current = next
-      return selected.current
-    },
-    () => selected.current,
-  )
+  const getSelection = useMemo(() => {
+    let memoized: { state: GitState; value: T } | null = null
+
+    return (): T => {
+      const state = runtime.git.getSnapshot()
+      if (memoized && Object.is(memoized.state, state)) return memoized.value
+
+      const next = selector(state)
+      const previous = committed.current
+      // Reuse the rendered value when the selection is equivalent, so the identity React
+      // compares against stays put.
+      const value = previous !== null && isEqual(previous.value, next) ? previous.value : next
+      memoized = { state, value }
+      return value
+    }
+  }, [runtime, selector, isEqual])
+
+  const value = useSyncExternalStore(runtime.git.subscribe, getSelection, getSelection)
+  useEffect(() => {
+    committed.current = { value }
+  }, [value])
+  return value
 }
 
 export function useEvent<K extends keyof EventMap & string>(
@@ -94,31 +126,34 @@ export function createCell<T>(initial: T): Cell<T> {
   let current = initial
   const listeners = new Set<() => void>()
 
+  // Hoisted out of `use()` so their identities are stable across renders: a fresh
+  // `subscribe` closure per render makes React tear the subscription down and rebuild it
+  // on every render, which is exactly the churn `useTheme` passes bound methods to avoid.
+  const subscribe = (listener: () => void): (() => void) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }
+  const getSnapshot = (): T => current
+
   return {
-    get: () => current,
+    get: getSnapshot,
     set(value) {
       if (Object.is(current, value)) return
       current = value
-      for (const listener of listeners) listener()
+      // Snapshotted, so a component unmounting in response cannot break the iteration.
+      for (const listener of [...listeners]) listener()
     },
     use() {
-      return useSyncExternalStore(
-        (listener) => {
-          listeners.add(listener)
-          return () => listeners.delete(listener)
-        },
-        () => current,
-        () => current,
-      )
+      return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
     },
   }
 }
 
 export function useTheme(): Theme {
   const runtime = useRuntime()
-  return useSyncExternalStore(
-    (listener) => runtime.theme.subscribe(listener),
-    () => runtime.theme.getSnapshot(),
-    () => runtime.theme.getSnapshot(),
-  )
+  // Passed through rather than wrapped: a fresh closure per render would make React tear
+  // down and re-establish the subscription on every render.
+  return useSyncExternalStore(runtime.theme.subscribe, runtime.theme.getSnapshot, runtime.theme.getSnapshot)
 }

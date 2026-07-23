@@ -161,6 +161,28 @@ it("validates an Extension section against its own schema, falling back per opti
   ])
 })
 
+it("defaults the git section, and degrades each of its settings on its own", () => {
+  expect(loadConfig(documents(null, null)).core.git).toEqual({ refreshIntervalMs: 2000, commitLimit: 200 })
+
+  const loaded = loadConfig(documents(`{ "git": { "refreshIntervalMs": 10, "commitLimit": 50, "typo": 1 } }`, null))
+
+  // A rejected interval must not also drag the perfectly good commit window back to its default.
+  expect(loaded.core.git).toEqual({ refreshIntervalMs: 2000, commitLimit: 50 })
+  expect(loaded.problems).toEqual([
+    { path: "git.typo", message: "Unknown git setting" },
+    { path: "git.refreshIntervalMs", message: "Must be at least 250" },
+  ])
+})
+
+it("rejects a git section that is not an object, and a fractional interval", () => {
+  expect(loadConfig(documents(`{ "git": 5 }`, null)).problems).toEqual([
+    { path: "git", message: "git must be an object of git settings" },
+  ])
+  expect(loadConfig(documents(`{ "git": { "commitLimit": 1.5 } }`, null)).problems).toEqual([
+    { path: "git.commitLimit", message: "Expected a whole number" },
+  ])
+})
+
 it("produces total defaults for an Extension with no config section", () => {
   const resolved = resolveExtensionConfig("branch-age", { days: option.number({ default: 30 }) }, undefined)
 

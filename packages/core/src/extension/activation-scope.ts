@@ -88,6 +88,23 @@ export class ActivationScope {
     })
   }
 
+  /**
+   * Runs a fully-provided Effect under this activation's lifetime — the one door behind
+   * `ctx.effect.runPromise`. The scope's AbortSignal is handed to the runtime, so closing
+   * the scope interrupts the fiber for real (finalizers included) rather than merely
+   * abandoning its result; {@link supervise} then parks the promise, so the interruption
+   * never surfaces as a rejection in Extension code.
+   */
+  runEffect<A, E>(effect: Effect.Effect<A, E, never>): Promise<A> {
+    this.assertActive()
+    const running = Effect.runPromise(effect, { signal: this.#controller.signal })
+    // Tracked as a finalizer as well as supervised, so `close()` waits for the fiber to
+    // finish unwinding — an interrupted fiber's own finalizers (a killed child process,
+    // a released resource) must complete before the extension is declared torn down.
+    const settled = this.track(() => running.then(undefined, () => undefined))
+    return this.supervise(running.finally(() => settled.dispose()))
+  }
+
   close(reason: StaleReason): Promise<void> {
     if (this.#closePromise) return this.#closePromise
 

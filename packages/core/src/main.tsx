@@ -5,9 +5,16 @@ import * as laziergitRuntime from "laziergit"
 
 import { App } from "./app"
 import { ExtensionKernel } from "./extension/kernel"
+import { discoverRepository } from "./git/repository"
 
 export async function main() {
   ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
+
+  // Walking up from the cwd is what makes `laziergit` work from a subdirectory. Outside a
+  // repository the cwd stands in: the app still starts, with an empty store and a
+  // diagnostic, rather than refusing to open.
+  const repository = await discoverRepository(process.cwd())
+  const repoRoot = repository?.root ?? process.cwd()
 
   let renderer: Awaited<ReturnType<typeof createCliRenderer>> | undefined
   let kernel: ExtensionKernel | undefined
@@ -29,7 +36,7 @@ export async function main() {
     })
     const activeRenderer = renderer
     kernel = new ExtensionKernel({
-      repoRoot: process.cwd(),
+      repoRoot,
       renderer: activeRenderer,
       onQuit: () => {
         void (async () => {
@@ -44,6 +51,15 @@ export async function main() {
 
     createRoot(renderer).render(<App kernel={kernel} />)
     await kernel.start()
+    if (!repository) {
+      // Said in the app rather than on stdout, which the renderer owns by now — and said
+      // once, because every Pane being empty otherwise has no visible explanation.
+      kernel.notifications.publish({
+        extension: "app",
+        message: `${repoRoot} is not a git repository`,
+        level: "warning",
+      })
+    }
     await rendererDestruction
   } finally {
     try {

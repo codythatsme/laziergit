@@ -37,6 +37,17 @@ export interface StatuslineConfig {
   readonly hidden: ReadonlySet<string>
 }
 
+export interface GitConfig {
+  /**
+   * How often to look for changes made outside laziergit. Each tick reads the working
+   * tree status and every ref — two small commands that take no locks — and only refreshes
+   * when one of them differs.
+   */
+  readonly refreshIntervalMs: number
+  /** How much of HEAD's history the store holds. Page deeper with `ctx.git.raw(["log", ...])`. */
+  readonly commitLimit: number
+}
+
 export interface CoreConfig {
   /** `null` when the user declared no Layout — placement hints then decide everything. */
   readonly layout: LayoutConfig | null
@@ -46,6 +57,7 @@ export interface CoreConfig {
   readonly statusline: StatuslineConfig
   /** The key `<leader>` expands to in a {@link KeySpec}. */
   readonly leader: string
+  readonly git: GitConfig
 }
 
 /** A rejected config value. Every problem degrades one setting to its default; none block startup. */
@@ -69,6 +81,14 @@ export interface ConfigFiles {
 
 export const defaultLeader = "space"
 
+/** Exported so the published JSON Schema advertises the same numbers the reader defaults to. */
+export const defaultGitConfig: GitConfig = Object.freeze({ refreshIntervalMs: 2000, commitLimit: 200 })
+
+export const gitConfigLimits = Object.freeze({
+  refreshIntervalMs: Object.freeze({ min: 250, max: 60_000 }),
+  commitLimit: Object.freeze({ min: 1, max: 5000 }),
+})
+
 export function defaultConfigFiles(repoRoot: string): ConfigFiles {
   const configRoot = process.env.XDG_CONFIG_HOME || join(homedir(), ".config")
   return {
@@ -84,6 +104,7 @@ export const emptyConfig: LoadedConfig = Object.freeze({
     theme: defaultTheme,
     statusline: Object.freeze({ left: Object.freeze([]), right: Object.freeze([]), hidden: new Set<string>() }),
     leader: defaultLeader,
+    git: defaultGitConfig,
   }),
   extensions: new Map<string, Readonly<Record<string, unknown>>>(),
   problems: Object.freeze([]),
@@ -256,6 +277,45 @@ function readLeader(value: unknown, log: ProblemLog): string {
   return value
 }
 
+function readGitSetting(
+  value: unknown,
+  key: keyof GitConfig,
+  limits: { readonly min: number; readonly max: number },
+  log: ProblemLog,
+): number {
+  const fallback = defaultGitConfig[key]
+  if (value === undefined) return fallback
+  const path = `git.${key}`
+  if (typeof value !== "number" || !Number.isInteger(value))
+    return log.reject(path, "Expected a whole number") ?? fallback
+  if (value < limits.min) return log.reject(path, `Must be at least ${limits.min}`) ?? fallback
+  if (value > limits.max) return log.reject(path, `Must be at most ${limits.max}`) ?? fallback
+  return value
+}
+
+function readGit(value: unknown, log: ProblemLog): GitConfig {
+  if (value === undefined) return defaultGitConfig
+  if (!isRecord(value)) {
+    log.reject("git", "git must be an object of git settings")
+    return defaultGitConfig
+  }
+
+  for (const key of Object.keys(value)) {
+    if (!Object.hasOwn(defaultGitConfig, key)) log.reject(`git.${key}`, "Unknown git setting")
+  }
+
+  // Each setting degrades on its own: an unusable interval must not also reset the commit window.
+  return Object.freeze({
+    refreshIntervalMs: readGitSetting(
+      value.refreshIntervalMs,
+      "refreshIntervalMs",
+      gitConfigLimits.refreshIntervalMs,
+      log,
+    ),
+    commitLimit: readGitSetting(value.commitLimit, "commitLimit", gitConfigLimits.commitLimit, log),
+  })
+}
+
 function readExtensionSections(
   value: unknown,
   log: ProblemLog,
@@ -277,7 +337,16 @@ function readExtensionSections(
   return sections
 }
 
-const coreSectionKeys = new Set(["$schema", "layout", "keybindings", "theme", "statusline", "leader", "extensions"])
+const coreSectionKeys = new Set([
+  "$schema",
+  "layout",
+  "keybindings",
+  "theme",
+  "statusline",
+  "leader",
+  "git",
+  "extensions",
+])
 
 /** Splits one merged document into the core sections and the raw per-Extension sections. */
 export function readConfig(document: unknown): LoadedConfig {
@@ -299,6 +368,7 @@ export function readConfig(document: unknown): LoadedConfig {
       theme: readTheme(document.theme, log),
       statusline: readStatusline(document.statusline, log),
       leader: readLeader(document.leader, log),
+      git: readGit(document.git, log),
     },
     extensions: readExtensionSections(document.extensions, log),
     problems: log.problems,

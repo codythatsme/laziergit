@@ -487,16 +487,26 @@ tagged with the extension name, and routed to the log file / debug pane.
   }
 
   export interface Head {
+    /**
+     * The commit HEAD points at, or `""` on a repository with no commits yet — the one
+     * state an oid cannot spell (§5.12). `oid === "" && !detached` means unborn.
+     */
     readonly oid: string;
     /** Current branch name, or null when detached. */
     readonly branch: string | null;
     readonly detached: boolean;
+    /** The upstream of {@link branch} — the very object that branch's row carries. */
     readonly upstream: UpstreamInfo | null;
   }
 
   export interface UpstreamInfo {
     readonly remote: string;
+    /** Branch name on the remote, without its `refs/heads/` prefix. */
     readonly branch: string;
+    /**
+     * Divergence from the upstream. An upstream deleted on the remote ("gone") reports
+     * zero in both, indistinguishable from in sync — a known gap in this type (§5.12).
+     */
     readonly ahead: number;
     readonly behind: number;
   }
@@ -713,7 +723,11 @@ tagged with the extension name, and routed to the log file / debug pane.
    * ```
    */
   export interface EventMap extends GitEvents {
-    /** Fired after every store refresh cycle, whether or not anything changed. */
+    /**
+     * Fired after every refresh that read the repository and published a snapshot,
+     * whether or not any slice changed. A refresh that publishes nothing — because
+     * there is no repository, or because the read failed — emits nothing.
+     */
     "git.refreshed": { readonly state: GitState };
     /** Pane focus moved. */
     "app.pane.focused": { readonly paneId: string; readonly previous: string | null };
@@ -1300,12 +1314,22 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
 } // declare module "laziergit"
 ```
 
-**Implementation status.** M1 publishes this narrowed shape so Extensions compile against the
-intended boundary, but `ctx.effect` remains an explicit unavailable placeholder until M3 installs
-the Git and Effect service graph. Access fails immediately rather than exposing a partial runtime.
-`ctx.git` is in the same position: the store reads as an empty {@link GitState} and every write
-rejects until M3. Everything else on this page is live as of M2 — Commands and keybindings, Panes
-and the Layout, menus and splices, popups, the status line, the palette, and the cheat sheet.
+**Implementation status.** The whole core surface is live as of M3 — Commands and keybindings,
+Panes and the Layout, menus and splices, popups, the status line, the palette, the cheat sheet,
+`ctx.config`, `ctx.events`, `ctx.git`, and `ctx.effect`. `ctx.git` reads a real repository and
+its writes are the argv-built porcelain below; `ctx.effect` hands out the core's own git
+effects rather than a wrapper around the Promise surface, so both faces drive the same code.
+Outside a git repository laziergit still starts: the store serves an empty {@link GitState},
+the poll does nothing, and every write fails with a {@link GitError} saying so.
+
+The exception is §1.11: the eight Bundled Extensions arrive in M4, so their exported APIs
+(`BranchesApi`, `FilesApi`, `DiffApi`, `CommitFlowApi`, …) and their `*.actions` menu ids are
+declared types with nothing registered behind them yet. `ctx.extensions.get` and
+`ctx.menus.extend` themselves work; there is simply nothing bundled to consume or splice into.
+
+Two encodings are worth knowing because the types cannot express them (see §5.12):
+`head.oid` is the empty string when HEAD is unborn, and a deleted upstream reports
+`{ ahead: 0, behind: 0 }`, which reads the same as an in-sync one.
 
 ---
 
@@ -1951,7 +1975,7 @@ Full trust, no sandbox — containment is structural, per surface:
 | Menus | plain data + one generic popup component; an open menu pushes a modal high-priority keymap layer |
 | Registrations / `onDispose` | Effect `Scope` per activation owning a removable LIFO finalizer/supervision registry; `dispose()` = early finalizer run; consumed-API proxy attaches foreign Disposables to the caller's scope |
 | Hot reload | linked-target-aware extension fingerprint poll → reverse-topo deactivate → synchronous stale mark → lease-backed generation copy import → topo activate; serialized reload tails heal after failures |
-| `ctx.git` / `useGit` | git plumbing service (shell-out, Effect-internal) + snapshot store; React via `useSyncExternalStore`; ~2s repo-fingerprint poll (`for-each-ref` + `.git/HEAD`) + post-helper refresh |
+| `ctx.git` / `useGit` | git plumbing service (argv shell-out, Effect-internal: `Effect.callback` per child, lock retry on a `Schedule`, one concurrent fan-out per refresh) + snapshot store reconciled so unchanged slices and rows keep identity; React via `useSyncExternalStore`; ~2s fingerprint poll (`status --porcelain=v2` + `show-ref --head`), post-write refresh, and a refresh on the renderer's terminal-focus event |
 | `ctx.events` | emit-time subscription snapshot; per-subscription FIFO delivery; disposal skips queued work; per-delivery catch |
 | `"laziergit"` module | `ensureRuntimePluginSupport({ additional: { laziergit } })` from `@opentui/react/runtime-plugin-support/configure`, imported before anything else — the FIRST install must carry the extra specifier: a later install that adds one the first lacked throws, while later installs without extras are compatible no-ops — so extension imports share the Core's React/OpenTUI/laziergit instances; works in `bun build --compile` binaries |
 
@@ -1990,3 +2014,35 @@ Full trust, no sandbox — containment is structural, per surface:
   `exec` stays because its repo-root cwd default is a correctness detail that must live inside
   the `.d.ts` an agent learns from — forgetting `.cwd(ctx.git.root)` on `Bun.$` is the kind of
   silent bug types exist to prevent.
+
+### 5.12 What the git store watches, and two states its types cannot spell
+
+**Watching.** There is no fs-watching of `.git` (ADR-0001's git-service note, and lazygit's
+own conclusion). The store refreshes after every write laziergit issues, and otherwise on a
+`git.refreshIntervalMs` tick (default 2s, see [config.md](./config.md)) that reads four cheap
+things and re-reads the repository only if one of them differs. Each covers a class of change
+the others are blind to: `status --porcelain=v2` for working-tree edits, which move nothing
+under `.git` at all; `show-ref --head` for commits, checkouts, and fetches; `stash list`,
+because dropping any entry but the top one rewrites only the stash *reflog* and leaves
+`refs/stash` byte-identical; and `config --get-regexp '^(remote|branch)\.'` for what is
+configured rather than committed — a remote added, or an upstream set on a branch that is not
+HEAD. None of them touches an object, and all of them suppress optional locks, so the poll can
+neither contend with the user's own `git` nor dirty the index and thereby trigger itself. The fingerprint is recorded by the refresh that
+publishes, so the tick after any write is quiet. A full refresh also runs whenever the
+terminal regains focus — switching back from the terminal you just ran `git` in is both the
+likeliest moment for the screen to be stale and the least tolerable moment to wait out an
+interval.
+
+**Two gaps, named rather than hidden.** Both are cases where git has a state the v1 model
+cannot represent, and both are candidates for the M4 pass where the Bundled Extensions put
+real pressure on these types:
+
+- **Unborn HEAD.** A repository with no commits has no oid, and `Head.oid: string` has no
+  room for that; it is `""`, which is unambiguous (no object is named `""`) but implicit.
+  `branches`, `commits`, and `tags` are all empty there too. A `Head` discriminated union
+  (`unborn` | `detached` | `onBranch`) would make the illegal states unrepresentable.
+- **Gone upstream.** When a branch's upstream has been deleted on the remote, git reports
+  `gone` rather than a divergence, and `UpstreamInfo` collapses it to `{ ahead: 0, behind: 0 }`
+  — the same shape as a perfectly in-sync branch, which is the one thing a branches Pane
+  most wants to distinguish. One added field (`gone: boolean`, or a variant) fixes it, and it
+  is cheaper now than after Extensions depend on the current shape.

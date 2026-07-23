@@ -73,6 +73,37 @@ export interface HarnessOptions {
   readonly width?: number
   readonly height?: number
   readonly onQuit?: () => void
+  /**
+   * Initialise the harness directory as a git repository with one commit. Off by default:
+   * a harness without one exercises the degraded path, where the store serves the empty
+   * snapshot and nothing polls.
+   */
+  readonly git?: boolean
+}
+
+/**
+ * Pinned identity and no user config, so a developer's own `~/.gitconfig` can never change
+ * what a test observes. `-q` and the explicit default branch keep `git init` off stderr,
+ * which the reload fixture asserts is empty.
+ */
+async function initRepository(directory: string): Promise<void> {
+  const child = Bun.spawn(["git", "-c", "init.defaultBranch=main", "init", "--quiet"], {
+    cwd: directory,
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_AUTHOR_NAME: "Test",
+      GIT_AUTHOR_EMAIL: "test@example.com",
+      GIT_COMMITTER_NAME: "Test",
+      GIT_COMMITTER_EMAIL: "test@example.com",
+    },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const exitCode = await child.exited
+  if (exitCode !== 0) throw new Error(`git init exited ${exitCode}`)
 }
 
 const harnesses: Harness[] = []
@@ -121,6 +152,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const global = join(directory, "global")
   const repo = join(directory, "repo")
   await Promise.all([mkdir(global), mkdir(repo)])
+  if (options.git === true) await initRepository(directory)
 
   let setup!: Awaited<ReturnType<typeof createTestRenderer>>
   await act(async () => {

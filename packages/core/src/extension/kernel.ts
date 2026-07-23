@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { pathToFileURL } from "node:url"
+import { CliRenderEvents } from "@opentui/core"
 import type { CliRenderer, KeyEvent, PluginContext, Renderable, SlotRegistry } from "@opentui/core"
 import type { Keymap } from "@opentui/keymap"
 import { registerLeader } from "@opentui/keymap/addons"
@@ -8,7 +9,7 @@ import { createOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { createReactSlotRegistry } from "@opentui/react"
 import { assertExtensionDefinition } from "@laziergit/runtime-bridge"
 import type { ReactNode } from "react"
-import type { CommandSpec, Disposable, EventMap, Extension, Theme } from "laziergit"
+import type { CommandSpec, Disposable, EventMap, Extension, GitState, Theme } from "laziergit"
 
 import {
   defaultConfigFiles,
@@ -44,7 +45,9 @@ import {
   type ExtensionSourceScope,
 } from "./discovery"
 import { EventHost } from "./event-host"
-import { GitPlaceholder } from "./git-placeholder"
+import { GitService } from "../git/service"
+import { gitStateSlices } from "../git/state"
+import type { GitPublication } from "../git/store"
 import { ImportCopyCache, type ImportCopyLease } from "./import-copy-cache"
 import { createNotifier } from "./notifier"
 import { PaneHost } from "./pane-host"
@@ -88,7 +91,11 @@ export interface ExtensionKernelOptions {
 }
 
 interface InternalRuntime {
-  readonly git: GitPlaceholder
+  /** Structurally the shape `useGit` consumes; kept in lockstep with packages/laziergit/src/react.ts. */
+  readonly git: {
+    getSnapshot(this: void): GitState
+    subscribe(this: void, listener: () => void): () => void
+  }
   readonly events: {
     subscribe<K extends keyof EventMap & string>(
       extension: string,
@@ -160,7 +167,7 @@ export class ExtensionKernel {
   readonly commands: CommandHost
   readonly keymap: Keymap<Renderable, KeyEvent>
   readonly keybindings: KeybindingHost<Renderable, KeyEvent>
-  readonly git = new GitPlaceholder()
+  readonly git: GitService
   readonly runtime: InternalRuntime
   readonly #repoRoot: string
   readonly #directories: ExtensionDirectories
@@ -216,6 +223,21 @@ export class ExtensionKernel {
       { focus: (paneId) => this.layout.focus(paneId), isLive: (paneId) => this.panes.isLive(paneId) },
       this.#notifier,
     )
+    // Constructed here rather than as a field initializer: field initializers run before
+    // the constructor body, so `options.repoRoot` is not yet on `this`. Construction does
+    // no I/O — the repository is opened by `prime()`, inside the reload transaction.
+    this.git = new GitService({
+      repoRoot: this.#repoRoot,
+      config: emptyConfig.core.git,
+      report: (message, error) => {
+        const normalized = error === undefined ? undefined : normalizeError(error)
+        this.#diagnose({
+          phase: "git",
+          message: normalized ? `${message}: ${normalized.message}` : message,
+          error: normalized,
+        })
+      },
+    })
     this.keymap = createOpenTuiKeymap(options.renderer)
     this.#disposeKeymap = installKeymap(this.keymap, { diagnostics: this.diagnostics })
     this.keybindings = new KeybindingHost(this.keymap, this.diagnostics, (id) => this.#runCommand(id))
@@ -241,6 +263,7 @@ export class ExtensionKernel {
     }
 
     this.panes.subscribe(() => this.layout.setPanes(this.panes.getSnapshot()))
+    this.git.store.onPublish((publication) => this.#emitGitEvents(publication))
     this.layout.setFocusListener((paneId, previous) => {
       this.keybindings.setFocusedPane(paneId)
       if (paneId !== null) this.events.emit("app.pane.focused", { paneId, previous })
@@ -272,7 +295,17 @@ export class ExtensionKernel {
     if (this.#stopped) return
 
     await this.reload()
-    if (this.#watchEnabled && !this.#stopped) this.#startWatcher()
+    if (this.#stopped) return
+    // Armed once, here — never in `#reloadNow`, which would rearm on every hot reload.
+    this.git.start()
+    // Coming back from the terminal you just ran `git` in is the moment the screen is
+    // most likely to be stale, and the least tolerable moment to wait out a poll interval.
+    this.#renderer.on(CliRenderEvents.FOCUS, this.#refreshOnFocus)
+    if (this.#watchEnabled) this.#startWatcher()
+  }
+
+  readonly #refreshOnFocus = (): void => {
+    void this.git.refresh()
   }
 
   reload(): Promise<void> {
@@ -296,6 +329,8 @@ export class ExtensionKernel {
       clearInterval(this.#watchTimer)
       this.#watchTimer = undefined
     }
+    // Synchronous, alongside the other timers: no poll may be scheduled while shutdown drains.
+    this.git.stop()
 
     this.#stopPromise = this.#stopNow()
     return this.#stopPromise
@@ -321,6 +356,40 @@ export class ExtensionKernel {
 
   openCheatSheet(): Promise<void> {
     return this.popups.cheatSheet(coreOwner, "Keybindings", this.#cheatSheetSections()).promise
+  }
+
+  /** Core owns the `git.*` and `app.*` namespaces; both names are reserved, so no Extension can spoof them. */
+  #emitCoreEvent<K extends keyof EventMap>(event: K, payload: EventMap[K]): void {
+    this.events.emit(event, payload)
+  }
+
+  /**
+   * One event per changed {@link GitState} slice, then `git.refreshed` for the cycle
+   * itself. The slice list is derived from the store's own shape, so the event vocabulary
+   * cannot drift from it, and `Object.is` is enough to detect a change because the store
+   * keeps unchanged slices referentially stable.
+   */
+  #emitGitEvents({ previous, current }: GitPublication): void {
+    // The mapped type is what makes the vocabulary structural rather than documented: a
+    // new GitState slice is a compile error here until it has an event.
+    const emitters: { readonly [K in keyof GitState]: () => void } = {
+      head: () => this.#emitCoreEvent("git.head.changed", { current: current.head, previous: previous.head }),
+      branches: () =>
+        this.#emitCoreEvent("git.branches.changed", { current: current.branches, previous: previous.branches }),
+      remotes: () =>
+        this.#emitCoreEvent("git.remotes.changed", { current: current.remotes, previous: previous.remotes }),
+      tags: () => this.#emitCoreEvent("git.tags.changed", { current: current.tags, previous: previous.tags }),
+      status: () => this.#emitCoreEvent("git.status.changed", { current: current.status, previous: previous.status }),
+      commits: () =>
+        this.#emitCoreEvent("git.commits.changed", { current: current.commits, previous: previous.commits }),
+      stash: () => this.#emitCoreEvent("git.stash.changed", { current: current.stash, previous: previous.stash }),
+    }
+
+    for (const slice of gitStateSlices) {
+      if (Object.is(current[slice], previous[slice])) continue
+      emitters[slice]()
+    }
+    this.#emitCoreEvent("git.refreshed", { state: current })
   }
 
   #registerCoreCommands(): void {
@@ -399,6 +468,8 @@ export class ExtensionKernel {
     this.layout.setConfig(core.layout)
     this.commands.setKeybindings(core.keybindings)
     this.statusline.setConfig(core.statusline)
+    // Before the leader early-return below, which would otherwise skip it.
+    this.git.setConfig(core.git)
 
     if (this.#leader === core.leader) return
     this.#leader = core.leader
@@ -458,6 +529,11 @@ export class ExtensionKernel {
 
       this.#publish(this.#snapshot.map((status) => ({ ...status, state: "loading" as const, message: undefined })))
       await this.#loadConfig()
+      // `ctx.git.state` is documented as always present, so the store is loaded before any
+      // Extension activates. Idempotent, so a hot reload does not republish and make every
+      // reactivated Extension see a change that did not happen.
+      await this.git.prime()
+      if (this.#stopped) return
       // Fingerprinted before reading a single Extension: an edit that lands mid-reload
       // then differs from what was loaded, and the next poll picks it up.
       this.#activatedTree = await this.#treeFingerprint()
@@ -641,7 +717,6 @@ export class ExtensionKernel {
     this.#activationOrder = []
 
     const hosts: ContextHosts = {
-      repoRoot: this.#repoRoot,
       diagnostics: this.diagnostics,
       events: this.events,
       commands: this.commands,
@@ -848,6 +923,11 @@ export class ExtensionKernel {
     await this.#attemptShutdown("Extension deactivation", async () => {
       await this.#deactivateAll("quit")
     })
+    // After deactivation, because an Extension's write outlives the promise it was awaited
+    // on; before event delivery, because a settling refresh still emits into the EventHost.
+    await this.#attemptShutdown("git", async () => {
+      await this.git.drain()
+    })
     await this.#attemptShutdown("event delivery", async () => {
       await this.events.drain()
     })
@@ -866,6 +946,9 @@ export class ExtensionKernel {
     })
     await this.#attemptShutdown("notification cleanup", () => {
       this.notifications.stop()
+    })
+    await this.#attemptShutdown("focus listener cleanup", () => {
+      this.#renderer.off(CliRenderEvents.FOCUS, this.#refreshOnFocus)
     })
     await this.#attemptShutdown("keybinding cleanup", () => {
       this.keybindings.stop()

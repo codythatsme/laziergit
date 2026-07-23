@@ -1,9 +1,11 @@
+import { Effect, Queue, Stream } from "effect"
 import type {
   CommandRegistry,
   ConfigValue,
   Disposable,
   EffectEscape,
   EventBus,
+  EventMap,
   ExecOptions,
   ExecOutput,
   ExtensionContext,
@@ -15,6 +17,7 @@ import type {
   Statusline,
 } from "laziergit"
 
+import type { GitService } from "../git/service"
 import type { LayoutHost } from "../ui/layout"
 import type { MenuHost } from "../ui/menu-host"
 import type { PopupHandle, PopupHost } from "../ui/popup-host"
@@ -23,7 +26,6 @@ import type { ActivationScope } from "./activation-scope"
 import type { CommandHost } from "./command-host"
 import type { Diagnostics } from "./diagnostics"
 import type { EventHost } from "./event-host"
-import { GitPlaceholder, gitUnavailable } from "./git-placeholder"
 import { assertScopedId } from "./id"
 import type { PaneHost } from "./pane-host"
 import { bindNotifier, type Notifier } from "./notifier"
@@ -31,7 +33,6 @@ import { bindNotifier, type Notifier } from "./notifier"
 export type ExtensionApiLookup = { readonly state: "live"; readonly api: unknown } | { readonly state: "missing" }
 
 export interface ContextHosts {
-  readonly repoRoot: string
   readonly diagnostics: Diagnostics
   readonly events: EventHost
   readonly commands: CommandHost
@@ -40,7 +41,7 @@ export interface ContextHosts {
   readonly menus: MenuHost
   readonly popups: PopupHost
   readonly statusline: StatuslineHost
-  readonly git: GitPlaceholder
+  readonly git: GitService
   readonly notifier: Notifier
   getExtensionApi(name: string): ExtensionApiLookup
 }
@@ -66,15 +67,41 @@ function supervisePopup<T>(scope: ActivationScope, handle: PopupHandle<T>): Prom
   return scope.supervise(handle.promise, () => handle.dismiss())
 }
 
-function unavailableEffectEscape(): EffectEscape {
-  return new Proxy(
-    {},
-    {
-      get() {
-        throw new Error("ctx.effect services arrive with the Effect service graph in M3")
-      },
+/**
+ * The one Effect door. It hands out the core's *own* git effects rather than re-wrapping
+ * the Promise surface, so a power Extension and an ordinary one are driving exactly the
+ * same code — but only bound services and `runPromise` cross the boundary, never a
+ * service key or a runtime, so core's internals stay unreachable (ADR-0002).
+ */
+function createEffectEscape(extension: string, scope: ActivationScope, hosts: ContextHosts): EffectEscape {
+  return {
+    git: {
+      raw: (args, options) => hosts.git.rawEffect(args, options),
+      state: hosts.git.stateEffect,
+      changes: hosts.git.changes,
     },
-  ) as EffectEscape
+    events: {
+      // Checked inside the Effect, not when it is described: the Effect door must be the
+      // same gate as `ctx.events.emit`, or it would be the way around it.
+      publish: (event, ...payload) =>
+        Effect.sync(() => {
+          assertScopedId(extension, event)
+          hosts.events.emit(event, payload[0])
+        }),
+      stream: <K extends keyof EventMap & string>(event: K) =>
+        Stream.callback<EventMap[K]>((queue) =>
+          Effect.acquireRelease(
+            Effect.sync(() =>
+              hosts.events.subscribe(extension, event, (payload) => {
+                Queue.offerUnsafe(queue, payload)
+              }),
+            ),
+            (subscription) => Effect.sync(() => subscription.dispose()),
+          ),
+        ),
+    },
+    runPromise: (effect) => scope.runEffect(effect),
+  }
 }
 
 function isObjectLike(value: unknown): value is object {
@@ -262,32 +289,41 @@ export function createExtensionContext(
     },
   })
 
+  /**
+   * Git work is supervised but never cancelled. `scope.supervise` is called with the call
+   * already made, so a write started while the Extension was live always runs to
+   * completion — a hot reload landing mid-`git commit` parks the promise it was awaited
+   * on, it does not leave a half-written repository (docs/extension-api.md §5.3). This is
+   * exactly why `ctx.exec` passes a cancel callback here and `ctx.git` does not.
+   */
+  const supervised = <T>(pending: Promise<T>): Promise<T> => scope.supervise(pending)
+
   const stash = scope.guard({
-    save: gitUnavailable,
-    apply: gitUnavailable,
-    pop: gitUnavailable,
-    drop: gitUnavailable,
+    save: (options?: Parameters<Git["stash"]["save"]>[0]) => supervised(hosts.git.stash.save(options)),
+    apply: (index?: number) => supervised(hosts.git.stash.apply(index)),
+    pop: (index?: number) => supervised(hosts.git.stash.pop(index)),
+    drop: (index: number) => supervised(hosts.git.stash.drop(index)),
   })
   const gitRaw: Git = {
-    root: hosts.repoRoot,
+    root: hosts.git.root,
     get state() {
       return hosts.git.getSnapshot()
     },
     subscribe(selector, onChange) {
       return attachDisposable(scope, hosts.git.subscribeSelector(selector, onChange))
     },
-    refresh: gitUnavailable,
-    raw: gitUnavailable,
-    checkout: gitUnavailable,
-    createBranch: gitUnavailable,
-    deleteBranch: gitUnavailable,
-    stage: gitUnavailable,
-    unstage: gitUnavailable,
-    discard: gitUnavailable,
-    commit: gitUnavailable,
-    push: gitUnavailable,
-    pull: gitUnavailable,
-    fetch: gitUnavailable,
+    refresh: () => supervised(hosts.git.refresh()),
+    raw: (args, options) => supervised(hosts.git.raw(args, options)),
+    checkout: (ref) => supervised(hosts.git.checkout(ref)),
+    createBranch: (name, options) => supervised(hosts.git.createBranch(name, options)),
+    deleteBranch: (name, options) => supervised(hosts.git.deleteBranch(name, options)),
+    stage: (paths) => supervised(hosts.git.stage(paths)),
+    unstage: (paths) => supervised(hosts.git.unstage(paths)),
+    discard: (paths) => supervised(hosts.git.discard(paths)),
+    commit: (message, options) => supervised(hosts.git.commit(message, options)),
+    push: (options) => supervised(hosts.git.push(options)),
+    pull: (options) => supervised(hosts.git.pull(options)),
+    fetch: (options) => supervised(hosts.git.fetch(options)),
     stash,
   }
   const git = scope.guard(gitRaw)
@@ -308,10 +344,10 @@ export function createExtensionContext(
         return guardConsumedApi(lookup.api, scope)
       },
     } as object) as never,
-    effect: scope.guard(unavailableEffectEscape()),
+    effect: scope.guard(createEffectEscape(extension, scope, hosts)),
     signal: scope.signal,
     exec(command, args = [], options = {}) {
-      return exec(scope, hosts.repoRoot, command, args, options)
+      return exec(scope, hosts.git.root, command, args, options)
     },
     open(url) {
       const [command, args] =
@@ -320,7 +356,7 @@ export function createExtensionContext(
           : process.platform === "win32"
             ? ["cmd", ["/c", "start", "", url]]
             : ["xdg-open", [url]]
-      return exec(scope, hosts.repoRoot, command, args, {}).then((output) => {
+      return exec(scope, hosts.git.root, command, args, {}).then((output) => {
         if (output.exitCode !== 0) throw new Error(output.stderr.trim() || `Unable to open ${url}`)
       })
     },

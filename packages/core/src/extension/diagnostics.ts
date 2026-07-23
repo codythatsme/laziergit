@@ -9,6 +9,7 @@ export type DiagnosticPhase =
   | "keymap"
   | "menu"
   | "config"
+  | "git"
   | "render"
   | "watch"
   | "reload"

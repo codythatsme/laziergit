@@ -1,7 +1,7 @@
 import type { ConfigOption, ConfigSchema } from "laziergit"
 
 import { defaultTheme } from "../extension/theme"
-import { defaultLeader } from "./config"
+import { defaultGitConfig, defaultLeader, gitConfigLimits } from "./config"
 
 /** What an Extension contributes to the published schema: its name and its declared options. */
 export interface SchemaContribution {
@@ -136,6 +136,26 @@ export function buildConfigSchema(contributions: readonly SchemaContribution[]):
         additionalProperties: false,
       },
       leader: { type: "string", default: defaultLeader, description: "The key <leader> expands to" },
+      git: {
+        type: "object",
+        properties: {
+          refreshIntervalMs: {
+            type: "integer",
+            minimum: gitConfigLimits.refreshIntervalMs.min,
+            maximum: gitConfigLimits.refreshIntervalMs.max,
+            default: defaultGitConfig.refreshIntervalMs,
+            description: "How often to look for changes made outside laziergit",
+          },
+          commitLimit: {
+            type: "integer",
+            minimum: gitConfigLimits.commitLimit.min,
+            maximum: gitConfigLimits.commitLimit.max,
+            default: defaultGitConfig.commitLimit,
+            description: "How much of HEAD's history the git store holds",
+          },
+        },
+        additionalProperties: false,
+      },
       extensions: {
         type: "object",
         properties: extensions,
