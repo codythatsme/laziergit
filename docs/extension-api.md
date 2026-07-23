@@ -653,13 +653,23 @@ tagged with the extension name, and routed to the log file / debug pane.
     /** Delete a local branch (`-d`, or `-D` with `force`). */
     deleteBranch(name: string, opts?: { force?: boolean }): Promise<void>;
 
-    /** Stage the given paths, or everything (`"all"`). */
+    /**
+     * Stage the given paths, or everything (`"all"`). Staging is whole-file in v1; for
+     * hunks and lines, build a patch and pipe it (§5.11):
+     * `git.raw(["apply", "--cached"], { stdin: patch })`.
+     *
+     * An empty array stages nothing — the natural reading, and the one that makes an
+     * empty multi-select harmless. Same for {@link unstage} and {@link discard}.
+     */
     stage(paths: readonly string[] | "all"): Promise<void>;
 
-    /** Unstage the given paths, or everything (`"all"`). */
+    /** Unstage the given paths, or everything (`"all"`). Leaves the working tree untouched. */
     unstage(paths: readonly string[] | "all"): Promise<void>;
 
-    /** Discard working-tree changes to the given paths (checkout/clean). Destructive. */
+    /**
+     * Discard working-tree changes to the given paths. Destructive: tracked paths are
+     * restored from the index and untracked ones are deleted.
+     */
     discard(paths: readonly string[]): Promise<void>;
 
     /** Create a commit from the index. */
@@ -979,6 +989,8 @@ autocompletes every prop; this table only orients. The ones the examples lean on
 | `<select>` | focusable list with built-in cursor | `options`, selection styling — or roll your own rows with `useCommand` j/k |
 | `<diff>` | syntax-highlighted diff | `diff` (unified text), `view` (`"unified"` / `"split"`), `filetype` (per-language tree-sitter highlighting) |
 | `<code>` | highlighted source block | `content`, `filetype` |
+| `<input>` | single-line text entry | for one field inside your own Pane; the modal version is {@link PopupToolkit.prompt} |
+| `<textarea>` | multi-line text entry | commit messages and anything else `prompt` is deliberately too small for (§5.11) |
 
 Anything past this table — truncation, alignment, borders — is a prop on these same
 intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
@@ -1988,6 +2000,23 @@ Full trust, no sandbox — containment is structural, per surface:
   smallest surface wins over one hypothetical extension; revisit with a real queueing design.
 - **`ctx.log`** — `console.*` is captured by the host, tagged with the extension name, and
   routed to the log file / debug pane.
+- **A patch-level staging helper** (`stageHunk` / `stagePatch`) — v1 staging is file-level, so
+  `stage`/`unstage`/`discard` take paths and nothing else. Hunk and line staging are post-v1,
+  and `raw` already carries them: `RawOptions.stdin` exists precisely so
+  `git.raw(["apply", "--cached"], { stdin: patch })` works today. A helper can be added once a
+  real patch-building UI has shown what shape it wants; guessing now would ship a signature
+  the first honest consumer has to fight.
+- **Credential prompting** — every git invocation runs with `GIT_TERMINAL_PROMPT=0`, so a
+  remote that wants a username or password fails immediately with git's own message instead of
+  blocking forever on a prompt nobody can answer: laziergit owns the terminal, and git's stdio
+  is piped. SSH keys via an agent, and any configured credential helper, work untouched.
+  Interactive authentication needs a pty and prompt detection (lazygit's approach) and is
+  post-v1; until then `push`/`pull`/`fetch` surface the failure as an ordinary {@link GitError}.
+- **A multi-line prompt** — {@link PopupToolkit.prompt} is one line by design. A commit message
+  is not a prompt: it is an editing surface with its own layout, validation, and keys, so the
+  bundled `commit-flow` renders one from OpenTUI's `<textarea>` in the Pane it already owns.
+  Any extension can do the same; widening the popup toolkit would make every caller pay for
+  the one case that needs it.
 - **Soft dependencies** (`extensions.find`) — an optional lookup has no ordering guarantee,
   reintroducing exactly the staleness `needs` + ripple restart exist to prevent; declare the need.
 - **Semver ranges on `needs`** — extensions are source-compiled TS checked against the host's
