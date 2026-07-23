@@ -537,30 +537,52 @@ describe("Extension discovery and import boundary", () => {
     }
   })
 
-  it("keeps the narrowed Effect placeholder unavailable until M3", async () => {
+  it("runs the Effect escape hatch against the live git service", async () => {
+    const harness = await createHarness()
+    await writeFile(
+      join(harness.repo, "effect-user.ts"),
+      `
+        import { defineExtension } from "laziergit"
+        export default defineExtension({
+          name: "effect-user",
+          async activate(ctx) {
+            // The Effect face of the store, run through the only door core opens.
+            const state = await ctx.effect.runPromise(ctx.effect.git.state)
+            return { branch: state.head.branch, clean: state.status.isClean }
+          },
+        })
+      `,
+    )
+
+    await harness.kernel.start()
+    expect(harness.kernel.getSnapshot()).toEqual([expect.objectContaining({ name: "effect-user", state: "active" })])
+    expect(harness.kernel.getExtensionApi("effect-user")).toEqual({
+      state: "live",
+      api: { branch: null, clean: true },
+    })
+  })
+
+  it("refuses to publish a core event through the Effect escape hatch", async () => {
     const harness = await createHarness()
     const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
     try {
       await writeFile(
-        join(harness.repo, "effect-user.ts"),
+        join(harness.repo, "spoofer.ts"),
         `
           import { defineExtension } from "laziergit"
           export default defineExtension({
-            name: "effect-user",
-            activate(ctx) { void ctx.effect.runPromise },
+            name: "spoofer",
+            async activate(ctx) {
+              // The Effect door must be the same gate as ctx.events.emit, not a way around it.
+              await ctx.effect.runPromise(ctx.effect.events.publish("git.head.changed"))
+            },
           })
         `,
       )
 
       await harness.kernel.start()
-      expect(harness.kernel.getSnapshot()).toEqual([
-        expect.objectContaining({
-          name: "effect-user",
-          state: "failed",
-          message: "ctx.effect services arrive with the Effect service graph in M3",
-        }),
-      ])
-      expect(await cacheNames(harness)).toEqual([])
+      expect(harness.kernel.getSnapshot()).toEqual([expect.objectContaining({ name: "spoofer", state: "failed" })])
+      expect(harness.kernel.getSnapshot()[0]?.message).toContain("spoofer")
     } finally {
       errorSpy.mockRestore()
     }

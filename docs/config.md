@@ -28,8 +28,8 @@ core sections plus one section per installed Extension. Point your editor at it:
 
 ## What a change costs
 
-Editing `layout`, `keybindings`, `theme`, `statusline`, or `leader` rearranges the running
-screen — no Extension is reloaded and no Pane loses its cursor. Editing anything under
+Editing `layout`, `keybindings`, `theme`, `statusline`, `leader`, or `git` rearranges the
+running screen — no Extension is reloaded and no Pane loses its cursor. Editing anything under
 `extensions` reloads every Extension, because `ctx.config` is a constant snapshot for the
 lifetime of an activation (see [extension-api.md §5.6](./extension-api.md)) and reload is
 how a new snapshot is delivered. Reformatting the file — reordering keys, changing comments
@@ -110,6 +110,34 @@ The key that `<leader>` expands to in any key spec. Defaults to `space`.
 Any subset of the tokens on `Theme` ([§1.8](./extension-api.md)); unlisted tokens keep
 their default. Extensions consume tokens through `useTheme()` and never pick raw colors,
 so one override retints every Pane at once.
+
+## `git` — how the repository is watched
+
+```jsonc
+{
+  "git": {
+    "refreshIntervalMs": 2000,
+    "commitLimit": 200,
+  },
+}
+```
+
+| Setting | Default | |
+|---|---|---|
+| `refreshIntervalMs` | `2000` | How often laziergit looks for changes made outside it. 250–60000. |
+| `commitLimit` | `200` | How much of HEAD's history the git store holds. 1–5000. |
+
+laziergit does not watch `.git` for file events. Every `refreshIntervalMs` it reads the
+working-tree status and the list of every ref, and re-reads the repository only when one of
+them differs — so a `git commit`, `git checkout`, or a file edited in another terminal all
+show up within one interval. Both reads take no locks, so the poll never contends with
+your own `git` and never triggers itself. Raising the interval on a very large repository
+trades promptness for fewer reads; the screen still refreshes immediately after anything
+laziergit itself does.
+
+`commitLimit` bounds only what the store holds. Extensions page deeper on demand with
+`ctx.git.raw(["log", ...])`. Changing it re-reads history; changing the interval only
+reschedules the next check.
 
 ## `statusline` — segment order
 
