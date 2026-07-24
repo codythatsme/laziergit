@@ -137,7 +137,7 @@ it("rejects an inherited property name as a theme token", () => {
   const loaded = loadConfig(documents(`{ "theme": { "toString": "#ff0000" } }`, null))
 
   expect(loaded.problems).toEqual([{ path: "theme.toString", message: "Unknown theme token" }])
-  expect(`${loaded.core.theme}`).toBe("[object Object]")
+  expect(Object.prototype.toString.call(loaded.core.theme)).toBe("[object Object]")
 })
 
 it("validates an Extension section against its own schema, falling back per option", () => {
