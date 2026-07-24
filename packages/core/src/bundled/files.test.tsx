@@ -131,21 +131,6 @@ async function createFilesHarness(layout: string = columnsLayout): Promise<Harne
   return harness
 }
 
-/**
- * The same Pane with no repository under it at all — `createHarness` initialises one only
- * when asked, and the store then serves the degraded snapshot laziergit publishes outside a
- * repository (an unborn HEAD whose branch is `""`).
- */
-async function createRepositorylessHarness(): Promise<Harness> {
-  const harness = await createHarness()
-  await Promise.all([
-    symlink(join(bundledExtensionDirectory, "files"), join(harness.bundled, "files")),
-    writeFile(join(harness.repo, "diff.tsx"), diffStub),
-    writeFile(harness.configFiles.repo, configOf(columnsLayout)),
-  ])
-  return harness
-}
-
 /** One commit, so the fixture has a HEAD to diff a modification against. */
 async function commitTracked(harness: Harness, ...paths: readonly string[]): Promise<void> {
   await git(harness, "add", ...paths)
@@ -200,88 +185,6 @@ async function focusFiles(harness: Harness): Promise<void> {
   await press(harness, "2")
 }
 
-describe("the files pane", () => {
-  it("draws the four groups in order, with kind glyphs and rename arrows", async () => {
-    const harness = await createFilesHarness()
-    await write(harness, "tracked.txt", "one\n")
-    await write(harness, "moved.txt", "move me\n")
-    await commitTracked(harness, "tracked.txt", "moved.txt")
-
-    await write(harness, "added.txt", "brand new\n")
-    await git(harness, "add", "added.txt")
-    await git(harness, "mv", "moved.txt", "renamed.txt")
-    await write(harness, "tracked.txt", "two\n")
-    await write(harness, "loose.txt", "untracked\n")
-
-    await renderApp(harness)
-    const rendered = frame(harness)
-
-    expect(rendered).toContain("A added.txt")
-    expect(rendered).toContain("R moved.txt → renamed.txt")
-    expect(rendered).toContain("M tracked.txt")
-    expect(rendered).toContain("? loose.txt")
-    expect(rendered.indexOf("Staged")).toBeLessThan(rendered.indexOf("Unstaged"))
-    expect(rendered.indexOf("Unstaged")).toBeLessThan(rendered.indexOf("Untracked"))
-    // A group with no files draws no header: an empty "Conflicted" would claim a conflict.
-    expect(rendered).not.toContain("Conflicted")
-  })
-
-  it("says the working tree is clean rather than drawing an empty box", async () => {
-    const harness = await createFilesHarness()
-
-    await renderApp(harness)
-
-    expect(frame(harness)).toContain("working tree clean")
-  })
-
-  it("says there is no repository rather than reporting a clean working tree", async () => {
-    const harness = await createRepositorylessHarness()
-
-    await renderApp(harness)
-
-    // "working tree clean" outside a repository claims a healthy, fully committed one.
-    expect(frame(harness)).toContain("no repository")
-    expect(frame(harness)).not.toContain("working tree clean")
-  })
-
-  it("scrolls the selected row into view instead of drawing past the bottom of the pane", async () => {
-    const harness = await createFilesHarness()
-    const stagedPaths = Array.from({ length: 30 }, (_, index) => `s${String(index).padStart(2, "0")}.txt`)
-    const untrackedPaths = Array.from({ length: 30 }, (_, index) => `u${String(index).padStart(2, "0")}.txt`)
-    await Promise.all([...stagedPaths, ...untrackedPaths].map((path) => write(harness, path, "x\n")))
-    await git(harness, "add", ...stagedPaths)
-
-    await renderApp(harness)
-    await focusFiles(harness)
-    expect(frame(harness)).not.toContain("u29.txt")
-
-    // 60 rows and two group headers in a Pane some 26 rows tall: the last row is on screen
-    // only if the box scrolls, and only if the headers between the cursor and the top are
-    // counted — the cursor walks files, the screen draws headers too.
-    await press(harness, "G")
-
-    expect(frame(harness)).toContain("❯ ? u29.txt")
-    expect(frame(harness)).not.toContain("s00.txt")
-  })
-
-  it("walks only file rows with j, never a group header", async () => {
-    const harness = await createFilesHarness()
-    await write(harness, "tracked.txt", "one\n")
-    await commitTracked(harness, "tracked.txt")
-    await write(harness, "tracked.txt", "two\n")
-    await write(harness, "loose.txt", "untracked\n")
-
-    await renderApp(harness)
-    await focusFiles(harness)
-    expect(frame(harness)).toContain("❯ M tracked.txt")
-
-    // One press crosses the "Untracked" header, which is not a stop on the way.
-    await press(harness, "j")
-    expect(frame(harness)).toContain("❯ ? loose.txt")
-    expect(frame(harness)).not.toContain("❯ M tracked.txt")
-  })
-})
-
 describe("staging from the files pane", () => {
   it("stages the selected file with space, and unstages it with space again", async () => {
     const harness = await createFilesHarness()
@@ -319,27 +222,6 @@ describe("staging from the files pane", () => {
 
     expect(await staged(harness)).toEqual(["loose.txt", "tracked.txt"])
     expect(frame(harness)).not.toContain("Untracked")
-  })
-
-  it("binds its keys to its own pane, so they go inert the moment focus leaves it", async () => {
-    const harness = await createFilesHarness()
-    await write(harness, "tracked.txt", "one\n")
-    await commitTracked(harness, "tracked.txt")
-    await write(harness, "tracked.txt", "two\n")
-
-    await renderApp(harness)
-
-    // Focus starts on the Layout's first cell, which is this Pane — so tab it over to the
-    // diff Pane, where `space` belongs to nobody live and must stage nothing.
-    await press(harness, "tab")
-    await press(harness, " ")
-    await settle(harness)
-    expect(await staged(harness)).toEqual([])
-
-    await focusFiles(harness)
-    await press(harness, " ")
-    await waitFor(harness, async () => (await staged(harness)).length === 1)
-    expect(await staged(harness)).toEqual(["tracked.txt"])
   })
 })
 

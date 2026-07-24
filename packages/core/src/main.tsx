@@ -1,6 +1,7 @@
 import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import { ensureRuntimePluginSupport } from "@opentui/react/runtime-plugin-support/configure"
+import { provideTerminalControl } from "@kitlangton/terminal-control-opentui"
 import { resolve } from "node:path"
 import * as laziergitRuntime from "laziergit"
 
@@ -26,6 +27,7 @@ export async function main() {
   const repoRoot = repository?.root ?? process.cwd()
 
   let renderer: Awaited<ReturnType<typeof createCliRenderer>> | undefined
+  let terminalControl: ReturnType<typeof provideTerminalControl> | undefined
   let kernel: ExtensionKernel | undefined
   let rendererDestroyed = false
   let resolveRendererDestroyed: () => void = () => undefined
@@ -39,11 +41,15 @@ export async function main() {
       // laziergit owns focus policy: a click must not move focus out from under a popup.
       autoFocus: false,
       onDestroy() {
+        terminalControl?.close()
         rendererDestroyed = true
         resolveRendererDestroyed()
       },
     })
     const activeRenderer = renderer
+    terminalControl = provideTerminalControl(activeRenderer, {
+      application: { name: "laziergit", version: "0.0.0" },
+    })
     kernel = new ExtensionKernel({
       repoRoot,
       renderer: activeRenderer,

@@ -134,41 +134,6 @@ function waitForFrame(harness: Harness, fragment: string): Promise<void> {
   return waitFor(harness, () => frame(harness).includes(fragment), `${JSON.stringify(fragment)} on screen`)
 }
 
-describe("the sync status line segment", () => {
-  it("shows the divergence from the upstream", async () => {
-    const harness = await startRepo()
-    await addOrigin(harness)
-    await commitIn(harness.directory, "ahead.txt", "one\n")
-
-    await renderApp(harness)
-
-    expect(frame(harness)).toContain("↑1 ↓0")
-  })
-
-  it("renders nothing at all when the branch has no upstream", async () => {
-    const harness = await startRepo()
-
-    await renderApp(harness)
-
-    // Not "↑0 ↓0": with no upstream there is nothing to be ahead or behind of, and a
-    // segment with nothing to say renders null (§1.10).
-    expect(frame(harness)).not.toContain("↑")
-  })
-
-  it("says so when the upstream is gone, rather than showing it as in sync", async () => {
-    const harness = await startRepo()
-    await addOrigin(harness)
-    await git(harness.directory, "checkout", "--quiet", "-b", "feature")
-    await git(harness.directory, "push", "--quiet", "--set-upstream", "origin", "feature")
-    await git(harness.directory, "push", "--quiet", "origin", "--delete", "feature")
-
-    await renderApp(harness)
-
-    expect(frame(harness)).toContain("origin/feature gone")
-    expect(frame(harness)).not.toContain("↑0 ↓0")
-  })
-})
-
 describe("sync.push", () => {
   it("pushes the current branch to its upstream", async () => {
     const harness = await startRepo()
@@ -403,57 +368,6 @@ describe("sync.pull and sync.fetch", () => {
 })
 
 describe("the sync.actions menu", () => {
-  it("offers push, pull, and fetch for a branch that tracks an upstream", async () => {
-    const harness = await startRepo()
-    await addOrigin(harness)
-    await renderApp(harness)
-
-    await press(harness, "S")
-    await waitForFrame(harness, "Sync main")
-
-    const rendered = frame(harness)
-    expect(rendered).toContain("p  Push")
-    expect(rendered).toContain("o  Force push (with lease)")
-    expect(rendered).toContain("l  Pull")
-    expect(rendered).toContain("r  Pull (rebase)")
-    expect(rendered).toContain("f  Fetch all remotes")
-    expect(rendered).toContain("n  Fetch and prune")
-    // The upstream already exists, so the entry that would create one is not offered.
-    expect(rendered).not.toContain("Push and set upstream")
-  })
-
-  it("swaps push for push-and-set-upstream on a branch with no upstream", async () => {
-    const harness = await startRepo()
-    await addOrigin(harness)
-    await git(harness.directory, "checkout", "--quiet", "-b", "feature")
-    await renderApp(harness)
-
-    await press(harness, "S")
-    await waitForFrame(harness, "Sync feature")
-
-    const rendered = frame(harness)
-    expect(rendered).toContain("u  Push and set upstream")
-    // Swapped, not added: a plain push has no upstream to push to, and a lease has no
-    // remote ref to claim.
-    expect(rendered).not.toContain("p  Push")
-    expect(rendered).not.toContain("Force push")
-  })
-
-  it("hides everything a detached HEAD cannot do, and still offers fetch", async () => {
-    const harness = await startRepo()
-    await addOrigin(harness)
-    await git(harness.directory, "checkout", "--quiet", "--detach")
-    await renderApp(harness)
-
-    await press(harness, "S")
-    await waitForFrame(harness, "Sync (detached at")
-
-    const rendered = frame(harness)
-    expect(rendered).not.toContain("Push")
-    expect(rendered).not.toContain("Pull")
-    expect(rendered).toContain("f  Fetch all remotes")
-  })
-
   it("runs a fetch straight from the menu", async () => {
     const harness = await startRepo()
     const origin = await addOrigin(harness)

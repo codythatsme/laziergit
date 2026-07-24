@@ -8,6 +8,8 @@
       "extensions/*"
     ],
     "catalog": {
+      "@kitlangton/terminal-control": "0.6.0",
+      "@kitlangton/terminal-control-opentui": "0.6.0",
       "@opentui/core": "0.4.4",
       "@opentui/keymap": "0.4.4",
       "@opentui/react": "0.4.4",
@@ -28,11 +30,13 @@
     "format:check": "oxfmt --check packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
     "lint": "oxlint packages extensions scripts",
     "test": "bun test ./packages",
+    "test:e2e": "bun test ./scripts/e2e",
     "test:runtime": "bun packages/core/src/extension/reload.fixture.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
   },
   "devDependencies": {
+    "@kitlangton/terminal-control": "catalog:",
     "@types/bun": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",

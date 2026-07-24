@@ -2501,6 +2501,14 @@ Full trust, no sandbox — containment is structural, per surface:
   default startup focus lands on the Layout's first cell rather than the first Pane with rows to
   walk (config `layout.focus` overrides it). These are layout refinements with known shapes,
   post-v1 (PLAN.md) — not API gaps.
+- **A second fake-renderer acceptance layer.** Tests about pure logic, lifecycle, argv, and git
+  effects stay in the fast harness; tests about what a person sees or what a real keypress does
+  run through Terminal Control against `main.tsx` in a real PTY. The focused `test:e2e` suite
+  covers the everyday cross-extension flows and runs separately on macOS and Linux in CI, so the
+  default unit loop stays fast. Terminal Control 0.6.0's typed client does not expose OpenTUI's
+  semantic snapshot even though the host adapter publishes it, so these tests currently wait on
+  settled visible text; [the primary-source research](./research/terminal-control.md) records that
+  deliberate fallback and the upgrade path.
 - **NOT absent, on purpose: `ctx.exec`.** `Bun.$` remains fully available (full trust), but
   `exec` stays because its repo-root cwd default is a correctness detail that must live inside
   the `.d.ts` an agent learns from — forgetting `.cwd(ctx.git.root)` on `Bun.$` is the kind of
