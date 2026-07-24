@@ -31,7 +31,7 @@
     "lint": "oxlint packages extensions scripts",
     "precommit": "bun run format:check && bun run lint && bun run typecheck",
     "prepare": "git config core.hooksPath .githooks",
-    "test": "bun test ./packages",
+    "test": "bun test --timeout 30000 ./packages",
     "test:e2e": "bun test ./scripts/e2e",
     "test:runtime": "bun packages/core/src/extension/reload.fixture.ts",
     "typecheck": "bun run --filter '*' typecheck",

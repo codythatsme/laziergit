@@ -1,6 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test"
-import { mkdir, writeFile } from "node:fs/promises"
-import { delimiter, join } from "node:path"
+import { writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { act } from "react"
 
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "./test-harness"
@@ -355,15 +355,6 @@ describe("PaneHandle", () => {
   })
 })
 
-/**
- * The clipboard tool `ctx.copy` reaches for on this platform, which is also the whole of
- * what it decides: an Extension that wants to copy an oid must not have to know that
- * macOS spells it `pbcopy` and a Wayland session spells it `wl-copy`.
- */
-const clipboardCommands: readonly [string, ...string[]] =
-  process.platform === "darwin" ? ["pbcopy"] : process.platform === "win32" ? ["clip"] : ["wl-copy", "xclip", "xsel"]
-const [clipboardCommand] = clipboardCommands
-
 const copySource = `
   import { defineExtension } from "laziergit"
 
@@ -390,79 +381,52 @@ const copySource = `
 
 describe("ctx.copy", () => {
   it("hands the text to the platform's clipboard tool on stdin", async () => {
-    const harness = await createHarness()
-    const received = join(harness.directory, "clipboard.txt")
-    const bin = join(harness.directory, "bin")
-    await mkdir(bin, { recursive: true })
-    // A stand-in on PATH rather than the real pasteboard: a test has no business replacing
-    // what the developer running it had on their clipboard.
-    await writeFile(join(bin, clipboardCommand), `#!/bin/sh\ncat > ${JSON.stringify(received)}\n`, { mode: 0o755 })
+    const harness = await createHarness({
+      clipboardWriters: [
+        [process.execPath, ["-e", `if (await Bun.stdin.text() !== "cafebabe deadbeef") process.exit(1)`]],
+      ],
+    })
+    await withExtensions(harness, { "copier.tsx": copySource })
+    await press(harness, () => harness.setup.mockInput.pressKey("y"))
+    await waitForFrame(harness, "copied")
 
-    const path = process.env.PATH ?? ""
-    process.env.PATH = `${bin}${delimiter}${path}`
-    try {
-      await withExtensions(harness, { "copier.tsx": copySource })
-      await press(harness, () => harness.setup.mockInput.pressKey("y"))
-      await waitForFrame(harness, "copied")
-
-      expect(frame(harness)).toContain("copied")
-      expect(await Bun.file(received).text()).toBe("cafebabe deadbeef")
-    } finally {
-      process.env.PATH = path
-    }
+    expect(frame(harness)).toContain("copied")
   })
 
   it("reports the failure rather than resolving as if it had copied", async () => {
-    const harness = await createHarness()
-    const bin = join(harness.directory, "bin")
-    await mkdir(bin, { recursive: true })
-    await Promise.all(
-      clipboardCommands.map((command) =>
-        writeFile(join(bin, command), `#!/bin/sh\necho "no display" >&2\nexit 1\n`, { mode: 0o755 }),
-      ),
-    )
+    const harness = await createHarness({
+      clipboardWriters: [[process.execPath, ["-e", `console.error("no display"); process.exit(1)`]]],
+    })
+    await withExtensions(harness, { "copier.tsx": copySource })
+    await press(harness, () => harness.setup.mockInput.pressKey("y"))
+    await waitForFrame(harness, "no display")
 
-    const path = process.env.PATH ?? ""
-    // Stand-ins for every fallback prevent a real tool further down PATH from rescuing the
-    // failing writer, while preserving PATH for test files running alongside this one.
-    process.env.PATH = `${bin}${delimiter}${path}`
-    try {
-      await withExtensions(harness, { "copier.tsx": copySource })
-      await press(harness, () => harness.setup.mockInput.pressKey("y"))
-      await waitForFrame(harness, "no display")
-
-      expect(frame(harness)).toContain("no display")
-    } finally {
-      process.env.PATH = path
-    }
+    expect(frame(harness)).toContain("no display")
   })
 
   it("settles when the writer leaves something behind holding its pipes", async () => {
-    const harness = await createHarness()
-    const received = join(harness.directory, "clipboard.txt")
-    const bin = join(harness.directory, "bin")
-    await mkdir(bin, { recursive: true })
-    // What `wl-copy` does for real: take the text, then leave a process behind that
-    // outlives the command and inherits its stdout and stderr. Reading those pipes to
-    // end-of-file therefore waits for the survivor, not for the writer — and because the
-    // cascade is a sequential loop, the caller's Command never returns either.
-    await writeFile(join(bin, clipboardCommand), `#!/bin/sh\ncat > ${JSON.stringify(received)}\nsleep 10 &\nexit 0\n`, {
-      mode: 0o755,
+    const harness = await createHarness({
+      clipboardWriters: [
+        [
+          process.execPath,
+          [
+            "-e",
+            `
+              if (await Bun.stdin.text() !== "cafebabe deadbeef") process.exit(1)
+              const survivor = Bun.spawn([process.execPath, "-e", "await Bun.sleep(10000)"], {
+                stdout: "inherit",
+                stderr: "inherit",
+              })
+              survivor.unref()
+            `,
+          ],
+        ],
+      ],
     })
+    await withExtensions(harness, { "copier.tsx": copySource })
+    await press(harness, () => harness.setup.mockInput.pressKey("y"))
+    await waitForFrame(harness, "copied")
 
-    const path = process.env.PATH ?? ""
-    // The stand-in first, and the rest of PATH behind it: the script needs `cat` and `sleep`
-    // to be findable, and being first is already what shadows the machine's real tool.
-    process.env.PATH = `${bin}${delimiter}${path}`
-    try {
-      await withExtensions(harness, { "copier.tsx": copySource })
-      await press(harness, () => harness.setup.mockInput.pressKey("y"))
-      await waitForFrame(harness, "copied")
-
-      expect(frame(harness)).toContain("copied")
-      expect(await Bun.file(received).text()).toBe("cafebabe deadbeef")
-    } finally {
-      process.env.PATH = path
-    }
+    expect(frame(harness)).toContain("copied")
   })
 })

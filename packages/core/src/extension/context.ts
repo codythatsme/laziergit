@@ -31,6 +31,7 @@ import type { PaneHost } from "./pane-host"
 import { bindNotifier, type Notifier } from "./notifier"
 
 export type ExtensionApiLookup = { readonly state: "live"; readonly api: unknown } | { readonly state: "missing" }
+export type ClipboardWriterSpec = readonly [command: string, args: readonly string[]]
 
 export interface ContextHosts {
   readonly diagnostics: Diagnostics
@@ -43,6 +44,7 @@ export interface ContextHosts {
   readonly statusline: StatuslineHost
   readonly git: GitService
   readonly notifier: Notifier
+  readonly clipboardWriters?: readonly ClipboardWriterSpec[]
   getExtensionApi(name: string): ExtensionApiLookup
 }
 
@@ -169,7 +171,7 @@ const clipboardTimeoutMs = 2_000
  * distribution — which is precisely the per-platform branching {@link ExtensionContext.copy}
  * exists to keep out of every Extension that wants to copy an oid.
  */
-function clipboardWriters(platform: NodeJS.Platform): readonly (readonly [string, readonly string[]])[] {
+function clipboardWriters(platform: NodeJS.Platform): readonly ClipboardWriterSpec[] {
   if (platform === "darwin") return [["pbcopy", []]]
   if (platform === "win32") return [["clip", []]]
   return [
@@ -437,7 +439,7 @@ export function createExtensionContext(
       })
     },
     async copy(text) {
-      const writers = clipboardWriters(process.platform)
+      const writers = hosts.clipboardWriters ?? clipboardWriters(process.platform)
       let failure: Error | undefined
       for (const [command, args] of writers) {
         try {
