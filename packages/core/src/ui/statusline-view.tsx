@@ -45,11 +45,14 @@ export function StatuslineView({ statusline, panes }: { statusline: StatuslineHo
 
   return (
     <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
-      {segments.left.length === 0 ? (
-        <text content={hint} style={{ fg: theme.textMuted }} />
-      ) : (
-        <Segments panes={panes} segments={segments.left} />
-      )}
+      <Segments panes={panes} segments={segments.left} />
+      {/* Core's own, and unconditional. It is the only on-screen route to the palette, the
+          cheat sheet, and the way out, and it used to render only while no Extension had
+          registered a LEFT segment — a condition the shipped app never meets, since the
+          bundled `status` Extension always registers one, and one that also blanked the
+          whole line outside a repository. Between the two groups rather than beside them,
+          so a wide segment on either side pushes it around instead of over it. */}
+      <text content={hint} style={{ fg: theme.textMuted }} />
       <box flexDirection="row" gap={2}>
         <Segments panes={panes} segments={segments.right} />
         {pending.length > 0 ? (
@@ -58,6 +61,24 @@ export function StatuslineView({ statusline, panes }: { statusline: StatuslineHo
       </box>
     </box>
   )
+}
+
+/** How many lines of one notification a toast shows before it says there are more. */
+const maxToastLines = 6
+
+/**
+ * A notification's lines, capped.
+ *
+ * Git writes its most useful refusals across several lines — "would be overwritten by
+ * merge:" is a header and the file list is everything after it — and every Bundled
+ * Extension passes `GitError.stderr` through verbatim, so a toast that rendered only the
+ * first line would drop precisely the part naming what went wrong. Capped because a toast
+ * is an overlay: a rebase that lists forty paths must not cover the screen.
+ */
+function toastLines(message: string): readonly string[] {
+  const lines = message.split("\n").filter((line) => line.trim() !== "")
+  if (lines.length <= maxToastLines) return lines.length === 0 ? [message] : lines
+  return [...lines.slice(0, maxToastLines), `… ${lines.length - maxToastLines} more lines`]
 }
 
 /** Transient notifications, stacked above the status line and never taking focus. */
@@ -77,8 +98,16 @@ export function ToastLayer({ notifications }: { notifications: NotificationHost 
           backgroundColor={theme.backgroundPanel}
           paddingLeft={1}
           paddingRight={1}
+          flexDirection="column"
+          alignItems="flex-start"
         >
-          <text content={`${toast.extension}: ${toast.message}`} style={{ fg: toastColor(toast.level, theme) }} />
+          {toastLines(toast.message).map((line, index) => (
+            <text
+              key={`${toast.id}:${index}`}
+              content={index === 0 ? `${toast.extension}: ${line}` : line}
+              style={{ fg: toastColor(toast.level, theme) }}
+            />
+          ))}
         </box>
       ))}
     </box>

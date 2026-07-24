@@ -15,6 +15,8 @@ import { normalizeError, type Diagnostics } from "../extension/diagnostics"
  */
 const globalLayerPriority = 0
 const paneLayerPriority = 100
+/** Above every Pane layer, below a popup: a modal still outranks a Pane that captures keys. */
+const captureLayerPriority = 500
 export const modalLayerPriority = 1000
 
 export interface KeymapInstallOptions {
@@ -92,6 +94,23 @@ export function installKeymap<TTarget extends object, TEvent extends KeymapEvent
   }
 }
 
+/** The audience of one keymap layer: whose Commands it carries, and in which mode. */
+interface LayerScope {
+  /** The Pane the layer belongs to, or null for the global layer. */
+  readonly paneId: string | null
+  /** Carries `capture: true` Commands, live only while that Pane is capturing raw input. */
+  readonly capture: boolean
+}
+
+function describeScope(scope: LayerScope): string {
+  if (scope.paneId === null) return "global"
+  return scope.capture ? `"${scope.paneId}" capture` : `"${scope.paneId}"`
+}
+
+function scopeKey(scope: LayerScope): string {
+  return `${scope.paneId ?? ""}\0${scope.capture ? "capture" : "normal"}`
+}
+
 /**
  * Projects the Command catalog onto keymap layers: one layer for global Commands and
  * one per Pane, each gated by a reactive matcher rather than by renderer focus, so
@@ -106,6 +125,7 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   readonly #matcherListeners = new Set<() => void>()
   #entries: readonly CommandEntry[] = []
   #focusedPaneId: string | null = null
+  #capturingPane: string | null = null
   #modalOpen = false
   #rebuildScheduled = false
   #stopped = false
@@ -127,6 +147,18 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
     })
   }
 
+  /**
+   * The Pane whose capture is actually in force, if any.
+   *
+   * A capture only counts while its Pane is focused. Focus cannot leave a capturing Pane by
+   * keyboard — that is the point — so this guards the other door: an Extension focusing
+   * another Pane while an editor is open would otherwise leave a background Pane holding
+   * the keyboard with no key left to get out with.
+   */
+  get capturingPaneId(): string | null {
+    return this.#capturingPane !== null && this.#capturingPane === this.#focusedPaneId ? this.#capturingPane : null
+  }
+
   setFocusedPane(paneId: string | null): void {
     if (this.#focusedPaneId === paneId) return
     this.#focusedPaneId = paneId
@@ -140,6 +172,18 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
     this.#invalidate()
   }
 
+  /**
+   * While a Pane captures raw keyboard input — an editor inside it owns the keys — the
+   * global layer and every Pane layer go inert, and only that Pane's `capture: true`
+   * Commands stay live. Deliberately the same mechanism as {@link setModalOpen}, one
+   * priority band lower, so a popup opened mid-edit still wins.
+   */
+  setCapturingPane(paneId: string | null): void {
+    if (this.#capturingPane === paneId) return
+    this.#capturingPane = paneId
+    this.#invalidate()
+  }
+
   stop(): void {
     this.#stopped = true
     this.#clear()
@@ -149,16 +193,16 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   #rebuild(): void {
     this.#clear()
 
-    const byScope = new Map<string, CommandEntry[]>()
+    const byScope = new Map<string, { readonly scope: LayerScope; readonly entries: CommandEntry[] }>()
     for (const entry of this.#entries) {
       if (entry.keys.length === 0) continue
-      const scope = entry.pane ?? ""
-      const scoped = byScope.get(scope) ?? []
-      scoped.push(entry)
-      byScope.set(scope, scoped)
+      const scope: LayerScope = { paneId: entry.pane ?? null, capture: entry.capture }
+      const layer = byScope.get(scopeKey(scope)) ?? { scope, entries: [] }
+      layer.entries.push(entry)
+      byScope.set(scopeKey(scope), layer)
     }
 
-    for (const [scope, entries] of byScope) {
+    for (const { scope, entries } of byScope.values()) {
       const bindings = entries.flatMap((entry) =>
         entry.keys.map((key) => ({ key, cmd: () => this.#dispatch(entry.id) })),
       )
@@ -171,22 +215,34 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
    * surfaces on its error channel, so the rest of the scope keeps working; this catch is
    * only for a layer the keymap refuses outright.
    */
-  #registerScope(scope: string, bindings: readonly Binding<TTarget, TEvent>[]): () => void {
+  #registerScope(scope: LayerScope, bindings: readonly Binding<TTarget, TEvent>[]): () => void {
     try {
       return this.#keymap.registerLayer({
-        priority: scope === "" ? globalLayerPriority : paneLayerPriority,
+        priority: scope.capture
+          ? captureLayerPriority
+          : scope.paneId === null
+            ? globalLayerPriority
+            : paneLayerPriority,
         enabled: this.#matcher(scope),
         bindings,
       })
     } catch (error) {
-      this.#report(`Dropped the ${scope === "" ? "global" : `"${scope}"`} keybinding layer`, error)
+      this.#report(`Dropped the ${describeScope(scope)} keybinding layer`, error)
       return () => undefined
     }
   }
 
-  #matcher(scope: string): ReactiveMatcher {
+  #matcher(scope: LayerScope): ReactiveMatcher {
     return {
-      get: () => !this.#modalOpen && (scope === "" || this.#focusedPaneId === scope),
+      get: () => {
+        if (this.#modalOpen) return false
+        const capturing = this.capturingPaneId
+        // A capture layer answers only to its own Pane's capture; every other layer is
+        // suppressed for as long as any capture is in force.
+        if (scope.capture) return scope.paneId !== null && capturing === scope.paneId
+        if (capturing !== null) return false
+        return scope.paneId === null || this.#focusedPaneId === scope.paneId
+      },
       subscribe: (onChange) => {
         this.#matcherListeners.add(onChange)
         return () => this.#matcherListeners.delete(onChange)

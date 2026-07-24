@@ -12,6 +12,11 @@ export interface CommandEntry {
   /** Pane id this Command is bound inside, or undefined for a global Command. */
   readonly pane: string | undefined
   readonly hidden: boolean
+  /**
+   * Bound only while {@link pane} is capturing raw keyboard input, instead of only while it
+   * is focused. Always false for a global Command: capture is a property of a Pane.
+   */
+  readonly capture: boolean
   /** The keys actually bound, after config overrides and conflict resolution. */
   readonly keys: readonly string[]
 }
@@ -27,14 +32,53 @@ interface RegisteredCommand {
   readonly spec: CommandSpec
 }
 
-/** Deduplicated: one Command claiming a key twice must not register the binding twice. */
-function declaredKeys(spec: CommandSpec): readonly string[] {
-  if (spec.keys === undefined) return []
-  return [...new Set(typeof spec.keys === "string" ? [spec.keys] : spec.keys)]
+/**
+ * The spelling two KeySpecs share exactly when they bind the same physical stroke.
+ *
+ * @opentui/keymap lowercases every key NAME when it matches (`normalizeKeyName`) and compares
+ * modifier tokens case-insensitively, so a KeySpec and its case-folded form always resolve to
+ * the same binding. Folding case here is therefore sound — it can never invent a conflict
+ * between two keys the keymap would keep apart — and it closes the collision the KeySpec
+ * grammar warns about: a bare letter binds its lowercase stroke, so `"D"` and `"d"` are one
+ * key, not two. (Alias and modifier-order spellings — `esc`/`escape`, `ctrl+shift+x`
+ * /`shift+ctrl+x` — the keymap folds too, but only its own parser knows them, so catching
+ * those would mean re-implementing the parser here; they stay the caller's responsibility.)
+ */
+function keyStroke(key: string): string {
+  return key.toLowerCase()
 }
 
-function scopeOf(entry: { readonly pane?: string }): string {
-  return entry.pane ?? ""
+/**
+ * Deduplicated by the stroke each key binds, not by its spelling: a Command claiming both
+ * `"s"` and `"S"` claims one physical key and must not register it twice. The author's own
+ * spelling is what the cheat sheet shows, so the first spelling of each stroke is kept.
+ */
+function dedupByStroke(keys: readonly string[]): string[] {
+  const byStroke = new Map<string, string>()
+  for (const key of keys) {
+    const stroke = keyStroke(key)
+    if (!byStroke.has(stroke)) byStroke.set(stroke, key)
+  }
+  return [...byStroke.values()]
+}
+
+function declaredKeys(spec: CommandSpec): readonly string[] {
+  if (spec.keys === undefined) return []
+  return dedupByStroke(typeof spec.keys === "string" ? [spec.keys] : spec.keys)
+}
+
+/** A Pane's capture Commands only exist because that Pane has one; a global one cannot capture. */
+function capturesOf(spec: CommandSpec): boolean {
+  return spec.capture === true && spec.pane !== undefined
+}
+
+/**
+ * Which claim a key is made against. A Pane's ordinary layer and its capture layer are
+ * never enabled at the same time, so the same key may be claimed once in each — `escape`
+ * cancelling an edit does not take `escape` away from the Pane's normal mode.
+ */
+function claimScope(spec: CommandSpec): string {
+  return `${spec.pane ?? ""}\0${capturesOf(spec) ? "capture" : "normal"}`
 }
 
 /**
@@ -76,6 +120,9 @@ export class CommandHost {
   register(owner: string, spec: CommandSpec): Disposable {
     assertScopedId(owner, spec.id)
     if (this.#commands.has(spec.id)) throw new Error(`Command "${spec.id}" is already registered`)
+    if (spec.capture === true && spec.pane === undefined) {
+      this.#report("command", owner, `${spec.id}: capture needs a pane and was ignored`)
+    }
 
     const registered = { owner, spec }
     this.#commands.set(spec.id, registered)
@@ -147,7 +194,8 @@ export class CommandHost {
     const claim = (id: string, command: RegisteredCommand, keys: readonly string[], fromConfig: boolean): void => {
       const accepted: string[] = []
       for (const key of keys) {
-        const scope = `${scopeOf(command.spec)}\0${key}`
+        // Scoped by the stroke, not the spelling, so `"D"` and `"d"` contend for one binding.
+        const scope = `${claimScope(command.spec)}\0${keyStroke(key)}`
         const previous = claimed.get(scope)
         if (previous !== undefined && !fromConfig && configured.has(scope)) {
           this.#reportConflict(command.owner, key, id, previous)
@@ -158,7 +206,7 @@ export class CommandHost {
           if (losing)
             keysById.set(
               previous,
-              losing.filter((candidate) => candidate !== key),
+              losing.filter((candidate) => keyStroke(candidate) !== keyStroke(key)),
             )
           this.#reportConflict(command.owner, key, previous, id)
         }
@@ -171,7 +219,7 @@ export class CommandHost {
 
     for (const [id, command] of this.#commands) {
       const override = this.#overrides.get(id)
-      if (override !== undefined) claim(id, command, [...new Set(override)], true)
+      if (override !== undefined) claim(id, command, dedupByStroke(override), true)
     }
     for (const [id, command] of this.#commands) {
       if (!this.#overrides.has(id)) claim(id, command, declaredKeys(command.spec), false)
@@ -183,6 +231,7 @@ export class CommandHost {
       title: command.spec.title,
       pane: command.spec.pane,
       hidden: command.spec.hidden === true,
+      capture: capturesOf(command.spec),
       keys: Object.freeze(keysById.get(id) ?? []),
     }))
   }

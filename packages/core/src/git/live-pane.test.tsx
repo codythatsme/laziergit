@@ -20,10 +20,13 @@ const livePane = `
     name: "live",
     activate(ctx) {
       function LivePane() {
-        const branch = useGit((state) => state.head.branch)
+        // The union is read the way every Bundled Extension reads it: the variant first,
+        // and only then the fields that variant actually has.
+        const head = useGit((state) => state.head)
         const commits = useGit((state) => state.commits.length)
         const clean = useGit((state) => state.status.isClean)
-        return <text content={"on " + (branch ?? "detached") + " " + commits + "c " + (clean ? "clean" : "dirty")} />
+        const where = head.kind === "onBranch" ? head.branch : head.kind
+        return <text content={"on " + where + " " + commits + "c " + (clean ? "clean" : "dirty")} />
       }
       ctx.panes.register({ id: "live", title: "Live", component: LivePane })
     },
@@ -134,8 +137,9 @@ it("renders an empty store, without polling, outside a repository", async () => 
   await writeFile(join(harness.repo, "live.tsx"), livePane)
 
   await renderApp(harness)
-  // Degraded, not broken: `useGit` still resolves and the Pane still renders.
-  expect(frame(harness)).toContain("on detached 0c clean")
+  // Degraded, not broken: `useGit` still resolves and the Pane still renders. The empty
+  // store serves an unborn HEAD, which is the variant that claims no commit exists.
+  expect(frame(harness)).toContain("on unborn 0c clean")
   expect(harness.kernel.git.available).toBe(false)
   expect(harness.kernel.diagnostics.getSnapshot()).toEqual([])
 })

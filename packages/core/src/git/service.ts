@@ -1,5 +1,5 @@
 import { Effect, Queue, Stream } from "effect"
-import { GitError, type Disposable, type GitOutput, type GitState, type RawOptions, type UpstreamInfo } from "laziergit"
+import { GitError, literalPathspec, type Disposable, type GitOutput, type GitState, type RawOptions } from "laziergit"
 
 import type { GitConfig } from "../config/config"
 import { execGit, execGitAllowingEmpty } from "./exec"
@@ -13,6 +13,7 @@ import {
   parseStash,
   parseStatus,
   parseTags,
+  readHead,
   refSnapshotArgs,
   configArgs,
   stashArgs,
@@ -134,11 +135,6 @@ function isMutating(args: readonly string[]): boolean {
  */
 function fingerprintOf(status: string, refs: string, stash: string, config: string): string {
   return [status, refs, stash, config].join("\u0000\u0000")
-}
-
-function upstreamOf(branches: readonly { name: string; upstream: UpstreamInfo | null }[], branch: string | null) {
-  if (branch === null) return null
-  return branches.find((candidate) => candidate.name === branch)?.upstream ?? null
 }
 
 /**
@@ -280,11 +276,12 @@ export class GitService {
 
     return Effect.flatMap(reads, (outputs) => {
       const status = parseStatus(outputs.status.stdout)
-      const head = parseHeadRef(outputs.headRef.stdout, outputs.headRef.exitCode)
-      const branches = parseBranches(outputs.branches.stdout, head.branch)
+      const headBranch = parseHeadRef(outputs.headRef.stdout, outputs.headRef.exitCode)
+      const branches = parseBranches(outputs.branches.stdout, headBranch)
+      const head = readHead(status, headBranch, branches)
 
       const commits =
-        status.oid === ""
+        head.kind === "unborn"
           ? Effect.succeed("")
           : Effect.catch(
               Effect.map(execGit(root, commitArgs(this.#config.commitLimit)), (output) => output.stdout),
@@ -304,12 +301,7 @@ export class GitService {
           outputs.config.stdout,
         ),
         state: {
-          head: {
-            oid: status.oid,
-            branch: head.branch,
-            detached: head.detached,
-            upstream: upstreamOf(branches, head.branch),
-          },
+          head,
           branches,
           remotes: parseRemotes(outputs.config.stdout),
           tags: parseTags(outputs.tags.stdout),
@@ -498,8 +490,10 @@ export class GitService {
   }
 
   stage(paths: readonly string[] | "all"): Promise<void> {
-    // `--` separates paths from options so a file named `-f` can never become a flag.
-    return this.#write(paths === "all" ? ["add", "--all", "--"] : ["add", "--", ...paths])
+    // `--all` takes no pathspec at all, so there is nothing here to make literal.
+    // `--` separates paths from options so a file named `-f` can never become a flag; it
+    // does *not* stop git reading a path as a glob, which is what `literalPathspec` is for.
+    return this.#write(paths === "all" ? ["add", "--all", "--"] : ["add", "--", ...literalPaths(paths)])
   }
 
   unstage(paths: readonly string[] | "all"): Promise<void> {
@@ -510,7 +504,10 @@ export class GitService {
     // restore from and so fails outright on a repository with no commits yet — where
     // unstaging is both meaningful and common. A pathspec'd reset never touches the
     // working tree.
-    return this.#write(["reset", "--quiet", "--", ...(paths === "all" ? ["."] : paths)])
+    //
+    // `"all"` passes `"."`, which is a pathspec but not a user path: making it literal
+    // would ask for a file actually named `.`.
+    return this.#write(["reset", "--quiet", "--", ...(paths === "all" ? ["."] : literalPaths(paths))])
   }
 
   /**
@@ -533,14 +530,17 @@ export class GitService {
             toRestore.length === 0
               ? Effect.succeed(undefined)
               : Effect.map(
-                  execGit(root, ["restore", "--worktree", "--", ...toRestore], { write: true }),
+                  execGit(root, ["restore", "--worktree", "--", ...literalPaths(toRestore)], { write: true }),
                   () => undefined,
                 )
           if (toDelete.length === 0) return restored
           return Effect.flatMap(restored, () =>
             // `-ff`, not `-f`: a single force makes clean silently refuse to descend into
             // an untracked directory that has its own `.git`, exiting 0 having done nothing.
-            Effect.map(execGit(root, ["clean", "-ffd", "--", ...toDelete], { write: true }), () => undefined),
+            Effect.map(
+              execGit(root, ["clean", "-ffd", "--", ...literalPaths(toDelete)], { write: true }),
+              () => undefined,
+            ),
           )
         }),
       ),
@@ -646,4 +646,18 @@ export class GitService {
 
 function stashRef(index: number | undefined): string {
   return `stash@{${index ?? 0}}`
+}
+
+/**
+ * Every path in a selection, as a pathspec that matches only itself.
+ *
+ * The paths reaching these helpers come verbatim out of `status --porcelain=v2 -z`, so
+ * nothing upstream has escaped them and a name containing `*`, `?`, `[` or a leading `:`
+ * would otherwise act on its neighbours — `discard(["foo[1].txt"])` restoring `foo1.txt`
+ * over the user's edits, and `git clean -ffd` deleting an untracked `bar1.txt` nobody
+ * named. Applied at the argv edge rather than at the API edge so there is exactly one
+ * place to check that every path git sees went through it.
+ */
+function literalPaths(paths: readonly string[]): readonly string[] {
+  return paths.map(literalPathspec)
 }

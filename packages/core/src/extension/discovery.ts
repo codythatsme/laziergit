@@ -3,7 +3,19 @@ import { access, lstat, readFile, readdir, readlink, realpath, stat } from "node
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path"
 
-export type ExtensionSourceScope = "global" | "repo"
+/**
+ * Every scope, weakest first: an Extension from a later scope shadows a same-named one from
+ * any earlier scope. Discovery, import, and fingerprinting all walk this order, so which copy
+ * wins never depends on which directory read happened to finish first.
+ */
+export const extensionScopePrecedence = ["bundled", "global", "repo"] as const
+
+export type ExtensionSourceScope = (typeof extensionScopePrecedence)[number]
+
+/** Position in {@link extensionScopePrecedence}; higher shadows lower. */
+export function extensionScopeRank(scope: ExtensionSourceScope): number {
+  return extensionScopePrecedence.indexOf(scope)
+}
 
 export interface ExtensionCandidate {
   /** Logical path inside the configured extension directory, used for identity and status. */
@@ -30,14 +42,18 @@ export interface ExtensionDiscoveryResult {
   readonly failures: readonly ExtensionDiscoveryFailure[]
 }
 
-export interface ExtensionDirectories {
-  readonly global: string
-  readonly repo: string
-}
+/** One directory per scope, mapped so a new scope cannot be left without a search path. */
+export type ExtensionDirectories = { readonly [Scope in ExtensionSourceScope]: string }
 
-export function defaultExtensionDirectories(repoRoot: string): ExtensionDirectories {
+/**
+ * The two user-writable directories. `bundled` is a parameter rather than a default because
+ * only the process entry point knows where laziergit itself is installed — the working
+ * directory is the user's repository, which is a different tree entirely.
+ */
+export function defaultExtensionDirectories(repoRoot: string, bundled: string): ExtensionDirectories {
   const configRoot = process.env.XDG_CONFIG_HOME || join(homedir(), ".config")
   return {
+    bundled,
     global: join(configRoot, "laziergit", "extensions"),
     repo: join(repoRoot, ".laziergit", "extensions"),
   }
@@ -62,8 +78,18 @@ function isExtensionFile(name: string): boolean {
   return !name.startsWith(".") && !name.endsWith(".d.ts") && (name.endsWith(".ts") || name.endsWith(".tsx"))
 }
 
+/**
+ * The one directory laziergit writes into an Extension directory: every generation's import
+ * copies live inside it rather than beside the Extensions themselves. Nested, because an
+ * Extension directory is somebody else's tree — in this repository it is a Bun workspace
+ * glob, and a copy that lands as its sibling becomes a second package with the same name.
+ */
+export const importCopyContainerName = ".laziergit-cache"
+
 function isExcludedTreeEntry(name: string): boolean {
-  return name === "node_modules" || name.startsWith(".laziergit-cache-")
+  // `startsWith`, so copies written flat by an older build are still skipped rather than
+  // fingerprinted as Extension content forever.
+  return name === "node_modules" || name.startsWith(importCopyContainerName)
 }
 
 function isPathInside(rootPath: string, childPath: string): boolean {

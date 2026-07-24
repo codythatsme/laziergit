@@ -1,11 +1,20 @@
 import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import { ensureRuntimePluginSupport } from "@opentui/react/runtime-plugin-support/configure"
+import { resolve } from "node:path"
 import * as laziergitRuntime from "laziergit"
 
 import { App } from "./app"
+import { defaultExtensionDirectories } from "./extension/discovery"
 import { ExtensionKernel } from "./extension/kernel"
 import { discoverRepository } from "./git/repository"
+
+/**
+ * Bundled Extensions ship next to core inside the installation, so they are located relative
+ * to this module. Resolving from `process.cwd()` would look inside whichever repository
+ * laziergit was launched in and find nothing.
+ */
+const bundledExtensionDirectory = resolve(import.meta.dir, "..", "..", "..", "extensions")
 
 export async function main() {
   ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
@@ -38,6 +47,7 @@ export async function main() {
     kernel = new ExtensionKernel({
       repoRoot,
       renderer: activeRenderer,
+      directories: defaultExtensionDirectories(repoRoot, bundledExtensionDirectory),
       onQuit: () => {
         void (async () => {
           try {

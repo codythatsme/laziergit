@@ -56,6 +56,8 @@ export function createFakeSlotRegistry() {
 
 export interface Harness {
   readonly directory: string
+  /** Bundled-scope Extension directory; created empty, so tests opt in by writing to it. */
+  readonly bundled: string
   /** Global-scope Extension directory. */
   readonly global: string
   /** Repo-scope Extension directory. */
@@ -149,9 +151,10 @@ export function installHarnessLifecycle(): void {
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), "laziergit-"))
+  const bundled = join(directory, "bundled")
   const global = join(directory, "global")
   const repo = join(directory, "repo")
-  await Promise.all([mkdir(global), mkdir(repo)])
+  await Promise.all([mkdir(bundled), mkdir(global), mkdir(repo)])
   if (options.git === true) await initRepository(directory)
 
   let setup!: Awaited<ReturnType<typeof createTestRenderer>>
@@ -162,14 +165,14 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const kernel = new ExtensionKernel({
     repoRoot: directory,
     renderer: setup.renderer,
-    directories: { global, repo },
+    directories: { bundled, global, repo },
     configFiles,
     watch: options.watch ?? false,
     debounceMs: options.debounceMs,
     pollMs: options.pollMs ?? options.debounceMs,
     onQuit: options.onQuit,
   })
-  const harness: Harness = { directory, global, repo, configFiles, setup, kernel, root: null }
+  const harness: Harness = { directory, bundled, global, repo, configFiles, setup, kernel, root: null }
   harnesses.push(harness)
   return harness
 }

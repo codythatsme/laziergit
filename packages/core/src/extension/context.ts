@@ -150,6 +150,64 @@ function guardConsumedApi(api: unknown, scope: ActivationScope): unknown {
   })
 }
 
+/**
+ * The bound on one clipboard writer.
+ *
+ * Putting text on the local clipboard is IPC with a compositor or a window server, so a
+ * writer that has not finished in this long is not slow, it is stuck — and the cascade in
+ * {@link ExtensionContext.copy} is a sequential loop, so one stuck writer costs the caller's
+ * Command, not just its own turn.
+ */
+const clipboardTimeoutMs = 2_000
+
+/**
+ * The clipboard writers worth trying on a platform, most likely first.
+ *
+ * Every one of them takes the text on stdin rather than in argv, so nothing a user copies
+ * can be read as an option or a filename. A Linux session has exactly one of the three
+ * installed and which one is a property of the session (Wayland vs X11), not of the
+ * distribution — which is precisely the per-platform branching {@link ExtensionContext.copy}
+ * exists to keep out of every Extension that wants to copy an oid.
+ */
+function clipboardWriters(platform: NodeJS.Platform): readonly (readonly [string, readonly string[]])[] {
+  if (platform === "darwin") return [["pbcopy", []]]
+  if (platform === "win32") return [["clip", []]]
+  return [
+    ["wl-copy", []],
+    ["xclip", ["-selection", "clipboard"]],
+    ["xsel", ["--clipboard", "--input"]],
+  ]
+}
+
+/**
+ * How long a finished command's pipes are still drained.
+ *
+ * `child.exited` is the honest end of a command; its pipes are not. Anything the child
+ * spawned inherits them and holds them open for as long as *it* lives, so a reader that
+ * waits for end-of-file waits for the grandchild — `wl-copy` daemonises exactly this way,
+ * and a shell script that backgrounds anything does it by accident. So the pipes get a
+ * short grace period after the exit and then the command reports what arrived. A
+ * well-behaved child's output is already there, so this costs nothing in the ordinary case.
+ */
+const pipeGraceMs = 100
+
+/** Whatever an in-flight read has produced `graceMs` from now, and the empty string if it is still stuck. */
+function settledWithin(text: Promise<string>, graceMs: number): Promise<string> {
+  return new Promise<string>((resolve) => {
+    const timer = setTimeout(() => resolve(""), graceMs)
+    void text.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve("")
+      },
+    )
+  })
+}
+
 function exec(
   scope: ActivationScope,
   repoRoot: string,
@@ -159,7 +217,6 @@ function exec(
 ) {
   let child: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined
-  let timedOut = false
 
   const pending = (async (): Promise<ExecOutput> => {
     child = Bun.spawn([command, ...args], {
@@ -173,21 +230,39 @@ function exec(
     if (options.stdin) child.stdin.write(options.stdin)
     void child.stdin.end()
 
-    if (options.timeoutMs !== undefined) {
-      timeout = setTimeout(() => {
-        timedOut = true
-        child?.kill()
-      }, options.timeoutMs)
-    }
+    // Started before the exit is awaited, not after: a child that fills the pipe buffer
+    // blocks until someone reads it, so a read that began after `child.exited` would be a
+    // deadlock on any output larger than a pipe. The grace period is applied below, once
+    // the child is gone — until then a slow command is simply a slow command.
+    const stdoutText = new Response(child.stdout).text()
+    const stderrText = new Response(child.stderr).text()
+    // The timeout path abandons both reads; neither may become an unhandled rejection.
+    void stdoutText.catch(() => undefined)
+    void stderrText.catch(() => undefined)
 
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ])
-    if (timeout) clearTimeout(timeout)
-    if (timedOut) throw new Error(`${command} exceeded ${options.timeoutMs}ms`)
-    return { stdout, stderr, exitCode }
+    const expiry = Promise.withResolvers<never>()
+    if (options.timeoutMs !== undefined) {
+      const limit = options.timeoutMs
+      timeout = setTimeout(() => {
+        // Rejecting rather than only killing: a child whose pipes a survivor holds does
+        // not die with `kill` alone, and a timeout that can itself hang is not a timeout.
+        child?.kill()
+        expiry.reject(new Error(`${command} exceeded ${limit}ms`))
+      }, limit)
+    }
+    // The loser of the race must not become an unhandled rejection.
+    void expiry.promise.catch(() => undefined)
+
+    try {
+      const exitCode = await Promise.race([child.exited, expiry.promise])
+      const [stdout, stderr] = await Promise.all([
+        settledWithin(stdoutText, pipeGraceMs),
+        settledWithin(stderrText, pipeGraceMs),
+      ])
+      return { stdout, stderr, exitCode }
+    } finally {
+      if (timeout) clearTimeout(timeout)
+    }
   })()
 
   return scope.supervise(pending, () => {
@@ -228,6 +303,7 @@ export function createExtensionContext(
       const handle: PaneHandle = {
         dispose: () => tracked.dispose(),
         focus: () => hosts.layout.focus(spec.id),
+        reveal: () => hosts.layout.reveal(spec.id),
       }
       return scope.guard(handle, ["dispose"])
     },
@@ -359,6 +435,26 @@ export function createExtensionContext(
       return exec(scope, hosts.git.root, command, args, {}).then((output) => {
         if (output.exitCode !== 0) throw new Error(output.stderr.trim() || `Unable to open ${url}`)
       })
+    },
+    async copy(text) {
+      const writers = clipboardWriters(process.platform)
+      let failure: Error | undefined
+      for (const [command, args] of writers) {
+        try {
+          const output = await exec(scope, hosts.git.root, command, args, {
+            stdin: text,
+            timeoutMs: clipboardTimeoutMs,
+          })
+          if (output.exitCode === 0) return
+          failure = new Error(output.stderr.trim() || `${command} exited with ${output.exitCode}`)
+        } catch (error) {
+          // A writer that is not installed is the ordinary case on a machine with a
+          // different session type, so it is a reason to try the next one rather than to
+          // fail — but the last reason is kept, for the machine that has none of them.
+          failure = error instanceof Error ? error : new Error(String(error))
+        }
+      }
+      throw failure ?? new Error(`No clipboard tool on this system (tried ${writers.map(([name]) => name).join(", ")})`)
     },
     onDispose(finalizer) {
       scope.track(finalizer)

@@ -1,5 +1,11 @@
 node_modules/
-.laziergit/
+# laziergit's own repo scope: the Layout it develops itself under is worth having, the
+# Extensions someone drops in locally and the schema the kernel regenerates are not.
+.laziergit/*
+!.laziergit/config.jsonc
+# Generation import copies, written into every Extension directory laziergit loads from —
+# including the bundled extensions/.
+.laziergit-cache/
 vendor/
 dist/
 *.log

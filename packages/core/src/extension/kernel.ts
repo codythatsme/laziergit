@@ -35,8 +35,9 @@ import { CommandHost, type CommandEntry } from "./command-host"
 import { createExtensionContext, type ContextHosts, type ExtensionApiLookup } from "./context"
 import { Diagnostics, normalizeError, type DiagnosticPhase } from "./diagnostics"
 import {
-  defaultExtensionDirectories,
   discoverExtensions,
+  extensionScopePrecedence,
+  extensionScopeRank,
   extensionTreeFingerprint,
   type ExtensionCandidate,
   type ExtensionDirectories,
@@ -58,7 +59,7 @@ export type ExtensionLoadState = "loading" | "active" | "failed" | "shadowed"
 export interface ExtensionStatus {
   readonly key: string
   readonly path: string
-  readonly scope: "global" | "repo"
+  readonly scope: ExtensionSourceScope
   readonly name?: string
   readonly state: ExtensionLoadState
   readonly message?: string
@@ -79,7 +80,11 @@ interface Activation {
 export interface ExtensionKernelOptions {
   readonly repoRoot: string
   readonly renderer: CliRenderer
-  readonly directories?: ExtensionDirectories
+  /**
+   * Where Extensions are read from, one directory per scope. Required: the bundled directory
+   * lives wherever laziergit was installed, which only the caller can know.
+   */
+  readonly directories: ExtensionDirectories
   readonly configFiles?: ConfigFiles
   readonly watch?: boolean
   /** How long to wait for edits to settle before acting on them. */
@@ -105,6 +110,9 @@ interface InternalRuntime {
   }
   readonly commands: {
     registerComponent(extension: string, paneId: string, spec: Omit<CommandSpec, "pane">): Disposable
+  }
+  readonly keys: {
+    capture(paneId: string): Disposable
   }
   readonly theme: {
     getSnapshot(): Theme
@@ -171,6 +179,8 @@ export class ExtensionKernel {
   readonly runtime: InternalRuntime
   readonly #repoRoot: string
   readonly #directories: ExtensionDirectories
+  /** Every Extension directory in precedence order; the search path, in one place. */
+  readonly #searchPath: readonly string[]
   readonly #configFiles: ConfigFiles
   readonly #watchEnabled: boolean
   readonly #debounceMs: number
@@ -184,6 +194,8 @@ export class ExtensionKernel {
   readonly #disposeSlotErrors: () => void
   readonly #importCopies: ImportCopyCache
   readonly #disposeKeymap: () => void
+  /** Live `useKeyCapture` claims, most recent last — React unmounts in no particular order. */
+  readonly #captureClaims: { readonly paneId: string }[] = []
   #config: LoadedConfig = emptyConfig
   #modalFocus: { readonly renderable: Renderable | null } | undefined
   #leader: string | undefined
@@ -204,7 +216,8 @@ export class ExtensionKernel {
 
   constructor(options: ExtensionKernelOptions) {
     this.#repoRoot = options.repoRoot
-    this.#directories = options.directories ?? defaultExtensionDirectories(options.repoRoot)
+    this.#directories = options.directories
+    this.#searchPath = extensionScopePrecedence.map((scope) => this.#directories[scope])
     this.#configFiles = options.configFiles ?? defaultConfigFiles(options.repoRoot)
     this.#watchEnabled = options.watch ?? true
     this.#debounceMs = options.debounceMs ?? 80
@@ -242,7 +255,7 @@ export class ExtensionKernel {
     this.#disposeKeymap = installKeymap(this.keymap, { diagnostics: this.diagnostics })
     this.keybindings = new KeybindingHost(this.keymap, this.diagnostics, (id) => this.#runCommand(id))
     this.#importCopies = new ImportCopyCache({
-      directories: [this.#directories.global, this.#directories.repo],
+      directories: this.#searchPath,
       diagnose: (diagnostic) => {
         this.#diagnose({
           phase: diagnostic.phase,
@@ -258,6 +271,9 @@ export class ExtensionKernel {
       },
       commands: {
         registerComponent: (extension, paneId, spec) => this.commands.registerComponent(extension, paneId, spec),
+      },
+      keys: {
+        capture: (paneId) => this.#captureKeys(paneId),
       },
       theme: this.theme,
     }
@@ -285,6 +301,9 @@ export class ExtensionKernel {
   }
 
   async start(): Promise<void> {
+    // The two directories a user drops Extensions into, made so they are always there to drop
+    // into. The bundled directory is deliberately absent: it ships inside the installation, so
+    // creating one would only invent an empty directory in someone's install tree.
     await Promise.all([
       mkdir(this.#directories.global, { recursive: true }),
       mkdir(this.#directories.repo, { recursive: true }),
@@ -412,11 +431,50 @@ export class ExtensionKernel {
     register({ id: "app.quit", title: "Quit", keys: "q", run: () => this.#onQuit?.() })
   }
 
+  /**
+   * A stacked claim rather than a setter: two Panes may render editors at once, and React
+   * unmounts them in no guaranteed order, so releasing a claim restores whichever is still
+   * standing instead of unconditionally clearing the capture.
+   */
+  #captureKeys(paneId: string): Disposable {
+    const claim = { paneId }
+    this.#captureClaims.push(claim)
+    this.keybindings.setCapturingPane(paneId)
+
+    return {
+      dispose: () => {
+        const index = this.#captureClaims.indexOf(claim)
+        if (index === -1) return
+        this.#captureClaims.splice(index, 1)
+        this.keybindings.setCapturingPane(this.#captureClaims.at(-1)?.paneId ?? null)
+      },
+    }
+  }
+
+  /**
+   * The cheat sheet answers "what can I press", so it shows the layers that are live.
+   *
+   * While a Pane captures raw input, that is exactly one layer: its `capture: true`
+   * Commands. Listing the global and Pane keys beside them would be listing keys that
+   * currently type letters into a textarea — so a capture collapses the sheet to the one
+   * section that still does anything, named after the Pane holding the keyboard. (Even an
+   * empty one: a Pane that captures without an exit Command has trapped the user, and a
+   * bare heading says so louder than an absent section.)
+   *
+   * Otherwise capture Commands still get a section of their own per Pane, listed after
+   * that Pane's ordinary keys, because they answer a different question — not "what does
+   * this Pane do" but "what gets me back out of the editor it can show". That is worth
+   * reading *before* entering it, which is the only time this sheet can be opened anyway.
+   */
   #cheatSheetSections(): readonly CheatSheetSection[] {
     const entries = this.commands.getSnapshot()
     const focused = this.layout.focusedPaneId
-    const sections: CheatSheetSection[] = []
+    const capturing = this.keybindings.capturingPaneId
+    if (capturing !== null) {
+      return [{ title: `${capturing} (capturing keys)`, entries: this.#captureEntries(entries, capturing) }]
+    }
 
+    const sections: CheatSheetSection[] = []
     const globals = cheatSheetEntries(entries.filter((entry) => entry.pane === undefined))
     if (globals.length > 0) sections.push({ title: "Global", entries: globals })
 
@@ -428,11 +486,17 @@ export class ExtensionKernel {
       ),
     ].sort((left, right) => (left === focused ? -1 : right === focused ? 1 : left.localeCompare(right)))
     for (const pane of panes) {
-      const paneEntries = cheatSheetEntries(entries.filter((entry) => entry.pane === pane))
-      if (paneEntries.length > 0)
-        sections.push({ title: pane === focused ? `${pane} (focused)` : pane, entries: paneEntries })
+      const ordinary = cheatSheetEntries(entries.filter((entry) => entry.pane === pane && !entry.capture))
+      if (ordinary.length > 0)
+        sections.push({ title: pane === focused ? `${pane} (focused)` : pane, entries: ordinary })
+      const captured = this.#captureEntries(entries, pane)
+      if (captured.length > 0) sections.push({ title: `${pane} (capturing keys)`, entries: captured })
     }
     return sections
+  }
+
+  #captureEntries(entries: readonly CommandEntry[], pane: string): readonly CheatSheetEntry[] {
+    return cheatSheetEntries(entries.filter((entry) => entry.pane === pane && entry.capture))
   }
 
   /**
@@ -552,6 +616,9 @@ export class ExtensionKernel {
 
       await this.#publishSchema(selected)
       await this.#activateAll(selected)
+      // Only now does "the first cell of the Layout" mean what the user wrote, rather than
+      // whichever Extension the `needs` graph happened to activate first.
+      this.layout.settleInitialFocus()
     } finally {
       this.panes.finishReload(previousOwners)
     }
@@ -585,14 +652,13 @@ export class ExtensionKernel {
 
   async #importAll(): Promise<readonly ImportedExtension[]> {
     this.#reloadGeneration += 1
-    const [global, repo] = await Promise.all([
-      this.#discover(this.#directories.global, "global"),
-      this.#discover(this.#directories.repo, "repo"),
-    ])
+    const discovered = await Promise.all(
+      extensionScopePrecedence.map((scope) => this.#discover(this.#directories[scope], scope)),
+    )
 
     const statuses: ExtensionStatus[] = []
     const imported: ImportedExtension[] = []
-    for (const failure of [...global.failures, ...repo.failures]) {
+    for (const failure of discovered.flatMap((result) => result.failures)) {
       statuses.push({
         key: failureKey(failure),
         path: failure.path,
@@ -607,7 +673,7 @@ export class ExtensionKernel {
       })
     }
 
-    for (const candidate of [...global.candidates, ...repo.candidates]) {
+    for (const candidate of discovered.flatMap((result) => result.candidates)) {
       if (this.#stopped) break
       const key = candidateKey(candidate)
       let lease: ImportCopyLease | undefined
@@ -648,6 +714,7 @@ export class ExtensionKernel {
   async #selectByName(imported: readonly ImportedExtension[]): Promise<ReadonlyMap<string, ImportedExtension>> {
     const selected = new Map<string, ImportedExtension>()
     const byScope = new Map<string, ImportedExtension>()
+    const shadowed = new Map<string, ImportedExtension[]>()
 
     for (const item of imported) {
       const name = item.extension.spec.name
@@ -668,13 +735,21 @@ export class ExtensionKernel {
         selected.set(name, item)
         continue
       }
-      if (current.candidate.scope === "global" && item.candidate.scope === "repo") {
-        this.#updateStatus(current.candidate, "shadowed", `Shadowed by repo extension "${name}"`)
-        selected.set(name, item)
-        await current.lease.release()
-      } else {
-        this.#updateStatus(item.candidate, "shadowed", `Shadowed by repo extension "${name}"`)
-        await item.lease.release()
+      // Scopes cannot tie here — a same-scope collision was already rejected above — so the
+      // ranking alone decides, whatever order the two copies were imported in.
+      const winner =
+        extensionScopeRank(item.candidate.scope) > extensionScopeRank(current.candidate.scope) ? item : current
+      selected.set(name, winner)
+      shadowed.set(name, [...(shadowed.get(name) ?? []), winner === item ? current : item])
+    }
+
+    // Reported only once every scope has been walked, because the answer a shadowed Extension
+    // owes its author is which copy is running instead — and with three scopes the first copy
+    // to beat it need not be the last (a bundled one loses to global, then both lose to repo).
+    for (const [name, winner] of selected) {
+      for (const loser of shadowed.get(name) ?? []) {
+        this.#updateStatus(loser.candidate, "shadowed", `Shadowed by ${winner.candidate.scope} extension "${name}"`)
+        await loser.lease.release()
       }
     }
     return selected
@@ -843,7 +918,7 @@ export class ExtensionKernel {
   }
 
   #treeFingerprint(): Promise<string> {
-    return extensionTreeFingerprint([this.#directories.global, this.#directories.repo])
+    return extensionTreeFingerprint(this.#searchPath)
   }
 
   /** The last reload already recorded what it loaded, so the watcher only starts the clock. */

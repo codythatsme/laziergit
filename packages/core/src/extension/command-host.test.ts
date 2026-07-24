@@ -134,16 +134,46 @@ it("gives a key to the later registration, leaving the loser its palette row", (
   const host = new CommandHost(diagnostics, panes())
 
   host.register("first", { id: "first.stage", title: "Stage", keys: "s", run: () => {} })
-  host.register("second", { id: "second.stash", title: "Stash", keys: ["s", "S"], run: () => {} })
+  host.register("second", { id: "second.stash", title: "Stash", keys: ["s", "shift+s"], run: () => {} })
 
   expect(host.getSnapshot().map((entry) => [entry.id, entry.keys])).toEqual([
     ["first.stage", []],
-    ["second.stash", ["s", "S"]],
+    ["second.stash", ["s", "shift+s"]],
   ])
   expect(diagnostics.getSnapshot()).toEqual([
     expect.objectContaining({ phase: "command", message: 'Key "s" moved from "first.stage" to "second.stash"' }),
   ])
   errorSpy.mockRestore()
+})
+
+it("resolves a case-variant of a key as the same stroke, last registration winning", () => {
+  // A bare letter binds its lowercase stroke, so `"D"` and `"d"` are one physical key. Before
+  // case-folding the two spellings never met in the claim map, so the collision was silent and
+  // the keymap — not this resolver — decided the winner, contradicting "last registration wins".
+  const diagnostics = new Diagnostics()
+  const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+  const host = new CommandHost(diagnostics, panes())
+
+  host.register("first", { id: "first.discard", title: "Discard", keys: "d", run: () => {} })
+  host.register("second", { id: "second.delete", title: "Delete", keys: "D", run: () => {} })
+
+  expect(host.getSnapshot().map((entry) => [entry.id, entry.keys])).toEqual([
+    ["first.discard", []],
+    ["second.delete", ["D"]],
+  ])
+  expect(diagnostics.getSnapshot()).toEqual([
+    expect.objectContaining({ phase: "command", message: 'Key "D" moved from "first.discard" to "second.delete"' }),
+  ])
+  errorSpy.mockRestore()
+})
+
+it("binds a stroke a Command spells two ways only once, keeping the first spelling", () => {
+  const host = new CommandHost(new Diagnostics(), panes())
+  // `"d"` and `"D"` are the same stroke; the Command keeps its first spelling and no
+  // spurious self-conflict is reported.
+  host.register("owner", { id: "owner.discard", title: "Discard", keys: ["d", "D"], run: () => {} })
+
+  expect(host.getSnapshot()[0]?.keys).toEqual(["d"])
 })
 
 it("keeps a key the user set in config out of a later Command's declared default", () => {
@@ -157,6 +187,39 @@ it("keeps a key the user set in config out of a later Command's declared default
   expect(host.getSnapshot().map((entry) => [entry.id, entry.keys])).toEqual([
     ["first.quit", ["s"]],
     ["second.stage", []],
+  ])
+  errorSpy.mockRestore()
+})
+
+it("lets a Pane claim one key in each mode, because the two layers never run together", () => {
+  const host = new CommandHost(new Diagnostics(), panes())
+
+  host.register("editor", { id: "editor.close", title: "Close", keys: "escape", pane: "editor", run: () => {} })
+  host.register("editor", {
+    id: "editor.cancel",
+    title: "Cancel edit",
+    keys: "escape",
+    pane: "editor",
+    capture: true,
+    run: () => {},
+  })
+
+  expect(host.getSnapshot().map((entry) => [entry.id, entry.keys, entry.capture])).toEqual([
+    ["editor.close", ["escape"], false],
+    ["editor.cancel", ["escape"], true],
+  ])
+})
+
+it("ignores capture on a Command with no Pane, and says so", () => {
+  const diagnostics = new Diagnostics()
+  const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+  const host = new CommandHost(diagnostics, panes())
+
+  host.register("editor", { id: "editor.submit", title: "Submit", keys: "mod+s", capture: true, run: () => {} })
+
+  expect(host.getSnapshot()[0]?.capture).toBe(false)
+  expect(diagnostics.getSnapshot()).toEqual([
+    expect.objectContaining({ phase: "command", message: "editor.submit: capture needs a pane and was ignored" }),
   ])
   errorSpy.mockRestore()
 })

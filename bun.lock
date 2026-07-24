@@ -12,6 +12,102 @@
         "typescript": "catalog:",
       },
     },
+    "extensions/branches": {
+      "name": "@laziergit/extension-branches",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
+    "extensions/commit-flow": {
+      "name": "@laziergit/extension-commit-flow",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
+    "extensions/commits": {
+      "name": "@laziergit/extension-commits",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
+    "extensions/diff": {
+      "name": "@laziergit/extension-diff",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
+    "extensions/files": {
+      "name": "@laziergit/extension-files",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
+    "extensions/stash": {
+      "name": "@laziergit/extension-stash",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
+    "extensions/status": {
+      "name": "@laziergit/extension-status",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
+    "extensions/sync": {
+      "name": "@laziergit/extension-sync",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
     "packages/core": {
       "name": "@laziergit/core",
       "version": "0.0.0",
@@ -76,6 +172,22 @@
   },
   "packages": {
     "@laziergit/core": ["@laziergit/core@workspace:packages/core"],
+
+    "@laziergit/extension-branches": ["@laziergit/extension-branches@workspace:extensions/branches"],
+
+    "@laziergit/extension-commit-flow": ["@laziergit/extension-commit-flow@workspace:extensions/commit-flow"],
+
+    "@laziergit/extension-commits": ["@laziergit/extension-commits@workspace:extensions/commits"],
+
+    "@laziergit/extension-diff": ["@laziergit/extension-diff@workspace:extensions/diff"],
+
+    "@laziergit/extension-files": ["@laziergit/extension-files@workspace:extensions/files"],
+
+    "@laziergit/extension-stash": ["@laziergit/extension-stash@workspace:extensions/stash"],
+
+    "@laziergit/extension-status": ["@laziergit/extension-status@workspace:extensions/status"],
+
+    "@laziergit/extension-sync": ["@laziergit/extension-sync@workspace:extensions/sync"],
 
     "@laziergit/runtime-bridge": ["@laziergit/runtime-bridge@workspace:packages/runtime-bridge"],
 

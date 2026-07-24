@@ -3,7 +3,14 @@ import { mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:f
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 
-import { discoverExtensions, extensionTreeFingerprint } from "./discovery"
+import {
+  defaultExtensionDirectories,
+  discoverExtensions,
+  extensionScopePrecedence,
+  extensionScopeRank,
+  extensionTreeFingerprint,
+  importCopyContainerName,
+} from "./discovery"
 
 const temporaryRoots: string[] = []
 
@@ -140,6 +147,45 @@ describe("discoverExtensions", () => {
   })
 })
 
+describe("extension scopes", () => {
+  it("ranks bundled below global below repo", () => {
+    expect(extensionScopePrecedence).toEqual(["bundled", "global", "repo"])
+    expect(extensionScopeRank("bundled")).toBeLessThan(extensionScopeRank("global"))
+    expect(extensionScopeRank("global")).toBeLessThan(extensionScopeRank("repo"))
+  })
+
+  it("discovers a bundled directory exactly like a user one", async () => {
+    const root = await createTemporaryRoot()
+    await Promise.all([
+      writeFile(join(root, "shipped.ts"), "export default {}"),
+      writeDirectoryExtension(root, "shipped-directory"),
+    ])
+
+    const result = await discoverExtensions(root, "bundled")
+
+    expect(result.candidates).toEqual([
+      expect.objectContaining({ rootPath: join(root, "shipped-directory"), scope: "bundled" }),
+      expect.objectContaining({ rootPath: join(root, "shipped.ts"), scope: "bundled" }),
+    ])
+    expect(result.failures).toEqual([])
+  })
+
+  it("resolves one directory per scope, taking bundled from the caller", () => {
+    const previousConfigHome = process.env.XDG_CONFIG_HOME
+    process.env.XDG_CONFIG_HOME = "/config-home"
+    try {
+      expect(defaultExtensionDirectories(join("/work", "checkout"), join("/install", "extensions"))).toEqual({
+        bundled: join("/install", "extensions"),
+        global: join("/config-home", "laziergit", "extensions"),
+        repo: join("/work", "checkout", ".laziergit", "extensions"),
+      })
+    } finally {
+      if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+      else process.env.XDG_CONFIG_HOME = previousConfigHome
+    }
+  })
+})
+
 describe("extensionTreeFingerprint", () => {
   it("follows linked targets, notices retargets and repairs, and stops ancestry cycles", async () => {
     const root = await createTemporaryRoot()
@@ -165,6 +211,10 @@ describe("extensionTreeFingerprint", () => {
 
     await mkdir(join(sourceA, "node_modules", "pkg"), { recursive: true })
     await writeFile(join(sourceA, "node_modules", "pkg", "ignored.ts"), "ignored")
+    // The cache container, and the flat copy name an older build wrote: a fingerprint that
+    // counted either would reload on every import copy laziergit itself made.
+    await mkdir(join(sourceA, importCopyContainerName, "100-1-1-ignored"), { recursive: true })
+    await writeFile(join(sourceA, importCopyContainerName, "100-1-1-ignored", "ignored.ts"), "ignored")
     await mkdir(join(sourceA, ".laziergit-cache-100-1-1-ignored"))
     await writeFile(join(sourceA, ".laziergit-cache-100-1-1-ignored", "ignored.ts"), "ignored")
     expect(await extensionTreeFingerprint([extensions])).toBe(changedTarget)

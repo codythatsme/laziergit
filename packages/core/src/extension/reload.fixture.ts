@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import * as laziergitRuntime from "laziergit"
 
+import { importCopyContainerName } from "./discovery"
 import { ExtensionKernel } from "./kernel"
 
 ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
@@ -20,14 +21,15 @@ state.__laziergitReloadFixtureState = { lifecycle: [] }
 const fixtureState = state.__laziergitReloadFixtureState
 
 const directory = await mkdtemp(join(tmpdir(), "laziergit-reload-fixture-"))
+const bundled = join(directory, "bundled")
 const global = join(directory, "global")
 const repo = join(directory, "repo")
-await Promise.all([mkdir(global), mkdir(repo)])
+await Promise.all([mkdir(bundled), mkdir(global), mkdir(repo)])
 const setup = await createTestRenderer({ width: 20, height: 8 })
 const kernel = new ExtensionKernel({
   repoRoot: directory,
   renderer: setup.renderer,
-  directories: { global, repo },
+  directories: { bundled, global, repo },
   configFiles: { global: join(directory, "global.jsonc"), repo: join(directory, "repo.jsonc") },
   debounceMs: 10,
 })
@@ -75,8 +77,10 @@ async function waitFor(label: string, predicate: () => boolean, timeoutMs = 3_00
 }
 
 async function cacheNames(): Promise<readonly string[]> {
-  const names = await Promise.all([readdir(global), readdir(repo)])
-  return names.flat().filter((name) => name.startsWith(".laziergit-cache-"))
+  const names = await Promise.all(
+    [global, repo].map((directory) => readdir(join(directory, importCopyContainerName)).catch(() => [])),
+  )
+  return names.flat()
 }
 
 function lifecycleCounts(prefix: "lone" | "directory") {
@@ -117,7 +121,7 @@ try {
   if (liveCaches.length !== 2) {
     throw new Error(`Expected one live cache per Extension; received ${liveCaches.join(", ")}`)
   }
-  const generations = new Set(liveCaches.map((name) => /^\.laziergit-cache-\d+-(\d+)-/.exec(name)?.[1] ?? "missing"))
+  const generations = new Set(liveCaches.map((name) => /^\d+-(\d+)-/.exec(name)?.[1] ?? "missing"))
   if (generations.size !== 1 || generations.has("missing")) {
     throw new Error(`Expected one stable live generation; received ${[...generations].join(", ")}`)
   }

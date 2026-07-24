@@ -156,6 +156,8 @@ export class LayoutHost {
   #panes: readonly PaneEntry[] = []
   #snapshot: LayoutSnapshot = emptySnapshot
   #focusedCell: string | null = null
+  /** Whether anything has *chosen* a focus — a keypress, a Command, `PaneHandle.focus`. */
+  #focusChosen = false
   #onFocus: ((paneId: string | null, previous: string | null) => void) | undefined
 
   getSnapshot = (): LayoutSnapshot => this.#snapshot
@@ -195,7 +197,55 @@ export class LayoutHost {
 
     this.#activeTabs.set(cell.key, paneId)
     this.#focusedCell = cell.key
+    this.#focusChosen = true
     this.#recompute()
+  }
+
+  /**
+   * Makes `paneId` the visible tab of its cell, without moving the keyboard.
+   *
+   * The other half of {@link focus}, and the half a Pane that follows someone else's
+   * selection needs: the diff Pane is tab-grouped with `commit-flow`, so after a commit it
+   * is stranded behind the Commit tab while every cursor move in the files Pane goes on
+   * updating something nobody can see. Focusing it instead would take the keyboard away
+   * from the Pane the user is driving, on every keystroke.
+   *
+   * Silent where `focus` throws. Revealing runs on cursor movement rather than on a user's
+   * deliberate command, so "that Pane is not on screen right now" — a Layout the user
+   * chose, or a Pane mid-reload — is an ordinary condition to do nothing about, not a
+   * programming error worth an exception per keypress.
+   */
+  reveal(paneId: string): void {
+    if (!this.#isLive(paneId)) return
+    const cell = this.#cells().find((candidate) => candidate.paneIds.includes(paneId))
+    if (!cell || this.#activeTabs.get(cell.key) === paneId) return
+    this.#activeTabs.set(cell.key, paneId)
+    this.#recompute()
+  }
+
+  /**
+   * Puts focus on the Layout's first cell, unless something has already chosen one.
+   *
+   * Called once, when activation has finished. Panes register one at a time and every
+   * registration re-lays-out, so *during* startup "the first cell" is whichever Extension
+   * has got there so far — with `needs: ["diff"]` on four of the eight Bundled Extensions,
+   * reliably the diff Pane. Deciding after the last Pane has registered is the only moment
+   * the question has the answer the user's Layout actually gives; leaving it to run
+   * continuously instead would drag focus across Panes mid-startup and fire their
+   * focus-gated effects on the way past.
+   */
+  settleInitialFocus(): void {
+    if (this.#focusChosen) return
+    const requested = this.#config?.focus
+    if (requested !== undefined && requested !== null && this.#isLive(requested)) {
+      const cell = this.#cells().find((candidate) => candidate.paneIds.includes(requested))
+      if (cell) {
+        this.focus(requested)
+        return
+      }
+    }
+    const first = this.#focusableCells()[0]
+    if (first) this.#focusCell(first)
   }
 
   /** Moves focus by whole cells, so tabbing never walks through hidden tabs. */
