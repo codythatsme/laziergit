@@ -5,6 +5,7 @@
     "": {
       "name": "laziergit-workspace",
       "devDependencies": {
+        "@kitlangton/terminal-control": "catalog:",
         "@types/bun": "catalog:",
         "oxfmt": "catalog:",
         "oxlint": "catalog:",
@@ -115,6 +116,7 @@
         "laziergit": "./src/main.tsx",
       },
       "dependencies": {
+        "@kitlangton/terminal-control-opentui": "catalog:",
         "@laziergit/runtime-bridge": "workspace:*",
         "@opentui/core": "catalog:",
         "@opentui/keymap": "catalog:",
@@ -158,6 +160,8 @@
     "@opentui/react": "catalog:",
   },
   "catalog": {
+    "@kitlangton/terminal-control": "0.6.0",
+    "@kitlangton/terminal-control-opentui": "0.6.0",
     "@opentui/core": "0.4.4",
     "@opentui/keymap": "0.4.4",
     "@opentui/react": "0.4.4",
@@ -171,6 +175,18 @@
     "typescript": "5.9.3",
   },
   "packages": {
+    "@kitlangton/terminal-control": ["@kitlangton/terminal-control@0.6.0", "", { "optionalDependencies": { "@kitlangton/terminal-control-darwin-arm64": "0.6.0", "@kitlangton/terminal-control-darwin-x64": "0.6.0", "@kitlangton/terminal-control-linux-arm64-gnu": "0.6.0", "@kitlangton/terminal-control-linux-x64-gnu": "0.6.0" }, "peerDependencies": { "vitest": ">=3.0.0" }, "optionalPeers": ["vitest"] }, "sha512-RJ2FJ9U/3bvhwpnI6/LCnaAQT7TyrUGwgbm/ax2EXks6fFmlEdHX07yQr2cvkZY1nZbuduJ0sI2QXD3VCLjXWw=="],
+
+    "@kitlangton/terminal-control-darwin-arm64": ["@kitlangton/terminal-control-darwin-arm64@0.6.0", "", { "os": "darwin", "cpu": "arm64", "bin": { "termctrl": "bin/termctrl" } }, "sha512-QNKFRKabri02FUF8HxelIue4QZe71H6BqgDQvvmH9uGXjgQ8bJktz8RdxcJPm9r15zdiA2zTVjN0hAvENvAFCA=="],
+
+    "@kitlangton/terminal-control-darwin-x64": ["@kitlangton/terminal-control-darwin-x64@0.6.0", "", { "os": "darwin", "cpu": "x64", "bin": { "termctrl": "bin/termctrl" } }, "sha512-6MGtHUMK5TUB7XqTLzHMO6u9wOD5fqmuLKIz5Xw+zqM8W1LpiUBnGdJQM7eYuaajgagsW+W2H8plWCDS9e39jQ=="],
+
+    "@kitlangton/terminal-control-linux-arm64-gnu": ["@kitlangton/terminal-control-linux-arm64-gnu@0.6.0", "", { "os": "linux", "cpu": "arm64", "bin": { "termctrl": "bin/termctrl" } }, "sha512-JdYpK3uJIcIaSQ2txKRhbQWXjcMk1TnP6oS6QSaEW/lnzmawxFPiZWYkRq6VTG60lxTUSX1SzTE/mFGDdqVssg=="],
+
+    "@kitlangton/terminal-control-linux-x64-gnu": ["@kitlangton/terminal-control-linux-x64-gnu@0.6.0", "", { "os": "linux", "cpu": "x64", "bin": { "termctrl": "bin/termctrl" } }, "sha512-1kmi8ESh8Nswt1reAHkpBlcfBQ2ka8PE3V0cPjQAz6o7uxNuXLOqr4VAnZ0UxOcyPrFfx5slJpKc9gG3bbKJHg=="],
+
+    "@kitlangton/terminal-control-opentui": ["@kitlangton/terminal-control-opentui@0.6.0", "", { "peerDependencies": { "@opentui/core": ">=0.4.1 <0.5.0" } }, "sha512-wciE15RzJD8PywRkqszYouHfZHjJF2GNoPoMX0SRaL33oWTxGv5amv9HkqlTY6/j1AUnoJNoe61kQwAkDeFzmw=="],
+
     "@laziergit/core": ["@laziergit/core@workspace:packages/core"],
 
     "@laziergit/extension-branches": ["@laziergit/extension-branches@workspace:extensions/branches"],

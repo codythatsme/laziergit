@@ -13,6 +13,7 @@
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
+    "@kitlangton/terminal-control-opentui": "catalog:",
     "@laziergit/runtime-bridge": "workspace:*",
     "@opentui/core": "catalog:",
     "@opentui/keymap": "catalog:",

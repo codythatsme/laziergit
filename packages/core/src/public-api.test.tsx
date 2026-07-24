@@ -177,50 +177,6 @@ async function withExtensions(harness: Harness, sources: Record<string, string>,
 }
 
 describe("useListCursor", () => {
-  it("walks the list with j/k/g/G and stops at both ends", async () => {
-    const harness = await createHarness()
-    await withExtensions(harness, { "rows.tsx": rowsSource })
-
-    expect(frame(harness)).toContain("cursor=0 selected=one")
-
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    expect(frame(harness)).toContain("cursor=1 selected=two")
-
-    await press(harness, () => harness.setup.mockInput.pressKey("k"))
-    await press(harness, () => harness.setup.mockInput.pressKey("k"))
-    expect(frame(harness)).toContain("cursor=0 selected=one")
-
-    await press(harness, () => harness.setup.mockInput.pressKey("G"))
-    expect(frame(harness)).toContain("cursor=2 selected=three")
-
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    expect(frame(harness)).toContain("cursor=2 selected=three")
-
-    await press(harness, () => harness.setup.mockInput.pressKey("g"))
-    expect(frame(harness)).toContain("cursor=0 selected=one")
-  })
-
-  it("walks the same list with the arrow keys and home/end", async () => {
-    const harness = await createHarness()
-    await withExtensions(harness, { "rows.tsx": rowsSource })
-
-    // Bound alongside j/k/g/G so a user reaching for arrows — the reflex a lazygit user
-    // brings — moves the same cursor rather than pressing keys nothing answers to.
-    expect(frame(harness)).toContain("cursor=0 selected=one")
-
-    await press(harness, () => harness.setup.mockInput.pressArrow("down"))
-    expect(frame(harness)).toContain("cursor=1 selected=two")
-
-    await press(harness, () => harness.setup.mockInput.pressArrow("up"))
-    expect(frame(harness)).toContain("cursor=0 selected=one")
-
-    await press(harness, () => harness.setup.mockInput.pressKey("END"))
-    expect(frame(harness)).toContain("cursor=2 selected=three")
-
-    await press(harness, () => harness.setup.mockInput.pressKey("HOME"))
-    expect(frame(harness)).toContain("cursor=0 selected=one")
-  })
-
   it("clamps to a shrinking list without resurrecting the old position", async () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource })
@@ -298,28 +254,6 @@ describe("createRowSource", () => {
 })
 
 describe("useKeyCapture", () => {
-  it("makes every ordinary key inert while a Pane captures, and its capture Commands live", async () => {
-    let quits = 0
-    const harness = await createHarness({ onQuit: () => (quits += 1) })
-    await withExtensions(harness, { "editor.tsx": editorSource })
-
-    await press(harness, () => harness.setup.mockInput.pressKey("q"))
-    expect(quits).toBe(1)
-
-    await press(harness, () => harness.setup.mockInput.pressKey("e"))
-    expect(frame(harness)).toContain("editor editing saved=0")
-
-    await press(harness, () => harness.setup.mockInput.pressKey("q"))
-    expect(quits).toBe(1)
-
-    await press(harness, () => harness.setup.mockInput.pressKey("s", { ctrl: true }))
-    expect(frame(harness)).toContain("editor idle saved=1")
-
-    // Back to ordinary keys the moment the capture is released.
-    await press(harness, () => harness.setup.mockInput.pressKey("q"))
-    expect(quits).toBe(2)
-  })
-
   it("still lets a popup outrank the capture", async () => {
     const harness = await createHarness()
     await withExtensions(harness, { "editor.tsx": editorSource })

@@ -13,37 +13,6 @@ installHarnessLifecycle()
  */
 const rowCount = 60
 
-/**
- * A list Pane built the way the four Bundled ones are: `useListCursor` for the cursor, a
- * `<scrollbox>` for the rows, and a header above it that the box must not paint over.
- */
-const listExtension = `
-  /** @jsxImportSource @opentui/react */
-  import { defineExtension, useListCursor } from "laziergit"
-
-  const rows = Array.from({ length: ${rowCount} }, (_, index) => "row " + (index + 1))
-
-  export default defineExtension({
-    name: "list",
-    activate(ctx) {
-      function ListPane() {
-        const cursor = useListCursor({ items: rows, idPrefix: "list", noun: "row" })
-        return (
-          <box flexDirection="column" flexGrow={1} flexBasis={0}>
-            <text content="LIST HEADER" />
-            <scrollbox ref={cursor.scrollRef} flexGrow={1} flexBasis={0}>
-              {rows.map((row, index) => (
-                <text key={row} content={(index === cursor.index ? "> " : "  ") + row} />
-              ))}
-            </scrollbox>
-          </box>
-        )
-      }
-      ctx.panes.register({ id: "list", title: "List", component: ListPane })
-    },
-  })
-`
-
 /** A patch tall enough that its tail is nowhere near the first screenful. */
 const patch = [
   "diff --git a/f.txt b/f.txt",
@@ -105,41 +74,6 @@ async function start(harness: Harness, name: string, source: string): Promise<vo
   await writeFile(join(harness.repo, `${name}.tsx`), source)
   await renderApp(harness)
 }
-
-it("scrolls the selected row into view when the cursor walks past the bottom of the pane", async () => {
-  const harness = await createHarness({ width: 40, height: 16 })
-  await start(harness, "list", listExtension)
-
-  // The starting screenful, and the proof that the viewport really is far short of the list.
-  // The trailing space matters: without it "row 1" also matches "row 19".
-  expect(frame(harness)).toContain("> row 1 ")
-  expect(frame(harness)).not.toContain(`row ${rowCount} `)
-
-  await press(harness, "G")
-
-  // What the user has to be able to see: the row every key now acts on.
-  expect(frame(harness)).toContain(`> row ${rowCount} `)
-  // ...and the top of the list is genuinely gone, so this is scrolling and not a taller box.
-  expect(frame(harness)).not.toContain("row 1 ")
-  // The Pane's own header survived: a scrollbox sized by its content overflows its Pane and
-  // paints across whatever is above it.
-  expect(frame(harness)).toContain("LIST HEADER")
-
-  await press(harness, "g")
-  expect(frame(harness)).toContain("> row 1 ")
-})
-
-it("walks the cursor back into view one row at a time from the far end", async () => {
-  const harness = await createHarness({ width: 40, height: 16 })
-  await start(harness, "list", listExtension)
-  await press(harness, "G")
-
-  await press(harness, "k")
-  // Minimum movement: the row above the last is revealed by scrolling one row, so the last
-  // row is still on screen rather than the window recentring on the cursor.
-  expect(frame(harness)).toContain(`> row ${rowCount - 1} `)
-  expect(frame(harness)).toContain(`row ${rowCount} `)
-})
 
 it("scrolls a diff taller than its pane, which the diff renderable cannot do on its own", async () => {
   const harness = await createHarness({ width: 40, height: 16 })

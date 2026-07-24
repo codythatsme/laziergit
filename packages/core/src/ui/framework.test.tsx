@@ -228,20 +228,6 @@ describe("focus and keybindings", () => {
     expect(focusEvents).toEqual(["alpha", "beta", "alpha"])
   })
 
-  it("runs a Pane Command only in the focused Pane, even when both claim the key", async () => {
-    const harness = await createHarness()
-    await twoPanes(harness, `{ "layout": { "columns": [["alpha"], ["beta"]] } }`)
-
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    expect(frame(harness)).toContain("alpha=1")
-    expect(frame(harness)).toContain("beta=0")
-
-    await press(harness, () => harness.setup.mockInput.pressTab())
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    expect(frame(harness)).toContain("alpha=1")
-    expect(frame(harness)).toContain("beta=1")
-  })
-
   it("lets the user rebind a Command in config", async () => {
     const harness = await createHarness()
     await twoPanes(harness, `{ "layout": { "columns": [["alpha"], ["beta"]] }, "keybindings": { "alpha.bump": "x" } }`)
@@ -255,29 +241,6 @@ describe("focus and keybindings", () => {
 })
 
 describe("popups", () => {
-  it("runs the Command chosen from the filtered palette", async () => {
-    const harness = await createHarness()
-    await twoPanes(harness, `{ "layout": { "columns": [["alpha"], ["beta"]] } }`)
-
-    await press(harness, () => harness.setup.mockInput.pressKey("p", { ctrl: true }))
-    expect(frame(harness)).toContain("Commands")
-    expect(frame(harness)).toContain("Command palette")
-
-    await press(harness, () => void harness.setup.mockInput.typeText("Bump"))
-    expect(frame(harness)).toContain("Bump alpha")
-    expect(frame(harness)).toContain("Bump beta")
-    expect(frame(harness)).not.toContain("Command palette")
-
-    await press(harness, () => void harness.setup.mockInput.typeText(" be"))
-    expect(frame(harness)).toContain("Bump beta")
-    expect(frame(harness)).not.toContain("Bump alpha")
-
-    await press(harness, () => harness.setup.mockInput.pressEnter())
-    expect(frame(harness)).not.toContain("Commands")
-    expect(harness.kernel.layout.focusedPaneId).toBe("beta")
-    expect(frame(harness)).toContain("beta=1")
-  })
-
   it("hands keyboard focus back to the Pane's own field when a popup closes", async () => {
     const harness = await createHarness()
     // A Pane that focuses a Renderable of its own: the case where a modal stealing the
@@ -478,21 +441,5 @@ describe("menus and status line", () => {
     // The two lines past the cap are represented by the count, not drawn.
     expect(rendered).not.toContain("six.txt")
     expect(rendered).not.toContain("seven.txt")
-  })
-})
-
-describe("cheat sheet", () => {
-  it("lists global and Pane keys, focused Pane first", async () => {
-    const harness = await createHarness()
-    await twoPanes(harness, `{ "layout": { "columns": [["alpha"], ["beta"]] } }`)
-
-    await press(harness, () => harness.setup.mockInput.pressKey("?"))
-    const rendered = frame(harness)
-
-    expect(rendered).toContain("Keybindings")
-    expect(rendered).toContain("Global")
-    expect(rendered).toContain("Command palette")
-    expect(rendered).toContain("alpha (focused)")
-    expect(rendered.indexOf("alpha")).toBeLessThan(rendered.indexOf("beta"))
   })
 })

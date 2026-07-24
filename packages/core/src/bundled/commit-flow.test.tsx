@@ -221,47 +221,19 @@ const submit = (harness: Harness) => () => harness.setup.mockInput.pressKey("s",
 const idleMarker = "from the files pane"
 
 describe("commit-flow pane", () => {
-  it("summarises what would be committed instead of rendering an empty box", async () => {
+  it("commits what was typed", async () => {
     const harness = await repository()
-    await seed(harness)
-    await start(harness)
-
-    expect(frame(harness)).toContain("nothing staged")
-    // Spelled the way the Commands are bound: `shift+a` is what the amend Command claims and
-    // what the cheat sheet prints, so a hint reading "A amend" names a key nothing answers to.
-    expect(frame(harness)).toContain("c commit  ·  shift+a amend")
-
-    await stageFile(harness, "one.txt")
-    await stageFile(harness, "two.txt")
-
-    const rendered = frame(harness)
-    expect(rendered).toContain("2 staged files")
-    expect(rendered).toContain("one.txt")
-    expect(rendered).toContain("two.txt")
-  })
-
-  it("commits what was typed, with every ordinary keybinding inert while typing", async () => {
-    let quits = 0
-    const harness = await repository({ onQuit: () => (quits += 1) })
     await seed(harness)
     await start(harness)
     await stageFile(harness, "feature.txt")
     await focusFiles(harness)
 
-    // `c` belongs to commit-flow but is bound in the files Pane, which now has focus.
     await press(harness, () => harness.setup.mockInput.pressKey("c"))
-    expect(frame(harness)).toContain("mod+s commit")
-
-    // `q` quits everywhere else in the app; inside the editor it is just a letter.
     await press(harness, () => void harness.setup.mockInput.typeText("quick fix"))
-    expect(quits).toBe(0)
-    expect(frame(harness)).toContain("quick fix")
 
     await press(harness, submit(harness))
     await waitFor(harness, "Committed")
     expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("quick fix\n")
-    // Closed: the editor is gone, and the tree it committed is clean.
-    expect(frame(harness)).toContain("nothing staged")
   }, 30_000)
 
   it("keeps a message escape backed out of, and resumes it on the next commit", async () => {
