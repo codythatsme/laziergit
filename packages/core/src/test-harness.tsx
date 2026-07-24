@@ -9,6 +9,7 @@ import { act } from "react"
 import * as laziergitRuntime from "laziergit"
 
 import { App } from "./app"
+import type { ClipboardWriterSpec } from "./extension/context"
 import { ExtensionKernel } from "./extension/kernel"
 import type { UiSlotRegistry } from "./ui/slots"
 
@@ -75,6 +76,7 @@ export interface HarnessOptions {
   readonly width?: number
   readonly height?: number
   readonly onQuit?: () => void
+  readonly clipboardWriters?: readonly ClipboardWriterSpec[]
   /**
    * Initialise the harness directory as a git repository with one commit. Off by default:
    * a harness without one exercises the degraded path, where the store serves the empty
@@ -89,23 +91,33 @@ export interface HarnessOptions {
  * which the reload fixture asserts is empty.
  */
 async function initRepository(directory: string): Promise<void> {
-  const child = Bun.spawn(["git", "-c", "init.defaultBranch=main", "init", "--quiet"], {
-    cwd: directory,
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_SYSTEM: "/dev/null",
-      GIT_AUTHOR_NAME: "Test",
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "Test",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-    },
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const exitCode = await child.exited
-  if (exitCode !== 0) throw new Error(`git init exited ${exitCode}`)
+  const env = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_AUTHOR_NAME: "Test",
+    GIT_AUTHOR_EMAIL: "test@example.com",
+    GIT_COMMITTER_NAME: "Test",
+    GIT_COMMITTER_EMAIL: "test@example.com",
+  }
+  const commands = [
+    ["-c", "init.defaultBranch=main", "init", "--quiet"],
+    ["config", "user.name", "Test"],
+    ["config", "user.email", "test@example.com"],
+    ["config", "core.autocrlf", "false"],
+  ] as const
+
+  for (const args of commands) {
+    const child = Bun.spawn(["git", ...args], {
+      cwd: directory,
+      env,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const exitCode = await child.exited
+    if (exitCode !== 0) throw new Error(`git ${args.join(" ")} exited ${exitCode}`)
+  }
 }
 
 const harnesses: Harness[] = []
@@ -171,6 +183,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     debounceMs: options.debounceMs,
     pollMs: options.pollMs ?? options.debounceMs,
     onQuit: options.onQuit,
+    clipboardWriters: options.clipboardWriters,
   })
   const harness: Harness = { directory, bundled, global, repo, configFiles, setup, kernel, root: null }
   harnesses.push(harness)

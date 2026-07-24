@@ -55,6 +55,9 @@ export async function createTestRepo(): Promise<TestRepo> {
   const path = await mkdtemp(join(tmpdir(), "laziergit-git-"))
   created.push(path)
   await run(path, ["-c", "init.defaultBranch=main", "init", "--quiet"])
+  await run(path, ["config", "user.name", "Test"])
+  await run(path, ["config", "user.email", "test@example.com"])
+  await run(path, ["config", "core.autocrlf", "false"])
 
   const repo: TestRepo = {
     path,

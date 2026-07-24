@@ -31,7 +31,7 @@ import { SlotOwners, type UiSlotRegistry, type UiSlots } from "../ui/slots"
 import { StatuslineHost } from "../ui/statusline-host"
 import { ActivationScope } from "./activation-scope"
 import { CommandHost, type CommandEntry } from "./command-host"
-import { createExtensionContext, type ContextHosts, type ExtensionApiLookup } from "./context"
+import { createExtensionContext, type ClipboardWriterSpec, type ContextHosts, type ExtensionApiLookup } from "./context"
 import { Diagnostics, normalizeError, type DiagnosticPhase } from "./diagnostics"
 import {
   discoverExtensions,
@@ -92,6 +92,8 @@ export interface ExtensionKernelOptions {
   readonly pollMs?: number
   /** Invoked by the `app.quit` Command; the process owner decides what quitting means. */
   readonly onQuit?: () => void
+  /** Overrides the platform clipboard cascade; useful to embedders with their own writer. */
+  readonly clipboardWriters?: readonly ClipboardWriterSpec[]
 }
 
 interface InternalRuntime {
@@ -177,6 +179,7 @@ export class ExtensionKernel {
   readonly git: GitService
   readonly runtime: InternalRuntime
   readonly #repoRoot: string
+  readonly #clipboardWriters: readonly ClipboardWriterSpec[] | undefined
   readonly #directories: ExtensionDirectories
   /** Every Extension directory in precedence order; the search path, in one place. */
   readonly #searchPath: readonly string[]
@@ -223,6 +226,7 @@ export class ExtensionKernel {
     this.#pollMs = options.pollMs ?? 250
     this.#renderer = options.renderer
     this.#onQuit = options.onQuit
+    this.#clipboardWriters = options.clipboardWriters
 
     this.registry = createReactSlotRegistry<UiSlots, PluginContext>(options.renderer, {})
     this.#disposeSlotErrors = this.#slotOwners.watch(this.registry, this.diagnostics)
@@ -801,6 +805,7 @@ export class ExtensionKernel {
       statusline: this.statusline,
       git: this.git,
       notifier: this.#notifier,
+      clipboardWriters: this.#clipboardWriters,
       getExtensionApi: (name) => this.getExtensionApi(name),
     }
 
