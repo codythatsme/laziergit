@@ -355,24 +355,28 @@ export function useListCursor<T>({ items, idPrefix, noun }: ListCursorOptions<T>
     if (node) revealRow(node, index)
   }, [requested, index])
 
+  // Each motion binds the vim key and the arrow/nav key that means the same thing, so muscle
+  // memory from either reaches the same Command. A user rebinding one of these in config
+  // replaces the whole list for that Command (config keys win outright, §1.7), which is the
+  // escape hatch for anyone who wants only one of the two.
   useCommand({
     id: `${idPrefix}.cursor.down`,
     title: `Next ${noun}`,
-    keys: "j",
+    keys: ["j", "down"],
     hidden: true,
     run: () => setRequested(Math.min(index + 1, Math.max(last, 0))),
   })
   useCommand({
     id: `${idPrefix}.cursor.up`,
     title: `Previous ${noun}`,
-    keys: "k",
+    keys: ["k", "up"],
     hidden: true,
     run: () => setRequested(Math.max(index - 1, 0)),
   })
   useCommand({
     id: `${idPrefix}.cursor.first`,
     title: `First ${noun}`,
-    keys: "g",
+    keys: ["g", "home"],
     hidden: true,
     run: () => setRequested(0),
   })
@@ -381,7 +385,7 @@ export function useListCursor<T>({ items, idPrefix, noun }: ListCursorOptions<T>
     title: `Last ${noun}`,
     // `shift+g`, not `G`: the binding parser lowercases a bare letter, so `"G"` would bind
     // the same stroke as the `g` above and one of them would silently never fire (§1.1).
-    keys: "shift+g",
+    keys: ["shift+g", "end"],
     hidden: true,
     run: () => setRequested(Math.max(last, 0)),
   })

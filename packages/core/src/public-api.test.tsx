@@ -200,6 +200,27 @@ describe("useListCursor", () => {
     expect(frame(harness)).toContain("cursor=0 selected=one")
   })
 
+  it("walks the same list with the arrow keys and home/end", async () => {
+    const harness = await createHarness()
+    await withExtensions(harness, { "rows.tsx": rowsSource })
+
+    // Bound alongside j/k/g/G so a user reaching for arrows — the reflex a lazygit user
+    // brings — moves the same cursor rather than pressing keys nothing answers to.
+    expect(frame(harness)).toContain("cursor=0 selected=one")
+
+    await press(harness, () => harness.setup.mockInput.pressArrow("down"))
+    expect(frame(harness)).toContain("cursor=1 selected=two")
+
+    await press(harness, () => harness.setup.mockInput.pressArrow("up"))
+    expect(frame(harness)).toContain("cursor=0 selected=one")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("END"))
+    expect(frame(harness)).toContain("cursor=2 selected=three")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("HOME"))
+    expect(frame(harness)).toContain("cursor=0 selected=one")
+  })
+
   it("clamps to a shrinking list without resurrecting the old position", async () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource })

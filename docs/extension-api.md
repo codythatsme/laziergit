@@ -1077,9 +1077,10 @@ tagged with the extension name, and routed to the log file / debug pane.
   export function useKeyCapture(active: boolean): void;
 
   /**
-   * Cursor state for a list pane, with `j` / `k` / `g` / `G` registered as
-   * hidden pane-scoped commands. What every list pane needs and none of them
-   * should write twice (§5.11):
+   * Cursor state for a list pane, with `j`/`k`/`g`/`G` — and their `down` /
+   * `up` / `home` / `end` twins — registered as hidden pane-scoped commands, so
+   * vim and arrow-key muscle memory both reach the same motion. What every list
+   * pane needs and none of them should write twice (§5.11):
    *
    * ```tsx
    * const cursor = useListCursor({ items: files, idPrefix: "files", noun: "file" });
