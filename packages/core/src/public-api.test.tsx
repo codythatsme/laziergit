@@ -1,6 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { delimiter, join } from "node:path"
 import { act } from "react"
 
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "./test-harness"
@@ -157,7 +157,7 @@ async function press(harness: Harness, action: () => void): Promise<void> {
  * after the keypress does, and a fixed sleep would be flaky or slow. Times out quietly, so
  * the test's own `expect` reports the failure with its own message and its own frame.
  */
-async function waitForFrame(harness: Harness, text: string, timeoutMs = 5_000): Promise<void> {
+async function waitForFrame(harness: Harness, text: string, timeoutMs = 4_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     await settle(harness)
@@ -360,7 +360,9 @@ describe("PaneHandle", () => {
  * what it decides: an Extension that wants to copy an oid must not have to know that
  * macOS spells it `pbcopy` and a Wayland session spells it `wl-copy`.
  */
-const clipboardCommand = process.platform === "darwin" ? "pbcopy" : process.platform === "win32" ? "clip" : "wl-copy"
+const clipboardCommands: readonly [string, ...string[]] =
+  process.platform === "darwin" ? ["pbcopy"] : process.platform === "win32" ? ["clip"] : ["wl-copy", "xclip", "xsel"]
+const [clipboardCommand] = clipboardCommands
 
 const copySource = `
   import { defineExtension } from "laziergit"
@@ -397,7 +399,7 @@ describe("ctx.copy", () => {
     await writeFile(join(bin, clipboardCommand), `#!/bin/sh\ncat > ${JSON.stringify(received)}\n`, { mode: 0o755 })
 
     const path = process.env.PATH ?? ""
-    process.env.PATH = `${bin}:${path}`
+    process.env.PATH = `${bin}${delimiter}${path}`
     try {
       await withExtensions(harness, { "copier.tsx": copySource })
       await press(harness, () => harness.setup.mockInput.pressKey("y"))
@@ -414,11 +416,16 @@ describe("ctx.copy", () => {
     const harness = await createHarness()
     const bin = join(harness.directory, "bin")
     await mkdir(bin, { recursive: true })
-    await writeFile(join(bin, clipboardCommand), `#!/bin/sh\necho "no display" >&2\nexit 1\n`, { mode: 0o755 })
+    await Promise.all(
+      clipboardCommands.map((command) =>
+        writeFile(join(bin, command), `#!/bin/sh\necho "no display" >&2\nexit 1\n`, { mode: 0o755 }),
+      ),
+    )
 
     const path = process.env.PATH ?? ""
-    // Only the stand-in, so a real tool further down PATH cannot rescue the failing one.
-    process.env.PATH = bin
+    // Stand-ins for every fallback prevent a real tool further down PATH from rescuing the
+    // failing writer, while preserving PATH for test files running alongside this one.
+    process.env.PATH = `${bin}${delimiter}${path}`
     try {
       await withExtensions(harness, { "copier.tsx": copySource })
       await press(harness, () => harness.setup.mockInput.pressKey("y"))
@@ -446,7 +453,7 @@ describe("ctx.copy", () => {
     const path = process.env.PATH ?? ""
     // The stand-in first, and the rest of PATH behind it: the script needs `cat` and `sleep`
     // to be findable, and being first is already what shadows the machine's real tool.
-    process.env.PATH = `${bin}:${path}`
+    process.env.PATH = `${bin}${delimiter}${path}`
     try {
       await withExtensions(harness, { "copier.tsx": copySource })
       await press(harness, () => harness.setup.mockInput.pressKey("y"))
