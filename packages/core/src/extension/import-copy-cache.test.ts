@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { discoverExtensions, type ExtensionCandidate } from "./discovery"
+import { discoverExtensions, importCopyContainerName, type ExtensionCandidate } from "./discovery"
 import { ImportCopyCache, type ImportCopyCacheDiagnostic } from "./import-copy-cache"
 
 const temporaryRoots: string[] = []
@@ -62,6 +62,9 @@ describe("ImportCopyCache leases", () => {
     const lease = await cache.acquire(await candidateNamed(extensions, "lone.ts"), 1)
 
     expect(cache.activeLeaseCount).toBe(1)
+    // Inside the container, never beside the Extension: an Extension directory is somebody
+    // else's tree, and `extensions/*` is a Bun workspace glob in this repository.
+    expect(dirname(lease.rootPath)).toBe(join(extensions, importCopyContainerName))
     expect((await fs.readdir(lease.rootPath)).sort()).toEqual(["lone.ts", "node_modules"].sort())
     expect(await pathExists(join(lease.rootPath, "helper.ts"))).toBe(false)
     expect(await pathExists(lease.rootPath)).toBe(true)
@@ -175,7 +178,9 @@ describe("ImportCopyCache leases", () => {
     expect(cache.activeLeaseCount).toBe(0)
     expect(diagnostics).toEqual([expect.objectContaining({ phase: "cache", error: cleanupError })])
     await cache.releaseAll()
-    expect((await fs.readdir(extensions)).filter((name) => name.startsWith(".laziergit-cache-"))).toEqual([])
+    // Nothing of laziergit's is left in the Extension directory — not the failed copy, and
+    // not the container it was written into.
+    expect(await fs.readdir(extensions)).toEqual(["broken.ts"])
   })
 
   it("uses junctions for every directory overlay on Windows", async () => {
@@ -206,17 +211,19 @@ describe("ImportCopyCache leases", () => {
 describe("ImportCopyCache startup sweep", () => {
   it("deletes only recognized directories whose embedded PID is confirmed dead", async () => {
     const root = await createTemporaryRoot()
+    const container = join(root, importCopyContainerName)
+    await fs.mkdir(container)
     const names = {
-      dead: ".laziergit-cache-410001-1-1000-dead",
-      live: ".laziergit-cache-410002-1-1000-live",
-      uncertain: ".laziergit-cache-410003-1-1000-uncertain",
-      eperm: ".laziergit-cache-410004-1-1000-eperm",
-      current: `.laziergit-cache-${process.pid}-1-1000-current`,
-      malformed: ".laziergit-cache-not-a-pid-1-1000-malformed",
+      dead: "410001-1-1000-dead",
+      live: "410002-1-1000-live",
+      uncertain: "410003-1-1000-uncertain",
+      eperm: "410004-1-1000-eperm",
+      current: `${process.pid}-1-1000-current`,
+      malformed: "not-a-pid-1-1000-malformed",
     }
-    await Promise.all(Object.values(names).map((name) => fs.mkdir(join(root, name))))
-    const recognizedFile = ".laziergit-cache-410001-1-1000-file"
-    await fs.writeFile(join(root, recognizedFile), "keep")
+    await Promise.all(Object.values(names).map((name) => fs.mkdir(join(container, name))))
+    const recognizedFile = "410001-1-1000-file"
+    await fs.writeFile(join(container, recognizedFile), "keep")
 
     const cache = new ImportCopyCache({
       directories: [root],
@@ -228,7 +235,7 @@ describe("ImportCopyCache startup sweep", () => {
     })
     await cache.sweepStale()
 
-    expect((await fs.readdir(root)).sort()).toEqual(
+    expect((await fs.readdir(container)).sort()).toEqual(
       [names.live, names.uncertain, names.eperm, names.current, names.malformed, recognizedFile].sort(),
     )
   })

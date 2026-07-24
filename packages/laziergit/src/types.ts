@@ -78,6 +78,7 @@ export interface ExtensionContext<
   readonly signal: AbortSignal
   exec(command: string, args?: readonly string[], options?: ExecOptions): Promise<ExecOutput>
   open(url: string): Promise<void>
+  copy(text: string): Promise<void>
   onDispose(fn: () => void | Promise<void>): void
 }
 
@@ -146,16 +147,42 @@ export interface GitState {
   readonly stash: readonly StashEntry[]
 }
 
-export interface Head {
-  readonly oid: string
-  readonly branch: string | null
-  readonly detached: boolean
-  readonly upstream: UpstreamInfo | null
-}
+/**
+ * Where HEAD points, as the three shapes git can actually produce.
+ *
+ * A union rather than four independent fields because the fields are not independent: an
+ * unborn HEAD has no commit to name, a detached one has no branch and therefore no
+ * upstream, and only a branch with a commit behind it can have both. Reading an oid off a
+ * repository with no commits, or an upstream off a detached HEAD, is now a type error
+ * rather than a `""`.
+ */
+export type Head =
+  /**
+   * `git init` with nothing committed: HEAD is a symbolic ref to a branch that does not
+   * exist yet. Outside a repository the empty snapshot is this variant with `branch: ""`,
+   * which no real branch can be called.
+   */
+  | { readonly kind: "unborn"; readonly branch: string }
+  /** HEAD is a raw commit, so there is no branch to carry an upstream. */
+  | { readonly kind: "detached"; readonly oid: string }
+  | {
+      readonly kind: "onBranch"
+      readonly oid: string
+      readonly branch: string
+      /** The upstream of {@link branch} — the very object that branch's row carries. */
+      readonly upstream: UpstreamInfo | null
+    }
 
 export interface UpstreamInfo {
   readonly remote: string
+  /** Branch name on the remote, without its `refs/heads/` prefix. */
   readonly branch: string
+  /**
+   * The upstream ref no longer exists on the remote. Git reports `gone` *instead of* a
+   * divergence, so {@link ahead} and {@link behind} are both 0 here and mean nothing —
+   * this flag is the only thing separating a deleted upstream from an in-sync one.
+   */
+  readonly gone: boolean
   readonly ahead: number
   readonly behind: number
 }
@@ -302,6 +329,14 @@ export interface CommandSpec<TName extends string = string> {
   keys?: KeySpec | readonly KeySpec[]
   pane?: string
   hidden?: boolean
+  /**
+   * Keep this Command's keys live while its Pane is capturing raw input
+   * ({@link useKeyCapture}) — the exit keys of a Pane that owns the keyboard, `mod+s` to
+   * submit and `escape` to cancel. Capture is a property of a Pane's keyboard, so this is
+   * ignored (with a logged diagnostic) on a Command with no `pane`; inside a Pane
+   * component {@link useCommand} supplies the Pane for you.
+   */
+  capture?: boolean
   run(): void | Promise<void>
 }
 
@@ -330,6 +365,7 @@ export interface PaneSpec<TName extends string = string> {
 
 export interface PaneHandle extends Disposable {
   focus(): void
+  reveal(): void
 }
 
 export interface PaneRegistry<TName extends string = string> {
@@ -462,19 +498,32 @@ export type FilesApi = RowSource<FileChange>
 export type CommitsApi = RowSource<Commit>
 export type StashApi = RowSource<StashEntry>
 
-export interface DiffTarget {
-  readonly kind: "workingTree" | "staged" | "commit" | "stash"
-  readonly ref: string | null
-  readonly path: string | null
-}
+/**
+ * What the diff Pane is showing, as the two shapes that differ in whether they name a ref.
+ *
+ * A union rather than a flat record with a nullable `ref`, because `{ kind: "commit", ref:
+ * null }` was representable and meant nothing: the diff Pane had to carry a runtime branch
+ * for a state no caller could sensibly build. `path` narrows any of them to one file.
+ */
+export type DiffTarget =
+  | { readonly kind: "workingTree" | "staged"; readonly path: string | null }
+  | { readonly kind: "commit" | "stash"; readonly ref: string; readonly path: string | null }
 
 export interface DiffApi {
   current(): DiffTarget | null
-  show(target: DiffTarget): void
+  /**
+   * Point the diff Pane at a target, or at `null` to say there is nothing to show — a list
+   * Pane whose rows just went away needs the second as much as the first, and `current()`
+   * could already return it.
+   */
+  show(target: DiffTarget | null): void
 }
 
+/** How a commit flow ended, for a caller that composed the message it handed over. */
+export type CommitFlowResult = "committed" | "abandoned"
+
 export interface CommitFlowApi {
-  begin(opts?: { message?: string; amend?: boolean }): Promise<void>
+  begin(opts?: { message?: string; amend?: boolean; signoff?: boolean }): Promise<CommitFlowResult>
 }
 
 export interface GitService {

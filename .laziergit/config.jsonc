@@ -1,0 +1,17 @@
+{
+  // laziergit's own Layout, for developing laziergit. Column 0 is the repository in reading
+  // order — where you are, what you changed, where you could go, what you did, what you set
+  // aside. The wide column is the one thing you actually read: the diff, with the commit
+  // message editor tabbed behind it (`[` / `]`), because you are never reading a diff and
+  // typing a message in the same instant.
+  "layout": {
+    "columns": [
+      ["status", "files", "branches", "commits", "stash"],
+      { "weight": 2, "cells": [["diff", "commit-flow"]] },
+    ],
+    // The status Pane reads first and is the last one you want the keyboard in — it has no
+    // rows to walk. Starting on `files` also gives the diff Pane something to draw.
+    "focus": "files",
+  },
+  "git": { "refreshIntervalMs": 2000, "commitLimit": 200 },
+}

@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test"
-import { mkdir, readdir, writeFile } from "node:fs/promises"
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { act } from "react"
 import { StaleContextError, type ExtensionContext, type PaneHandle } from "laziergit"
 
 import { createHarness, installHarnessLifecycle, renderApp, type Harness } from "../test-harness"
+import { importCopyContainerName } from "./discovery"
 
 installHarnessLifecycle()
 
@@ -21,6 +22,7 @@ afterEach(() => {
   delete globals.__laziergitVoidObserved
   delete globals.__laziergitWatcherActivations
   delete globals.__laziergitThemeMounts
+  delete globals.__laziergitLayeredScope
 })
 
 function testGlobals() {
@@ -36,15 +38,18 @@ function testGlobals() {
     __laziergitVoidObserved?: boolean
     __laziergitWatcherActivations?: number
     __laziergitThemeMounts?: number
+    __laziergitLayeredScope?: string
   }
 }
 
+/** Live import copies, which live in each Extension directory's cache container. */
 async function cacheNames(harness: Harness): Promise<readonly string[]> {
-  const names = await Promise.all([readdir(harness.global), readdir(harness.repo)])
-  return names
-    .flat()
-    .filter((name) => name.startsWith(".laziergit-cache-"))
-    .sort()
+  const names = await Promise.all(
+    [harness.bundled, harness.global, harness.repo].map((directory) =>
+      readdir(join(directory, importCopyContainerName)).catch(() => []),
+    ),
+  )
+  return names.flat().sort()
 }
 
 async function runFixture(path: string, cwd: string, timeoutMs = 5_000): Promise<{ stdout: string; stderr: string }> {
@@ -511,6 +516,69 @@ describe("Extension discovery and import boundary", () => {
     expect(await cacheNames(harness)).toHaveLength(2)
   })
 
+  it("activates bundled Extensions and lets global, then repo, shadow them", async () => {
+    const harness = await createHarness()
+    const source = (scope: string) => `
+      import { defineExtension } from "laziergit"
+      export default defineExtension({
+        name: "layered",
+        activate() { ;(globalThis as any).__laziergitLayeredScope = "${scope}" },
+      })
+    `
+    const shadowed = () =>
+      harness.kernel
+        .getSnapshot()
+        .filter((entry) => entry.state === "shadowed")
+        .map((entry) => `${entry.scope}: ${entry.message}`)
+
+    await writeFile(join(harness.bundled, "layered.ts"), source("bundled"))
+    await harness.kernel.start()
+
+    expect(testGlobals().__laziergitLayeredScope).toBe("bundled")
+    expect(harness.kernel.getSnapshot()).toEqual([
+      expect.objectContaining({ name: "layered", scope: "bundled", state: "active" }),
+    ])
+
+    await writeFile(join(harness.global, "layered.ts"), source("global"))
+    await harness.kernel.reload()
+
+    expect(testGlobals().__laziergitLayeredScope).toBe("global")
+    expect(shadowed()).toEqual([`bundled: Shadowed by global extension "layered"`])
+
+    await writeFile(join(harness.repo, "layered.ts"), source("repo"))
+    await harness.kernel.reload()
+
+    expect(testGlobals().__laziergitLayeredScope).toBe("repo")
+    expect(shadowed()).toEqual([
+      `bundled: Shadowed by repo extension "layered"`,
+      `global: Shadowed by repo extension "layered"`,
+    ])
+    // One live import copy: the two shadowed candidates released theirs.
+    expect(await cacheNames(harness)).toHaveLength(1)
+  })
+
+  it("never creates the bundled directory, which belongs to the installation", async () => {
+    const harness = await createHarness()
+    await rm(harness.bundled, { recursive: true })
+    await writeFile(
+      join(harness.repo, "solo.ts"),
+      `
+        import { defineExtension } from "laziergit"
+        export default defineExtension({ name: "solo", activate() {} })
+      `,
+    )
+
+    await harness.kernel.start()
+
+    expect(
+      await stat(harness.bundled).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false)
+    expect(harness.kernel.getSnapshot()).toEqual([expect.objectContaining({ name: "solo", state: "active" })])
+  })
+
   it("rejects structurally valid objects that lack the shared brand", async () => {
     const harness = await createHarness()
     const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
@@ -548,7 +616,7 @@ describe("Extension discovery and import boundary", () => {
           async activate(ctx) {
             // The Effect face of the store, run through the only door core opens.
             const state = await ctx.effect.runPromise(ctx.effect.git.state)
-            return { branch: state.head.branch, clean: state.status.isClean }
+            return { head: state.head.kind, clean: state.status.isClean }
           },
         })
       `,
@@ -558,7 +626,7 @@ describe("Extension discovery and import boundary", () => {
     expect(harness.kernel.getSnapshot()).toEqual([expect.objectContaining({ name: "effect-user", state: "active" })])
     expect(harness.kernel.getExtensionApi("effect-user")).toEqual({
       state: "live",
-      api: { branch: null, clean: true },
+      api: { head: "unborn", clean: true },
     })
   })
 

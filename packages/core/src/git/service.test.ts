@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "bun:test"
 import { chmod, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { GitError, type GitState } from "laziergit"
+import { GitError, type GitState, type Head } from "laziergit"
 
 import { defaultGitConfig } from "../config/config"
 import { ActivationScope } from "../extension/activation-scope"
@@ -44,15 +44,23 @@ function state(service: GitService): GitState {
   return service.getSnapshot()
 }
 
+/**
+ * Narrows HEAD to the branch-with-commits variant, so a test asserting on an oid or an
+ * upstream fails on the wrong variant instead of never compiling.
+ */
+function onBranch(head: Head): Extract<Head, { kind: "onBranch" }> {
+  if (head.kind !== "onBranch") throw new Error(`Expected HEAD on a branch, got "${head.kind}"`)
+  return head
+}
+
 // ---- reads --------------------------------------------------------------------------
 
 it("loads head, branches, and history from a real repository", async () => {
   const repo = await createSeededRepo()
   const service = await open(repo.path)
 
-  expect(state(service).head.branch).toBe("main")
-  expect(state(service).head.detached).toBe(false)
-  expect(state(service).head.oid).toMatch(/^[0-9a-f]{40}$/)
+  expect(onBranch(state(service).head).branch).toBe("main")
+  expect(onBranch(state(service).head).oid).toMatch(/^[0-9a-f]{40}$/)
   expect(state(service).commits.map((commit) => commit.subject)).toEqual(["first commit"])
   expect(state(service).commits[0]?.parents).toEqual([])
   expect(state(service).commits[0]?.author).toEqual({ name: "Test", email: "test@example.com" })
@@ -68,7 +76,8 @@ it("reads a repository with no commits without failing on `git log`", async () =
   const service = await open(repo.path)
 
   // git reports `(initial)` where the oid would be, and `git log` exits 128 outright.
-  expect(state(service).head).toEqual({ oid: "", branch: "main", detached: false, upstream: null })
+  // HEAD is still symbolic here, which is why the unborn variant carries a branch name.
+  expect(state(service).head).toEqual({ kind: "unborn", branch: "main" })
   expect(state(service).commits).toEqual([])
   expect(state(service).status.untracked.map((file) => file.path)).toEqual(["untracked.txt"])
   expect(reports).toEqual([])
@@ -78,14 +87,13 @@ it("reports a detached HEAD even when a branch is literally named `(detached)`",
   const repo = await createSeededRepo()
   await repo.git("checkout", "--quiet", "--detach")
   const detached = await open(repo.path)
-  expect(state(detached).head.detached).toBe(true)
-  expect(state(detached).head.branch).toBeNull()
+  expect(state(detached).head).toEqual({ kind: "detached", oid: expect.stringMatching(/^[0-9a-f]{40}$/) })
   // No row is HEAD while detached, which is also how git marks it.
   expect(state(detached).branches.every((branch) => !branch.isHead)).toBe(true)
 
   await repo.git("checkout", "--quiet", "-b", "(detached)")
   const named = await open(repo.path)
-  expect(named.getSnapshot().head).toMatchObject({ branch: "(detached)", detached: false })
+  expect(named.getSnapshot().head).toMatchObject({ kind: "onBranch", branch: "(detached)" })
 })
 
 it("classifies staged, unstaged, untracked, and renamed paths", async () => {
@@ -149,10 +157,43 @@ it("tracks divergence from an upstream, and reports a branch with none as null",
 
   const service = await open(repo.path)
   const main = state(service).branches.find((branch) => branch.name === "main")
-  expect(main?.upstream).toEqual({ remote: "origin", branch: "main", ahead: 1, behind: 0 })
+  expect(main?.upstream).toEqual({ remote: "origin", branch: "main", gone: false, ahead: 1, behind: 0 })
   expect(state(service).branches.find((branch) => branch.name === "local-only")?.upstream).toBeNull()
   // HEAD's upstream is the same object the branch row carries, so the two can never disagree.
-  expect(state(service).head.upstream).toBe(state(service).branches.find((branch) => branch.isHead)?.upstream ?? null)
+  expect(onBranch(state(service).head).upstream).toBe(
+    state(service).branches.find((branch) => branch.isHead)?.upstream ?? null,
+  )
+})
+
+it("tells an unborn HEAD apart from the branch it used to be indistinguishable from", async () => {
+  const unborn = state(await open((await createTestRepo()).path)).head
+  const born = state(await open((await createSeededRepo()).path)).head
+
+  // Both are on `main`, and the old encoding said so identically — same shape, same
+  // `detached: false`, an oid of `""` that a consumer could still hand to git. The variant
+  // is now the difference, and there is no oid on the unborn one to misread.
+  expect(unborn).toEqual({ kind: "unborn", branch: "main" })
+  expect("oid" in unborn).toBe(false)
+  expect(born.kind).toBe("onBranch")
+  expect(onBranch(born).oid).toMatch(/^[0-9a-f]{40}$/)
+})
+
+it("tells an upstream deleted on the remote apart from one that is in sync", async () => {
+  const repo = await createSeededRepo()
+  await addOrigin(repo)
+  await repo.git("checkout", "--quiet", "-b", "feature")
+  await repo.git("push", "--quiet", "--set-upstream", "origin", "feature")
+  await repo.git("push", "--quiet", "origin", "--delete", "feature")
+  await repo.git("fetch", "--quiet", "--prune")
+
+  const service = await open(repo.path)
+  const upstreamOf = (name: string) => state(service).branches.find((branch) => branch.name === name)?.upstream
+
+  // git reports `gone` instead of a divergence, so both branches read as zero ahead and
+  // zero behind — `gone` is the entire difference between "the remote deleted this" and
+  // "nothing to do", which is the distinction a branches Pane most needs to draw.
+  expect(upstreamOf("feature")).toEqual({ remote: "origin", branch: "feature", gone: true, ahead: 0, behind: 0 })
+  expect(upstreamOf("main")).toEqual({ remote: "origin", branch: "main", gone: false, ahead: 0, behind: 0 })
 })
 
 it("resolves an annotated tag to its commit, and reads remotes and stashes", async () => {
@@ -165,7 +206,7 @@ it("resolves an annotated tag to its commit, and reads remotes and stashes", asy
   await repo.git("stash", "push", "--message", "work: in progress")
 
   const service = await open(repo.path)
-  const head = state(service).head.oid
+  const head = onBranch(state(service).head).oid
 
   // An annotated tag's own oid is the tag object; every consumer wants the commit.
   expect(state(service).tags).toEqual(
@@ -203,10 +244,10 @@ it("runs the branch and stash porcelain", async () => {
   const service = await open(repo.path)
 
   await service.createBranch("feature", { checkout: true })
-  expect(state(service).head.branch).toBe("feature")
+  expect(onBranch(state(service).head).branch).toBe("feature")
 
   await service.checkout("main")
-  expect(state(service).head.branch).toBe("main")
+  expect(onBranch(state(service).head).branch).toBe("main")
 
   await service.deleteBranch("feature")
   expect(state(service).branches.map((branch) => branch.name)).toEqual(["main"])
@@ -319,10 +360,16 @@ it("pushes to a remote and clears the divergence it reported", async () => {
   await repo.commit("ahead by one")
 
   const service = await open(repo.path)
-  expect(state(service).head.upstream?.ahead).toBe(1)
+  expect(onBranch(state(service).head).upstream?.ahead).toBe(1)
 
   await service.push()
-  expect(state(service).head.upstream).toEqual({ remote: "origin", branch: "main", ahead: 0, behind: 0 })
+  expect(onBranch(state(service).head).upstream).toEqual({
+    remote: "origin",
+    branch: "main",
+    gone: false,
+    ahead: 0,
+    behind: 0,
+  })
 })
 
 it("pushes a named ref to its own remote rather than to a remote of that name", async () => {
@@ -340,6 +387,7 @@ it("pushes a named ref to its own remote rather than to a remote of that name", 
   expect(state(service).branches.find((branch) => branch.name === "feature")?.upstream).toEqual({
     remote: "origin",
     branch: "feature",
+    gone: false,
     ahead: 0,
     behind: 0,
   })
@@ -431,7 +479,9 @@ it("serves an empty snapshot outside a repository and fails writes with a clear 
   const service = await open(repo.path)
 
   expect(service.available).toBe(false)
-  expect(state(service).head).toEqual({ oid: "", branch: null, detached: false, upstream: null })
+  // Unborn with a nameless branch: the one variant that invents no object where there is
+  // not even a repository (see `emptyGitState`).
+  expect(state(service).head).toEqual({ kind: "unborn", branch: "" })
   expect(state(service).status.isClean).toBe(true)
   // Not diagnosed: running outside a repository is a supported mode, not a failure.
   expect(reports).toEqual([])
@@ -488,7 +538,7 @@ it("fires a selector subscription only on a change to the selected value", async
   const service = await open(repo.path)
   const branches: (string | null)[] = []
   const subscription = service.subscribeSelector(
-    (snapshot) => snapshot.head.branch,
+    (snapshot) => (snapshot.head.kind === "detached" ? null : snapshot.head.branch),
     (value) => branches.push(value),
   )
 
@@ -528,7 +578,7 @@ it("tracks a branch switch and a bare working-tree edit made outside laziergit",
   service.start()
 
   await repo.git("checkout", "--quiet", "-b", "elsewhere")
-  await waitFor(() => state(service).head.branch === "elsewhere", "the external checkout to appear")
+  await waitFor(() => onBranch(state(service).head).branch === "elsewhere", "the external checkout to appear")
 
   // Nothing under .git moves when a file is edited, so a refs-only fingerprint would
   // never notice this — the poll reads the working tree status too.
@@ -702,4 +752,57 @@ it("never runs git through a shell, so a hostile path is only ever a path", asyn
   expect(state(service).status.staged.map((file) => file.path)).toEqual([hostile])
   // argv arrays, never a shell string: the metacharacters were data the whole way down.
   expect(await Bun.file(`${repo.path}/pwned`).exists()).toBe(false)
+})
+
+/**
+ * The other half of the shell test above: git needs no shell to expand a name, because
+ * every path it takes is a *pathspec* and a pathspec is a glob. `foo[1].txt` matches
+ * `foo1.txt` too, and `--` does not change that.
+ */
+it("stages only the bracketed path it was given, not the neighbour that path globs to", async () => {
+  const repo = await createSeededRepo()
+  await repo.write("foo[1].txt", "bracket\n")
+  await repo.write("foo1.txt", "one\n")
+  await repo.git("add", "--", ":(literal)foo[1].txt", ":(literal)foo1.txt")
+  await repo.commit("both files")
+
+  const service = await open(repo.path)
+  await repo.write("foo[1].txt", "bracket edited\n")
+  await repo.write("foo1.txt", "one edited\n")
+  await service.refresh()
+
+  await service.stage(["foo[1].txt"])
+  expect(state(service).status.staged.map((file) => file.path)).toEqual(["foo[1].txt"])
+  expect(state(service).status.unstaged.map((file) => file.path)).toEqual(["foo1.txt"])
+
+  // Unstaging the same one path must leave the neighbour's staged state alone too.
+  await service.stage(["foo1.txt"])
+  await service.unstage(["foo[1].txt"])
+  expect(state(service).status.staged.map((file) => file.path)).toEqual(["foo1.txt"])
+})
+
+it("discards only the bracketed path it was given, and cleans only the file it named", async () => {
+  const repo = await createSeededRepo()
+  await repo.write("foo[1].txt", "bracket\n")
+  await repo.write("foo1.txt", "one\n")
+  await repo.git("add", "--", ":(literal)foo[1].txt", ":(literal)foo1.txt")
+  await repo.commit("both files")
+
+  const service = await open(repo.path)
+  await repo.write("foo[1].txt", "bracket edited\n")
+  await repo.write("foo1.txt", "one edited\n")
+  await repo.write("bar[1].txt", "bracket untracked\n")
+  await repo.write("bar1.txt", "one untracked\n")
+  await service.refresh()
+
+  // One tracked path and one untracked one, so both halves of `discard` are exercised:
+  // `git restore --worktree` on the first, `git clean -ffd` on the second.
+  await service.discard(["foo[1].txt", "bar[1].txt"])
+
+  // The neighbour's edits survive...
+  expect(await Bun.file(join(repo.path, "foo1.txt")).text()).toBe("one edited\n")
+  // ...and the untracked neighbour is still there. A confirm dialog named one file.
+  expect(await Bun.file(join(repo.path, "bar1.txt")).exists()).toBe(true)
+  expect(await Bun.file(join(repo.path, "foo[1].txt")).text()).toBe("bracket\n")
+  expect(await Bun.file(join(repo.path, "bar[1].txt")).exists()).toBe(false)
 })

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import type { ExtensionCandidate } from "./discovery"
+import { importCopyContainerName, type ExtensionCandidate } from "./discovery"
 
 export type ProcessState = "live" | "dead" | "unknown"
 export type ProcessStateProbe = (pid: number) => ProcessState
@@ -26,7 +26,8 @@ export interface ImportCopyLease {
   release(): Promise<void>
 }
 
-const CACHE_NAME = /^\.laziergit-cache-(\d+)-(\d+)-(\d+)-(.+)$/
+/** `<pid>-<generation>-<timestamp>-<sequence>-<extension>`, inside the cache container. */
+const CACHE_NAME = /^(\d+)-(\d+)-(\d+)-(.+)$/
 
 function normalizeError(error: unknown): Error {
   if (error instanceof Error) return error
@@ -166,11 +167,12 @@ export class ImportCopyCache {
 
   async sweepStale(): Promise<void> {
     for (const directory of this.#directories) {
+      const container = join(directory, importCopyContainerName)
       let entries
       try {
-        entries = await fs.readdir(directory, { withFileTypes: true })
+        entries = await fs.readdir(container, { withFileTypes: true })
       } catch (error) {
-        if (errorCode(error) !== "ENOENT") this.#report(`Failed to scan import-copy cache root ${directory}`, error)
+        if (errorCode(error) !== "ENOENT") this.#report(`Failed to scan import-copy cache root ${container}`, error)
         continue
       }
 
@@ -183,11 +185,11 @@ export class ImportCopyCache {
         try {
           state = this.#processState(pid)
         } catch (error) {
-          this.#report(`Failed to determine owner of import copy ${join(directory, entry.name)}`, error)
+          this.#report(`Failed to determine owner of import copy ${join(container, entry.name)}`, error)
         }
         if (state !== "dead") continue
 
-        const path = join(directory, entry.name)
+        const path = join(container, entry.name)
         try {
           await fs.rm(path, { recursive: true })
         } catch (error) {
@@ -206,6 +208,9 @@ export class ImportCopyCache {
     this.#ownedPaths.add(copyRoot)
 
     try {
+      // The container is created on demand rather than at startup, so an Extension directory
+      // nobody has loaded from stays exactly as its owner left it.
+      await fs.mkdir(dirname(copyRoot), { recursive: true })
       let entryPath: string
       if (candidate.rootPath === candidate.entryPath) {
         await fs.mkdir(copyRoot)
@@ -223,7 +228,7 @@ export class ImportCopyCache {
           filter: (sourcePath) => {
             if (sourcePath === candidate.sourceRootPath) return true
             const name = basename(sourcePath)
-            return name !== "node_modules" && !name.startsWith(".laziergit-cache-")
+            return name !== "node_modules" && !name.startsWith(importCopyContainerName)
           },
         })
         await createNodeModulesOverlay(copyRoot, candidate.sourceRootPath, this.#platform)
@@ -246,12 +251,31 @@ export class ImportCopyCache {
 
     const orphanedPaths = [...this.#ownedPaths].filter((path) => !leasePaths.has(path))
     await Promise.all(orphanedPaths.map((path) => this.#cleanupPath(path)))
+
+    // Best-effort, and only while empty: another laziergit may still be holding copies in
+    // the same container, and `rmdir` refusing a non-empty directory is how we ask.
+    await Promise.all(
+      this.#directories.map(async (directory) => {
+        try {
+          await fs.rmdir(join(directory, importCopyContainerName))
+        } catch {
+          // A container that is missing, in use, or unwritable is not an error to report.
+        }
+      }),
+    )
   }
 
+  /**
+   * Inside the Extension directory's cache container, not beside the Extension: a sibling
+   * copy is a directory the Extension directory's owner did not put there, and a package
+   * manager globbing `extensions/*` would read one as a second workspace of the same name.
+   * One level deeper costs nothing — module resolution still walks up to the same
+   * `node_modules` the original would have found.
+   */
   #copyRoot(candidate: ExtensionCandidate, generation: number): string {
     this.#sequence += 1
-    const name = `.laziergit-cache-${process.pid}-${generation}-${Date.now()}-${this.#sequence}-${basename(candidate.rootPath)}`
-    return join(dirname(candidate.rootPath), name)
+    const name = `${process.pid}-${generation}-${Date.now()}-${this.#sequence}-${basename(candidate.rootPath)}`
+    return join(dirname(candidate.rootPath), importCopyContainerName, name)
   }
 
   async #release(lease: ImportCopyLeaseImplementation): Promise<void> {

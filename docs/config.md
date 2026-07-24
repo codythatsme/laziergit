@@ -44,6 +44,7 @@ or whitespace — costs nothing: only the values are compared.
       ["status", "files", ["branches", "commits"]],
       { "weight": 2, "cells": ["diff"] },
     ],
+    "focus": "files",
   },
 }
 ```
@@ -52,12 +53,16 @@ or whitespace — costs nothing: only the values are compared.
   `weight` is that column's share of the screen width relative to the others (default `1`).
 - A **cell** is a Pane id (`"status"`), or an array of Pane ids that share the cell as tabs
   (`["branches", "commits"]` — one visible at a time, `[`/`]` cycles them).
-- Cells stack top to bottom and share their column's height.
+- Cells stack top to bottom and share their column's height, in equal shares.
+- `focus` is the Pane the keyboard starts in. Omit it and laziergit opens on the first cell
+  of the first column — which is the right place to *read* first and often the wrong place
+  to *work* first, since a summary Pane has no rows to walk.
 
-Ids nothing has registered are skipped. A Pane the Layout never mentions still appears —
-it lands wherever its Extension's `placement` hint asks (`column`, `order`, `tabWith`),
-which is the whole point of hints: config wins where it speaks, hints decide the rest.
-Omit `layout` entirely and every Pane is placed by its hint.
+Ids nothing has registered are skipped, `focus` included. A Pane the Layout never mentions
+still appears — it lands wherever its Extension's `placement` hint asks (`column`, `order`,
+`tabWith`), which is the whole point of hints: config wins where it speaks, hints decide the
+rest. Omit `columns` and every Pane is placed by its hint, which is why `{ "focus": "files" }`
+alone is a valid Layout. Omit `layout` entirely and both apply.
 
 ## `keybindings` — rebinding Commands
 

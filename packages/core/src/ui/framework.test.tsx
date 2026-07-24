@@ -127,6 +127,19 @@ const betaSource = `
   })
 `
 
+/** A LEFT status line segment — the half the bundled `status` Extension always occupies. */
+const leftSegmentSource = `
+  /** @jsxImportSource @opentui/react */
+  import { defineExtension } from "laziergit"
+
+  export default defineExtension({
+    name: "left",
+    activate(ctx) {
+      ctx.statusline.register({ id: "left", component: () => <text content="left-segment" />, align: "left" })
+    },
+  })
+`
+
 async function twoPanes(harness: Harness, config?: string): Promise<void> {
   await Promise.all([
     writeFile(join(harness.repo, "alpha.tsx"), alphaSource),
@@ -427,6 +440,44 @@ describe("menus and status line", () => {
     await twoPanes(harness, `{ "statusline": { "hidden": ["beta"] } }`)
 
     expect(frame(harness)).not.toContain("beta-segment")
+  })
+
+  it("keeps the key hint beside an Extension's own left segment", async () => {
+    const harness = await createHarness()
+    await writeFile(join(harness.repo, "left.tsx"), leftSegmentSource)
+    await renderApp(harness)
+
+    expect(frame(harness)).toContain("left-segment")
+    // The shipped app always has a left segment (the bundled `status` Extension), so a hint
+    // shown only in its absence is a hint nobody ever sees — and it is the only on-screen
+    // route to the palette, the cheat sheet, and the way out.
+    expect(frame(harness)).toContain("mod+p palette")
+  })
+
+  it("caps a many-line notification and says how many lines it dropped", async () => {
+    const harness = await createHarness()
+    await renderApp(harness)
+
+    // git's most useful refusals are multi-line — the header plus the file list — and every
+    // Bundled Extension passes GitError.stderr through verbatim, so the toast must keep the
+    // lines that name what went wrong, while an overlay that grew to forty lines would cover
+    // the screen. Eight lines in, six shown, the rest counted.
+    await act(async () => {
+      harness.kernel.notifications.publish({
+        extension: "sync",
+        message: "would be overwritten by merge:\none.txt\ntwo.txt\nthree.txt\nfour.txt\nfive.txt\nsix.txt\nseven.txt",
+        level: "error",
+      })
+    })
+    await settle(harness)
+
+    const rendered = frame(harness)
+    expect(rendered).toContain("would be overwritten by merge:")
+    expect(rendered).toContain("five.txt")
+    expect(rendered).toContain("… 2 more lines")
+    // The two lines past the cap are represented by the count, not drawn.
+    expect(rendered).not.toContain("six.txt")
+    expect(rendered).not.toContain("seven.txt")
   })
 })
 

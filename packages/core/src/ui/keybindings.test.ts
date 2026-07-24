@@ -5,8 +5,8 @@ import type { CommandEntry } from "../extension/command-host"
 import { Diagnostics } from "../extension/diagnostics"
 import { installKeymap, KeybindingHost } from "./keybindings"
 
-function entry(id: string, keys: readonly string[], pane?: string): CommandEntry {
-  return { id, owner: id.split(".")[0] ?? id, title: id, pane, hidden: false, keys }
+function entry(id: string, keys: readonly string[], pane?: string, capture = false): CommandEntry {
+  return { id, owner: id.split(".")[0] ?? id, title: id, pane, hidden: false, capture, keys }
 }
 
 function harness() {
@@ -86,6 +86,63 @@ it("goes inert while a modal owns the screen and comes back when it closes", asy
   test.host.press("q")
   await test.flush()
   expect(test.ran).toEqual(["app.quit"])
+  test.cleanup()
+})
+
+it("hands the whole keyboard to a capturing Pane, except to a popup", async () => {
+  const test = harness()
+  test.bindings.sync([
+    entry("app.quit", ["q"]),
+    entry("files.stage", ["s"], "files"),
+    entry("files.submit", ["ctrl+s"], "files", true),
+  ])
+  test.bindings.setFocusedPane("files")
+  await test.flush()
+
+  // The capture Command is inert until the Pane actually captures, so `capture: true` is
+  // not a way to smuggle a key past the Pane's own mode.
+  test.host.press("s", { ctrl: true })
+  await test.flush()
+  expect(test.ran).toEqual([])
+
+  test.bindings.setCapturingPane("files")
+  test.host.press("q")
+  test.host.press("s")
+  test.host.press("s", { ctrl: true })
+  await test.flush()
+  expect(test.ran).toEqual(["files.submit"])
+
+  // A popup opened mid-edit outranks the capture, exactly as it outranks a Pane layer.
+  test.bindings.setModalOpen(true)
+  test.host.press("s", { ctrl: true })
+  await test.flush()
+  expect(test.ran).toEqual(["files.submit"])
+
+  test.bindings.setModalOpen(false)
+  test.bindings.setCapturingPane(null)
+  test.host.press("q")
+  test.host.press("s")
+  await test.flush()
+  expect(test.ran).toEqual(["files.submit", "app.quit", "files.stage"])
+  test.cleanup()
+})
+
+it("stops enforcing a capture the moment its Pane loses focus", async () => {
+  const test = harness()
+  test.bindings.sync([entry("app.quit", ["q"]), entry("files.submit", ["ctrl+s"], "files", true)])
+  test.bindings.setFocusedPane("files")
+  test.bindings.setCapturingPane("files")
+  await test.flush()
+
+  // Nothing can leave a capturing Pane by keyboard, so this is the other door: an
+  // Extension focusing elsewhere must not leave a background Pane holding the keyboard.
+  test.bindings.setFocusedPane("branches")
+  test.host.press("s", { ctrl: true })
+  test.host.press("q")
+  await test.flush()
+
+  expect(test.ran).toEqual(["app.quit"])
+  expect(test.bindings.capturingPaneId).toBeNull()
   test.cleanup()
 })
 

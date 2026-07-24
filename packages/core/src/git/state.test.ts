@@ -7,6 +7,8 @@ function branch(name: string, oid: string): Branch {
   return { name, oid, isHead: false, upstream: null, lastCommit: { oid, subject: "s", authoredAt: 1 } }
 }
 
+const upstream = { remote: "origin", branch: "main", gone: false, ahead: 1, behind: 0 }
+
 function stateWith(overrides: Partial<GitState>): GitState {
   return { ...emptyGitState, ...overrides }
 }
@@ -65,21 +67,14 @@ it("keeps the untouched halves of the working tree status stable", () => {
 })
 
 it("never reuses a reference for a value that actually differs", () => {
-  const previous = stateWith({ head: { oid: "a", branch: "main", detached: false, upstream: null } })
+  const previous = stateWith({ head: { kind: "onBranch", oid: "a", branch: "main", upstream: null } })
   const reconciled = reconcileGitState(
     previous,
-    stateWith({
-      head: {
-        oid: "a",
-        branch: "main",
-        detached: false,
-        upstream: { remote: "origin", branch: "main", ahead: 1, behind: 0 },
-      },
-    }),
+    stateWith({ head: { kind: "onBranch", oid: "a", branch: "main", upstream } }),
   )
 
   expect(reconciled.head).not.toBe(previous.head)
-  expect(reconciled.head.upstream).toEqual({ remote: "origin", branch: "main", ahead: 1, behind: 0 })
+  expect(reconciled.head).toEqual({ kind: "onBranch", oid: "a", branch: "main", upstream })
 })
 
 it("publishes a shorter list as a change rather than reusing the longer one", () => {

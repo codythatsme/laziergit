@@ -116,8 +116,10 @@ export function buildConfigSchema(contributions: readonly SchemaContribution[]):
       layout: {
         type: "object",
         description: "Columns of Panes. Panes left out fall back to their Extension's placement hint.",
-        properties: { columns: { type: "array", items: columnSchema } },
-        required: ["columns"],
+        properties: {
+          columns: { type: "array", items: columnSchema },
+          focus: { type: "string", description: "Pane id to focus at startup; defaults to the first cell" },
+        },
         additionalProperties: false,
       },
       keybindings: {

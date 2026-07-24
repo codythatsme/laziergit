@@ -29,7 +29,7 @@ it("merges repo settings over global ones, replacing arrays and merging objects"
   )
 
   expect(loaded.problems).toEqual([])
-  expect(loaded.core.layout).toEqual({ columns: [{ weight: 1, cells: [["status"]] }] })
+  expect(loaded.core.layout).toEqual({ columns: [{ weight: 1, cells: [["status"]] }], focus: null })
   expect(loaded.core.keybindings.get("files.stage")).toEqual(["s"])
   expect(loaded.core.keybindings.get("sync.push")).toEqual([])
   expect(loaded.core.theme.accent).toBe("#111111")
@@ -58,6 +58,7 @@ it("reads both Layout column forms and tab groups", () => {
       { weight: 1, cells: [["status"], ["files", "stash"]] },
       { weight: 2, cells: [["diff"]] },
     ],
+    focus: null,
   })
 })
 
@@ -90,6 +91,7 @@ it("degrades every rejected value to its default and keeps the rest of the docum
       { weight: 1, cells: [["ok"]] },
       { weight: 1, cells: [["fine"]] },
     ],
+    focus: null,
   })
   expect(loaded.core.theme.accent).toBe("#222222")
   expect(loaded.core.statusline).toEqual({ left: [], right: [], hidden: new Set(["noisy"]) })
@@ -187,4 +189,33 @@ it("produces total defaults for an Extension with no config section", () => {
   const resolved = resolveExtensionConfig("branch-age", { days: option.number({ default: 30 }) }, undefined)
 
   expect(resolved).toEqual({ values: { days: 30 }, problems: [] })
+})
+
+it("reads the startup focus, and rejects one that is not a Pane id", () => {
+  const loaded = loadConfig(documents(null, `{ "layout": { "columns": [["status"], ["files"]], "focus": "files" } }`))
+
+  expect(loaded.problems).toEqual([])
+  expect(loaded.core.layout?.focus).toBe("files")
+
+  const rejected = loadConfig(documents(null, `{ "layout": { "columns": [["status"]], "focus": 3 } }`))
+  expect(rejected.problems.map((problem) => problem.path)).toEqual(["layout.focus"])
+  // Degraded by one setting, never by the whole section: the columns still apply.
+  expect(rejected.core.layout?.columns).toHaveLength(1)
+  expect(rejected.core.layout?.focus).toBeNull()
+})
+
+it("keeps a Layout that says only where to start, leaving placement to the hints", () => {
+  const loaded = loadConfig(documents(null, `{ "layout": { "focus": "files" } }`))
+
+  // Choosing the startup Pane must not cost you the whole Layout: with no `columns`, every
+  // Pane still lands on its Extension's hint and this only says which one opens focused.
+  expect(loaded.problems).toEqual([])
+  expect(loaded.core.layout).toEqual({ columns: [], focus: "files" })
+})
+
+it("still reports a columns value it cannot use", () => {
+  const loaded = loadConfig(documents(null, `{ "layout": { "columns": "left and right" } }`))
+
+  expect(loaded.problems.map((problem) => problem.path)).toEqual(["layout.columns"])
+  expect(loaded.core.layout).toBeNull()
 })

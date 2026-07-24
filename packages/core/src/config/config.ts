@@ -28,6 +28,15 @@ export interface LayoutColumn {
 
 export interface LayoutConfig {
   readonly columns: readonly LayoutColumn[]
+  /**
+   * The Pane focused when laziergit starts, or null to take the first cell.
+   *
+   * Reading order and working order are not the same question: the status Pane belongs at
+   * the top of the first column and is the last Pane you want the keyboard in, since it has
+   * no rows to walk. Without this the only way to start anywhere else is to press a key
+   * every launch.
+   */
+  readonly focus: string | null
 }
 
 export interface StatuslineConfig {
@@ -187,17 +196,24 @@ function readLayout(value: unknown, log: ProblemLog): LayoutConfig | null {
     log.reject("layout", "layout must be an object with a columns array")
     return null
   }
-  if (!Array.isArray(value.columns)) {
+  const columns: LayoutColumn[] = []
+  if (Array.isArray(value.columns)) {
+    for (const [index, rawColumn] of value.columns.entries()) {
+      const column = readLayoutColumn(rawColumn, `layout.columns[${index}]`, log)
+      if (column) columns.push(column)
+    }
+  } else if (value.columns !== undefined) {
     log.reject("layout.columns", "layout.columns must be an array of columns")
-    return null
   }
 
-  const columns: LayoutColumn[] = []
-  for (const [index, rawColumn] of value.columns.entries()) {
-    const column = readLayoutColumn(rawColumn, `layout.columns[${index}]`, log)
-    if (column) columns.push(column)
+  let focus: string | null = null
+  if (value.focus !== undefined) {
+    if (typeof value.focus === "string" && value.focus.trim().length > 0) focus = value.focus
+    else log.reject("layout.focus", "layout.focus must be the id of a Pane to start focused")
   }
-  return columns.length === 0 ? null : { columns }
+
+  // A `focus` on its own is still a Layout: hints place the Panes, this says where to start.
+  return columns.length === 0 && focus === null ? null : { columns, focus }
 }
 
 function readKeybindings(value: unknown, log: ProblemLog): ReadonlyMap<string, readonly string[]> {

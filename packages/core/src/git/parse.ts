@@ -1,4 +1,4 @@
-import type { Branch, ChangeKind, Commit, FileChange, Remote, StashEntry, Tag, UpstreamInfo } from "laziergit"
+import type { Branch, ChangeKind, Commit, FileChange, Head, Remote, StashEntry, Tag, UpstreamInfo } from "laziergit"
 
 /**
  * Porcelain readers. Every function here is pure: argv in one place, bytes to model in
@@ -51,8 +51,8 @@ function epochSecondsToMs(value: string): number {
 export const statusArgs = ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"] as const
 
 export interface ParsedStatus {
-  /** `# branch.oid`, or the empty string on an unborn HEAD (git reports `(initial)`). */
-  readonly oid: string
+  /** `# branch.oid`, or null on an unborn HEAD, where git reports `(initial)` instead. */
+  readonly oid: string | null
   readonly staged: readonly FileChange[]
   readonly unstaged: readonly FileChange[]
   readonly untracked: readonly FileChange[]
@@ -87,7 +87,7 @@ export function parseStatus(stdout: string): ParsedStatus {
   const unstaged: FileChange[] = []
   const untracked: FileChange[] = []
   const conflicted: FileChange[] = []
-  let oid = ""
+  let oid: string | null = null
 
   for (let cursor = 0; cursor < records.length; cursor += 1) {
     const record = records[cursor]
@@ -97,7 +97,7 @@ export function parseStatus(stdout: string): ParsedStatus {
       const value = record.slice("# branch.oid ".length)
       // A repository cannot hold an object named `(initial)`, so the sentinel is safe to
       // match — unlike `# branch.head (detached)`, which a branch may legally be named.
-      oid = value === "(initial)" ? "" : value
+      oid = value === "(initial)" ? null : value
       continue
     }
     if (record.startsWith("#")) continue
@@ -161,15 +161,36 @@ export function parseStatus(stdout: string): ParsedStatus {
  */
 export const symbolicRefArgs = ["symbolic-ref", "-q", "--short", "HEAD"] as const
 
-export interface ParsedHeadRef {
-  readonly branch: string | null
-  readonly detached: boolean
+/**
+ * The branch HEAD symbolically points at, or null when it points at a raw commit. Null
+ * *is* "detached" — a second boolean saying so would be the same fact twice, and two
+ * copies of one fact can disagree.
+ */
+export function parseHeadRef(stdout: string, exitCode: number): string | null {
+  const branch = stdout.trim()
+  return exitCode !== 0 || branch.length === 0 ? null : branch
 }
 
-export function parseHeadRef(stdout: string, exitCode: number): ParsedHeadRef {
-  const branch = stdout.trim()
-  if (exitCode !== 0 || branch.length === 0) return { branch: null, detached: true }
-  return { branch, detached: false }
+/**
+ * The one place a {@link Head} variant is decided, because deciding it needs all three
+ * reads: `symbolic-ref` says whether HEAD is a branch at all, status says whether that
+ * branch has a commit yet, and the branch rows already carry the upstream — HEAD's
+ * upstream is *the same object* its row holds, so the two can never disagree.
+ *
+ * Unborn is decided by the missing oid and detached by the missing branch. They cannot
+ * both hold: a detached HEAD *is* an oid, so it always has one. Should git ever report
+ * neither — only reachable from empty output — unborn wins, because it is the variant
+ * that claims the least and the one the empty store already serves.
+ */
+export function readHead(status: ParsedStatus, headBranch: string | null, branches: readonly Branch[]): Head {
+  if (status.oid === null) return { kind: "unborn", branch: headBranch ?? "" }
+  if (headBranch === null) return { kind: "detached", oid: status.oid }
+  return {
+    kind: "onBranch",
+    oid: status.oid,
+    branch: headBranch,
+    upstream: branches.find((candidate) => candidate.name === headBranch)?.upstream ?? null,
+  }
 }
 
 // ---- branches ---------------------------------------------------------------------
@@ -198,12 +219,13 @@ const behindPattern = /(?:^|, )behind (\d+)/
  * `,nobracket` strips the surrounding `[...]`, leaving `ahead 1`, `behind 2`,
  * `ahead 1, behind 2`, `gone`, or the empty string.
  *
- * A deleted upstream (`gone`) and an in-sync upstream both read as zero divergence.
- * That collapse is a limit of {@link UpstreamInfo}, which has no way to say "gone" —
- * recorded in docs/extension-api.md rather than papered over here.
+ * `gone` is reported *instead of* a divergence, never alongside one — git has no
+ * remote-tracking ref left to compare against — so the counts stay zero and the flag is
+ * the only thing that separates a deleted upstream from a perfectly in-sync one.
  */
-function readTrack(track: string): { readonly ahead: number; readonly behind: number } {
+function readTrack(track: string): { readonly gone: boolean; readonly ahead: number; readonly behind: number } {
   return {
+    gone: track === "gone",
     ahead: Number(aheadPattern.exec(track)?.[1] ?? 0),
     behind: Number(behindPattern.exec(track)?.[1] ?? 0),
   }

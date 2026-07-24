@@ -22,8 +22,9 @@ same shape, shipped inside the distribution rather than these directories.)
 | Area | Surface |
 |---|---|
 | Entry point | `defineExtension()` — one function, six fields |
-| `ctx` | eleven members — `config` · `git` · `events` · `commands` · `panes` · `menus` · `popups` · `statusline` · `extensions` · `effect` · `signal` — plus three methods: `exec()`, `open()`, `onDispose()` |
-| React hooks | `useGit`, `useEvent`, `useCommand`, `useTheme` — 4 hooks (plus `createCell` for activate → component data) |
+| `ctx` | eleven members — `config` · `git` · `events` · `commands` · `panes` · `menus` · `popups` · `statusline` · `extensions` · `effect` · `signal` — plus four methods: `exec()`, `open()`, `copy()`, `onDispose()` |
+| React hooks | `useGit`, `useEvent`, `useCommand`, `useTheme`, and the pane-building `useListCursor`, `useScrollView`, `useKeyCapture` — 7 hooks (plus `createCell` for activate → component data) |
+| Pure helpers | `option` (config), `toneColor` + `createRowSource` (row decorations), `literalPathspec` (pathspec safety) — plain functions, no runtime |
 | Augmentable registries | `ExtensionApis`, `EventMap`, `MenuMap` — 3 interfaces, one pattern |
 | Everything else | plain data types |
 
@@ -56,9 +57,12 @@ always resolve to the host's instances regardless of what is installed locally (
 module hooks match those exact specifiers for every importer), so a locally installed React can
 never fork the tree. Top-level symbolic links to Extension files or directories are supported;
 status and identity keep the logical linked path while loading and fingerprinting follow the
-canonical target, including retargets and repairs. Name collisions: a repo Extension shadows a
-same-named global Extension (repo wins, diagnostic logged — the same precedence as config); two
-same-named Extensions in the same scope are a load error for the second.
+canonical target, including retargets and repairs. Extensions load from three scopes, in
+precedence order `bundled` < `global` < `repo`: the bundled scope is the distribution's own
+`extensions/` directory, loaded through exactly the same discovery and with exactly the same
+privileges as yours. Name collisions: an Extension from a later scope shadows a same-named one
+from an earlier scope (the winner's scope is named in the diagnostic — the same precedence as
+config); two same-named Extensions in the same scope are a load error for the second.
 
 The smallest complete extension (a palette command that opens the repo on GitHub):
 
@@ -159,16 +163,23 @@ declare module "laziergit" {
   export type ScopedId<TName extends string> = TName | `${TName}.${string}`;
 
   /**
-   * Semantic emphasis for small pieces of UI the core renders for you
-   * (row decoration badges). The active theme maps each tone to a color;
-   * extensions never pick raw colors for these.
+   * Semantic emphasis for small pieces of UI one extension contributes to
+   * another's (row decoration badges), so the contributor never picks a raw
+   * color. Nothing central draws these: a decoration is rendered by the
+   * extension that owns the row, which resolves the tone against the active
+   * theme with {@link toneColor} (§1.11). That is the whole point of the
+   * indirection — the contributor never sees a theme, and the renderer never
+   * has to know the vocabulary the contributor was written against.
    */
   export type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "muted";
 
   /**
    * A key or key sequence in @opentui/keymap grammar:
    *
-   * - single strokes: `"c"`, `"D"` (shift implied), `"ctrl+r"`, `"escape"`, `"enter"`, `"tab"`
+   * - single strokes: `"c"`, `"ctrl+r"`, `"escape"`, `"enter"`, `"tab"`. A bare letter
+   *   binds its *lowercase* stroke — the parser lowercases the key name when it matches —
+   *   so `"D"` binds plain `d`, **not** a shifted `D`. Write `"shift+d"` for the shifted
+   *   stroke. `"D"` and `"d"` are therefore one and the same binding (see the diagnostic note below).
    * - platform-aware modifier: `"mod+p"` — ctrl everywhere, upgraded to cmd on
    *   macOS terminals whose keyboard protocol can report it (kitty keyboard
    *   protocol); elsewhere on macOS it stays ctrl
@@ -180,6 +191,9 @@ declare module "laziergit" {
    * These are *default* bindings. Users can rebind or unbind any command in
    * config.jsonc (`keybindings: { "<command id>": "keys" | null }`); the config
    * value always wins. Conflicting defaults log a diagnostic; last registration wins.
+   * Keys are compared case-folded, because a bare letter binds its lowercase stroke —
+   * so `"D"` and `"d"` conflict just as two spellings of `"d"` would, and one does not
+   * silently shadow the other.
    */
   export type KeySpec = string;
 ```
@@ -222,8 +236,8 @@ declare module "laziergit" {
      * ("git" and "app" are reserved for core event namespaces). Used as:
      * the config section key in config.jsonc, the required prefix of every id
      * you register (commands, panes, menus, segments, custom events), and the
-     * key in {@link ExtensionApis}. A repo-scope extension shadows a
-     * same-named global one; a same-scope collision is a load error (§5.3).
+     * key in {@link ExtensionApis}. Scopes shadow by precedence
+     * (bundled < global < repo); a same-scope collision is a load error (§5.3).
      */
     name: TName;
 
@@ -363,6 +377,14 @@ declare module "laziergit" {
      * repo root — the one correctness default `Bun.$` can't give you (§5.11).
      * If your extension deactivates first, the child process is killed and
      * the promise never settles (§5.3).
+     *
+     * The child's *exit* is what ends the call, not end-of-file on its pipes:
+     * anything the child spawns inherits those pipes and holds them open for as
+     * long as it lives (`wl-copy` daemonises exactly this way), so waiting for
+     * them would be waiting for a process that is none of your business. The
+     * pipes get a short grace period after the exit and then you get what
+     * arrived — which, for a program that does not leave survivors behind, is
+     * all of it.
      */
     exec(command: string, args?: readonly string[], options?: ExecOptions): Promise<ExecOutput>;
 
@@ -372,6 +394,21 @@ declare module "laziergit" {
      * resolved per platform so extensions never hardcode one).
      */
     open(url: string): Promise<void>;
+
+    /**
+     * Put text on the system clipboard — the sibling of {@link open}, and for
+     * the same reason: which tool does it is a property of the machine
+     * (`pbcopy` / `wl-copy` / `xclip` / `xsel` / `clip`, tried in that order
+     * per platform), and an extension copying an oid has no business
+     * knowing. The text goes on the tool's stdin, never in argv, so nothing
+     * you copy can be read as an option. Rejects with the tool's own message
+     * if none of them is installed or one of them fails — and each writer is
+     * bounded, so a tool that hangs costs the next one its turn rather than
+     * costing your Command its return. There is no `read`:
+     * nothing needs it yet, and a clipboard an extension can *read* is a
+     * different question (§5.11).
+     */
+    copy(text: string): Promise<void>;
 
     /**
      * Register cleanup for resources created outside `ctx` (timers, sockets,
@@ -466,7 +503,9 @@ tagged with the extension name, and routed to the log file / debug pane.
   /**
    * Snapshot of everything laziergit knows about the repository. Core refreshes
    * it after every write issued through `ctx.git`, on a cheap ~2s repo-fingerprint
-   * poll (`git for-each-ref` + `.git/HEAD` — no fs-watching), and on focus regain. Always present — core loads it before extensions
+   * poll (four lock-free reads — `status --porcelain=v2`, `show-ref --head`,
+   * `stash list`, and `config --get-regexp '^(remote|branch)\.'`; no fs-watching,
+   * see §5.12 for why each is needed), and on focus regain. Always present — core loads it before extensions
    * activate. Unchanged slices keep referential identity across refreshes,
    * which is what makes `useGit` selectors cheap.
    *
@@ -486,27 +525,41 @@ tagged with the extension name, and routed to the log file / debug pane.
     readonly stash: readonly StashEntry[];
   }
 
-  export interface Head {
+  /**
+   * Where HEAD points, as the three shapes git can actually produce. A union rather
+   * than four independent fields because the fields are not independent: an unborn
+   * HEAD has no commit to name, a detached one has no branch and therefore no
+   * upstream, and only a branch with a commit behind it has both. Reading an oid off
+   * a repository with no commits is a type error, not a `""`.
+   */
+  export type Head =
     /**
-     * The commit HEAD points at, or `""` on a repository with no commits yet — the one
-     * state an oid cannot spell (§5.12). `oid === "" && !detached` means unborn.
+     * `git init` with nothing committed: HEAD is a symbolic ref to a branch that does
+     * not exist yet. Outside a repository the empty snapshot is this variant with
+     * `branch: ""`, which no real branch can be called.
      */
-    readonly oid: string;
-    /** Current branch name, or null when detached. */
-    readonly branch: string | null;
-    readonly detached: boolean;
-    /** The upstream of {@link branch} — the very object that branch's row carries. */
-    readonly upstream: UpstreamInfo | null;
-  }
+    | { readonly kind: "unborn"; readonly branch: string }
+    /** HEAD is a raw commit, so there is no branch to carry an upstream. */
+    | { readonly kind: "detached"; readonly oid: string }
+    | {
+        readonly kind: "onBranch";
+        readonly oid: string;
+        readonly branch: string;
+        /** The upstream of {@link branch} — the very object that branch's row carries. */
+        readonly upstream: UpstreamInfo | null;
+      };
 
   export interface UpstreamInfo {
     readonly remote: string;
     /** Branch name on the remote, without its `refs/heads/` prefix. */
     readonly branch: string;
     /**
-     * Divergence from the upstream. An upstream deleted on the remote ("gone") reports
-     * zero in both, indistinguishable from in sync — a known gap in this type (§5.12).
+     * The upstream ref no longer exists on the remote. Git reports `gone` *instead of*
+     * a divergence, so `ahead` and `behind` are both 0 here and mean nothing — this
+     * flag is the only thing separating a deleted upstream from an in-sync one.
      */
+    readonly gone: boolean;
+    /** Divergence from the upstream. */
     readonly ahead: number;
     readonly behind: number;
   }
@@ -597,7 +650,18 @@ tagged with the extension name, and routed to the log file / debug pane.
     allowFailure?: boolean;
   }
 
-  /** Thrown when a git invocation exits nonzero (unless `allowFailure`). */
+  /**
+   * Thrown when a git invocation exits nonzero (unless `allowFailure`).
+   *
+   * `stderr` is git's own account of the failure and is what you show the
+   * user — with credential prompting off by design (§5.11), it is often the
+   * entire diagnosis. It is also the only thing that says *which* refusal
+   * this is: the exit code is 1 for every one of them, so a push that must
+   * tell "non-fast-forward" from "stale info" from "[remote rejected]" reads
+   * the text. That is supported, not a hack: laziergit runs git under
+   * `LC_ALL=C`, so the wording an extension matches on is git's own and does
+   * not shift with the user's locale.
+   */
   export class GitError extends Error {
     readonly args: readonly string[];
     readonly exitCode: number;
@@ -636,6 +700,10 @@ tagged with the extension name, and routed to the log file / debug pane.
      * everything without a helper. Throws {@link GitError} on nonzero exit
      * unless `allowFailure`. Mutating subcommands trigger a store refresh,
      * same as the helpers.
+     *
+     * **Wrap every path you put in the argv in {@link literalPathspec}.** No
+     * shell is involved, but git does its own globbing: every path git takes is
+     * a *pathspec*, and `--` does not turn that off.
      */
     raw(args: readonly string[], options?: RawOptions): Promise<GitOutput>;
 
@@ -700,6 +768,34 @@ tagged with the extension name, and routed to the log file / debug pane.
       drop(index: number): Promise<void>;
     };
   }
+
+  /**
+   * A path, as the git pathspec that matches only that path.
+   *
+   * Every path git accepts is a *pathspec*, and a pathspec is a glob. `foo[1].txt`
+   * also matches `foo1.txt`, and `--` does not change that — `--` only stops a
+   * leading dash being read as an option. Nothing upstream escapes anything
+   * either: paths reach you verbatim out of `git status --porcelain=v2 -z`, so
+   * handing one straight back to git is not the round trip it looks like.
+   * Unwrapped, `git.raw(["diff", "--", path])` diffs the neighbours too, and the
+   * same mistake in a `clean` or `restore` argv deletes or reverts a file the
+   * user never named.
+   *
+   * `:(literal)` is git's own magic for "this is a path, not a pattern", honoured
+   * by every command that takes a pathspec. Exported rather than left to a note
+   * on {@link Git.raw} because the failure is silent, destructive, and depends on
+   * a git rule an extension author has no reason to know — the one shape of
+   * mistake where a five-line helper beats a paragraph (§5.11).
+   *
+   * The porcelain helpers ({@link Git.stage}, {@link Git.unstage},
+   * {@link Git.discard}) already apply it; `raw` cannot, because in `raw` only
+   * you know which argv elements are paths.
+   *
+   * ```ts
+   * await ctx.git.raw(["diff", "-U3", "--", literalPathspec(path)]);
+   * ```
+   */
+  export function literalPathspec(path: string): string;
 ```
 
 ### 1.6 Events
@@ -806,6 +902,19 @@ tagged with the extension name, and routed to the log file / debug pane.
     pane?: string;
     /** Hide from the palette (still bindable & in the cheat sheet). For j/k-style motions. */
     hidden?: boolean;
+    /**
+     * Bind `keys` while {@link pane} is capturing raw keyboard input
+     * ({@link useKeyCapture}) *instead of* while it is merely focused — the way
+     * out of a pane that owns the keys, `mod+s` to submit and `escape` to
+     * cancel. Everything else goes inert during a capture, so these are the
+     * only commands still listening; the cheat sheet says so by collapsing to
+     * them (§5.8). Capture is a property of a pane's keyboard, so this is
+     * ignored (with a diagnostic) on a command with no `pane`. A pane's normal
+     * and capture layers are never live together, which is why the same key may
+     * be claimed once in each: `escape` can cancel an edit and still do
+     * whatever it did before the edit began.
+     */
+    capture?: boolean;
     /** The action. Errors are caught, logged, and surfaced as a notification. */
     run(): void | Promise<void>;
   }
@@ -865,8 +974,28 @@ tagged with the extension name, and routed to the log file / debug pane.
   }
 
   export interface PaneHandle extends Disposable {
-    /** Give this pane keyboard focus and reveal it (switching tabs if needed). */
+    /**
+     * Give this pane keyboard focus and reveal it (switching tabs if needed).
+     * A deliberate act by the user — a `<name>.focus` command, a click. Throws
+     * if the pane has no live instance or the Layout has not placed it.
+     */
     focus(): void;
+    /**
+     * Make this pane the visible tab of its cell WITHOUT moving the keyboard —
+     * the verb for a pane that follows someone else's selection. `DiffApi.show`
+     * is the case it exists for: the default Layout tab-groups `diff` with
+     * `commit-flow`, so after a commit the diff pane is stranded behind the
+     * Commit tab and every subsequent cursor move updates something nobody can
+     * see. {@link focus} is the wrong tool there — the user is driving the files
+     * pane, and stealing the keyboard on every cursor move would be unusable.
+     *
+     * Silent where `focus` throws: this runs on cursor movement, so "that pane
+     * is not on screen right now" is an ordinary condition to do nothing about,
+     * not a programming error worth an exception per keystroke. A pane already
+     * sharing the *focused* cell becomes focused too — focus is a cell plus its
+     * visible tab, so there is no third state for it to land in.
+     */
+    reveal(): void;
   }
 
   export interface PaneRegistry<TName extends string = string> {
@@ -881,7 +1010,7 @@ tagged with the extension name, and routed to the log file / debug pane.
    * value changes (Object.is; pass `isEqual` for derived objects/arrays).
    *
    * ```ts
-   * const branch = useGit((s) => s.head.branch);
+   * const branch = useGit((s) => (s.head.kind === "onBranch" ? s.head.branch : null));
    * ```
    */
   export function useGit<T>(
@@ -919,6 +1048,143 @@ tagged with the extension name, and routed to the log file / debug pane.
    * register in `activate` instead.
    */
   export function useCommand(spec: Omit<CommandSpec, "pane">): void;
+
+  /**
+   * Claim the raw keyboard for the enclosing pane while `active` — for a pane
+   * rendering its own `<textarea>` or `<input>`, where every ordinary binding is
+   * a typo waiting to happen (`q` quits, `?` opens the cheat sheet, `[` and `]`
+   * walk tabs).
+   *
+   * The same mechanism a popup uses, one priority band lower: while a pane
+   * captures, the global layer and every pane layer go inert, and only this
+   * pane's commands registered with `capture: true` stay live. The exit keys
+   * therefore stay Commands — rebindable, in the catalog, in the cheat sheet —
+   * rather than a second raw key-handler API beside the Command unit (§5.8). A
+   * popup still outranks a capture, so `confirm` mid-edit behaves normally.
+   *
+   * A capture holds only while its pane is focused: focus cannot leave by
+   * keyboard, which is the point, so this guards the other door — an extension
+   * focusing elsewhere mid-edit cannot leave a background pane holding the
+   * keyboard with no key left to escape it. Claims nest, so two panes editing
+   * at once unwind in either order.
+   *
+   * ```tsx
+   * useKeyCapture(editing);
+   * useCommand({ id: "x.submit", title: "Commit", keys: "mod+s", capture: true, run: submit });
+   * useCommand({ id: "x.cancel", title: "Cancel", keys: "escape", capture: true, run: cancel });
+   * ```
+   */
+  export function useKeyCapture(active: boolean): void;
+
+  /**
+   * Cursor state for a list pane, with `j` / `k` / `g` / `G` registered as
+   * hidden pane-scoped commands. What every list pane needs and none of them
+   * should write twice (§5.11):
+   *
+   * ```tsx
+   * const cursor = useListCursor({ items: files, idPrefix: "files", noun: "file" });
+   * // rows: index === cursor.index → highlighted; cursor.selected is the row itself
+   * ```
+   * The index is always in range: clamped when the list shrinks (so the render
+   * after a delete already draws a valid cursor rather than highlighting a row
+   * that is gone), and unmoved when the list is replaced with an equal-length
+   * one — which is what keeps the cursor still across a refresh. It calls
+   * {@link useCommand}, so it inherits its pane requirement and its runtime
+   * check on `idPrefix`.
+   *
+   * Attach {@link ListCursor.scrollRef} to the pane's `<scrollbox>` or the
+   * cursor walks off the bottom of it and the selection — which is still what
+   * every key acts on — becomes invisible. Half-page motions (`ctrl+d` /
+   * `ctrl+u`) remain absent here, but they are no longer impossible: a pane
+   * that wants them can measure with {@link ScrollView.viewportRows} and move
+   * the cursor with {@link ListCursor.setIndex}.
+   */
+  export function useListCursor<T>(options: ListCursorOptions<T>): ListCursor<T>;
+
+  export interface ListCursorOptions<T> {
+    /** The rows the cursor walks; pass the newest array every render. */
+    items: readonly T[];
+    /** Your extension name — the commands are `${idPrefix}.cursor.down` and friends. */
+    idPrefix: string;
+    /** Singular noun for the cheat-sheet titles: "file" → "Next file". */
+    noun: string;
+  }
+
+  export interface ListCursor<T> {
+    /** Always in range: 0 while the list is empty, never past its end. */
+    readonly index: number;
+    readonly selected: T | undefined;
+    /** Move the cursor — a click, or a row your extension just created. */
+    setIndex(index: number): void;
+    /**
+     * Callback ref for the pane's `<scrollbox>`: attach it and the selected row
+     * is scrolled into view whenever the cursor moves past the edge of the
+     * viewport, by the minimum needed (so `j` scrolls one row rather than
+     * recentring). Give the box `flexGrow={1} flexBasis={0}` — see
+     * {@link ScrollView.ref}.
+     *
+     * ```tsx
+     * <scrollbox ref={cursor.scrollRef} flexGrow={1} flexBasis={0}>{rows}</scrollbox>
+     * ```
+     */
+    readonly scrollRef: (surface: ScrollSurface | null) => void;
+  }
+
+  /**
+   * Imperative scrolling for a pane that shows more than fits and has no cursor
+   * to follow — the bundled diff pane, whose `<diff>` renders a whole patch and
+   * has no scroll API of its own. Wrap it in a `<scrollbox>` and drive that.
+   *
+   * OpenTUI's `<scrollbox>` is focusable and handles its own keys, but laziergit
+   * never gives a renderable the terminal's focus (keys arrive as Commands, and
+   * focus belongs to the Layout), so that key handling never runs. This hook is
+   * the seam that reaches it instead. It is the scroll half of what §5.11
+   * declines to ship as a component kit: behavior that must agree with the core,
+   * not chrome.
+   *
+   * ```tsx
+   * const scroll = useScrollView();
+   * useCommand({ id: "x.down", title: "Scroll down", keys: "j", run: () => scroll.scrollBy(1) });
+   * useCommand({ id: "x.page", title: "Page down", keys: "ctrl+d",
+   *              run: () => scroll.scrollBy(scroll.viewportRows() / 2) });
+   * <scrollbox ref={scroll.ref} flexGrow={1} flexBasis={0}>
+   *   <diff diff={patch} view={view} />
+   * </scrollbox>
+   * ```
+   */
+  export function useScrollView(): ScrollView;
+
+  export interface ScrollView {
+    /**
+     * Callback ref for the `<scrollbox>` this view drives. Give the box
+     * `flexGrow={1} flexBasis={0}`: without the basis its flex size is its
+     * *content* height, so a long document makes the box taller than the pane
+     * and paints over the pane's own header instead of scrolling inside it.
+     */
+    readonly ref: (surface: ScrollSurface | null) => void;
+    /**
+     * Rows the viewport shows, or 0 before the first layout — the one
+     * measurement an extension cannot compute, and what page-wise motions need.
+     */
+    viewportRows(): number;
+    /** Scroll by whole rows; negative is up. Clamped to the content. */
+    scrollBy(rows: number): void;
+    /** Scroll to an absolute row, or to either end. Clamped to the content. */
+    scrollTo(row: number | "start" | "end"): void;
+  }
+
+  /**
+   * The slice of OpenTUI's `<scrollbox>` the scrolling seam drives. Declared
+   * structurally because `ScrollBoxRenderable` lives in `@opentui/core`, which
+   * extensions may not import (ADR-0001) — a callback ref still checks the shape
+   * against the real renderable on assignment.
+   */
+  export interface ScrollSurface {
+    scrollTop: number;
+    /** Total height of the content, in rows. */
+    readonly scrollHeight: number;
+    readonly viewport: { readonly height: number };
+  }
 
   /**
    * A tiny reactive cell for bridging activate-scope data into your own
@@ -985,7 +1251,7 @@ autocompletes every prop; this table only orients. The ones the examples lean on
 | `<box>` | flex container | `flexDirection`, `flexGrow`, `width`/`height` (fixed columns), `padding`, `gap`, `border` |
 | `<text>` | one styled text run | `fg`, `bg` (row highlight); children may include `<span>` |
 | `<span>` | inline styled fragment inside `<text>` | `fg`, `bg`, `attributes` |
-| `<scrollbox>` | scrollable column for overflow content | scrolling handled for you; size via `width`/`height` |
+| `<scrollbox>` | scrollable column for overflow content | `flexGrow={1} flexBasis={0}` (see {@link ScrollView.ref}), plus `ref` from {@link useScrollView} or {@link ListCursor.scrollRef} — it does **not** scroll itself, because laziergit never gives a renderable the terminal's focus |
 | `<select>` | focusable list with built-in cursor | `options`, selection styling — or roll your own rows with `useCommand` j/k |
 | `<diff>` | syntax-highlighted diff | `diff` (unified text), `view` (`"unified"` / `"split"`), `filetype` (per-language tree-sitter highlighting) |
 | `<code>` | highlighted source block | `content`, `filetype` |
@@ -1224,6 +1490,75 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
     selected(): Row | undefined;
   }
 
+  /**
+   * The color a {@link RowDecoration} badge is drawn in — the other half of
+   * {@link Tone}. Pure, so it needs no runtime and works anywhere you have a
+   * {@link Theme}. An absent tone is ordinary text: a badge is extra data, not
+   * an alarm.
+   *
+   * ```tsx
+   * const decoration = host.useDecoration(row);
+   * <text fg={toneColor(theme, decoration?.tone)} content={decoration?.badge ?? ""} />
+   * ```
+   */
+  export function toneColor(theme: Theme, tone: Tone | undefined): string;
+
+  /**
+   * Builds the {@link RowSource} a list extension exports, and the pane-side
+   * hook that renders what other extensions contributed to it. Every list pane
+   * owes the same four things — hold the providers, merge them per row, track
+   * the selection, re-render when a provider's async data lands — so they live
+   * here rather than four times over (§5.11).
+   *
+   * ```ts
+   * const host = createRowSource<FileChange>({
+   *   key: (row) => `${row.kind}\0${row.previousPath ?? ""}\0${row.path}`,
+   * });
+   * // in activate:  return host.api;
+   * // in the pane:  host.setSelected(cursor.selected); host.useDecoration(row);
+   * ```
+   */
+  export function createRowSource<Row>(options: RowSourceOptions<Row>): RowSourceHost<Row>;
+
+  export interface RowSourceOptions<Row> {
+    /**
+     * Stable identity for a row, independent of the object carrying it.
+     *
+     * The git store hands out a fresh object for a row whenever its data
+     * changed and reuses the old one when it did not, so object identity is a
+     * cache *hit* test but not a cache *slot*: keyed by object, every refresh
+     * would strand the previous generation's entries with nothing able to say
+     * they are dead. Keyed by the row's own name — a path, an oid, a stash
+     * index — there is exactly one slot per logical row, reused as the store
+     * replaces the objects beneath it.
+     *
+     * Make it unique across the rows this pane shows, and note that "unique"
+     * is a claim about the ROW TYPE, not about the screen: a path modified in
+     * both the index and the working tree is one {@link FileChange} value
+     * drawn on two lines, so `files` keys on all three of its fields (kind,
+     * previousPath, path) and renders the two lines from one object. Two
+     * *different* objects sharing a key would evict each other on every pass and
+     * the merged decoration would never settle.
+     */
+    key(row: Row): string;
+  }
+
+  export interface RowSourceHost<Row> {
+    /** Return this from `activate` — it is what other extensions consume. */
+    readonly api: RowSource<Row>;
+    /** Call from your pane whenever the cursor moves; feeds `RowSource.selected()`. */
+    setSelected(row: Row | undefined): void;
+    /**
+     * Hook: the merged decoration for one row, live across provider
+     * registration, disposal, and {@link RowDecorationHandle.refresh}. Later
+     * providers win per FIELD, not wholesale, so a provider that sets only a
+     * badge does not erase the tone an earlier one chose; a provider that
+     * throws is skipped for the rest of the pass and logged (§5.9), and gets
+     * another chance on the next refresh.
+     */
+    useDecoration(row: Row): RowDecoration | undefined;
+  }
+
   // The eight Bundled Extensions are `status`, `files`, `branches`, `commits`,
   // `stash`, `diff`, `commit-flow`, and `sync` (push/pull/fetch). Every one of
   // the eight declares an `.actions` menu id below — the universal splice seam.
@@ -1237,22 +1572,35 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
   export type CommitsApi = RowSource<Commit>;
   export type StashApi = RowSource<StashEntry>;
 
-  /** What the diff pane is currently showing. */
-  export interface DiffTarget {
-    readonly kind: "workingTree" | "staged" | "commit" | "stash";
-    /** Commit oid / stash ref when `kind` is "commit"/"stash", else null. */
-    readonly ref: string | null;
-    /** Restrict to one path, or null for the full diff. */
-    readonly path: string | null;
-  }
+  /**
+   * What the diff pane is currently showing — the two shapes that differ in
+   * whether they name a ref. A union rather than one record with a nullable
+   * `ref`, because `{ kind: "commit", ref: null }` was representable and
+   * meant nothing: the diff pane carried a runtime branch for a state no
+   * caller could sensibly build. `path` narrows any of them to one file.
+   */
+  export type DiffTarget =
+    | { readonly kind: "workingTree" | "staged"; readonly path: string | null }
+    | { readonly kind: "commit" | "stash"; readonly ref: string; readonly path: string | null };
 
   /** Exported API of the bundled diff extension. */
   export interface DiffApi {
     /** The target currently shown, or null while the pane is empty. */
     current(): DiffTarget | null;
-    /** Point the diff pane at a target (reveals the pane if tabbed away). */
-    show(target: DiffTarget): void;
+    /**
+     * Point the diff pane at a target (reveals the pane if tabbed away — via
+     * {@link PaneHandle.reveal}, which never moves the keyboard, because the
+     * caller is a list pane the user is still driving), or at `null` to say
+     * there is nothing to show. A list pane whose rows just went away — the
+     * last stash dropped, the working tree cleaned — needs the second as much
+     * as the first; without it the pane goes on drawing a ref that no longer
+     * resolves.
+     */
+    show(target: DiffTarget | null): void;
   }
+
+  /** How a commit flow ended, for a caller that composed the message. */
+  export type CommitFlowResult = "committed" | "abandoned";
 
   /** Exported API of the bundled commit-flow extension (the commit transient). */
   export interface CommitFlowApi {
@@ -1260,9 +1608,16 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
      * Open the commit flow, optionally prefilled — how an extension hands a
      * composed message (conventional-commit, changelog tooling) to the
      * standard commit UX instead of committing blind. Resolves when the flow
-     * closes, committed or abandoned.
+     * closes, and says which way it closed, so a composer knows whether to
+     * keep its draft. `signoff` is here because the bundled commit menu
+     * offers it and a bundled extension holds no privilege an author does
+     * not (ADR-0001).
      */
-    begin(opts?: { message?: string; amend?: boolean }): Promise<void>;
+    begin(opts?: {
+      message?: string;
+      amend?: boolean;
+      signoff?: boolean;
+    }): Promise<CommitFlowResult>;
   }
 
   // Bundled menu ids and their target types — `ctx.menus.extend("branches.actions", ...)`
@@ -1334,14 +1689,58 @@ effects rather than a wrapper around the Promise surface, so both faces drive th
 Outside a git repository laziergit still starts: the store serves an empty {@link GitState},
 the poll does nothing, and every write fails with a {@link GitError} saying so.
 
-The exception is §1.11: the eight Bundled Extensions arrive in M4, so their exported APIs
-(`BranchesApi`, `FilesApi`, `DiffApi`, `CommitFlowApi`, …) and their `*.actions` menu ids are
-declared types with nothing registered behind them yet. `ctx.extensions.get` and
-`ctx.menus.extend` themselves work; there is simply nothing bundled to consume or splice into.
+§1.11 is live too, as of M4: the eight Bundled Extensions are real features, not placeholders.
+The bundled *scope* is a directory discovered, imported, and shadowed exactly like a user one,
+and the eight inside it register seven Panes, two status line segments, forty-six Commands and
+eight menus — every one of them through this document and nothing else, and not one of them
+losing a key to another (§1.7's last-wins resolution reports no conflict on a real boot). The `*.actions` ids are
+menus with items behind them, so `ctx.menus.extend("commits.actions", …)` splices into something
+that exists; the four list extensions export `RowSource` APIs whose decoration providers are
+called for every row on screen; `DiffApi.show` moves the diff pane and `CommitFlowApi.begin`
+opens the editor and resolves with what the user did. Nothing in `extensions/` imports anything
+but `"laziergit"`, `"react"` and `"@opentui/react"` — ADR-0001 holds by construction, which is
+what makes the eight a fair test of this API rather than a demonstration of a private one.
 
-Two encodings are worth knowing because the types cannot express them (see §5.12):
-`head.oid` is the empty string when HEAD is unborn, and a deleted upstream reports
-`{ ahead: 0, behind: 0 }`, which reads the same as an in-sync one.
+Building them changed the API in five places, all of them above. `ctx.copy` (§1.3) arrived
+because three of the eight wanted to copy an oid, a path, and a repository root and the only
+alternative was per-platform shelling in every extension that wants it. `DiffTarget` became a
+union and `DiffApi.show` began accepting `null`, because the flat record let a `commit` target
+carry no ref and the diff pane could not be told its list had gone empty. `CommitFlowApi.begin`
+gained `signoff` and a result, because the bundled commit menu offered a signed-off commit that
+no other extension could ask for — a privilege ADR-0001 does not allow — and §4.3's composer
+had no way to learn whether its message landed. `GitError` is documented as carrying git's own
+words in the C locale, because classifying a rejected push means reading them and an extension
+needs licence to. The one thing that did *not* change is the list-pane surface: `useListCursor`
+and `createRowSource` carried all four list panes unaltered, which is the outcome §5.11
+predicted when it promoted them.
+
+The two encodings §5.12 used to name as gaps are also gone, and the git model is the better for
+it: `Head` is a discriminated union, so an unborn repository has no oid to misread and a
+detached one has no upstream to look for, and `UpstreamInfo.gone` says outright that the
+remote deleted the branch instead of reporting it as zero divergence. Both landed early in M4,
+before the eight, where the Bundled Extensions put the first real weight on these types — the
+branches Pane has to draw the very distinctions the old shapes flattened.
+
+M4 also added the surfaces the Bundled Extensions needed and could not build for
+themselves, all of them live: `toneColor` and `createRowSource` (§1.11), because a decoration
+is contributed by one extension and drawn by another and neither can own the merge or the
+palette; `useListCursor` (§1.8), because four list panes want one clamping cursor and
+ADR-0001 leaves them no sibling package to share it from; and `useKeyCapture` plus
+`CommandSpec.capture` (§1.7, §5.8), because a pane rendering a `<textarea>` has to silence
+every other binding without introducing a raw key handler beside the Command unit. Each is
+public API rather than core-private for the same reason: a third-party list pane or editor
+pane must be able to build exactly what the bundled ones did.
+
+Reviewing the eight closed the gap this note used to leave open — **nothing public could
+scroll a pane's viewport** — and added three more surfaces for the same reason as the four
+above. `useScrollView` and `ListCursor.scrollRef` (§1.8) are the scroll seam: OpenTUI's
+`<scrollbox>` scrolls only for a renderable holding the terminal's focus, and laziergit gives
+no renderable that focus, so five real panes (four lists and the diff) had no way to move
+their own viewport. `PaneHandle.reveal` (§1.8) is what makes `DiffApi.show` honest — the diff
+pane is tab-grouped with `commit-flow`, and `focus()` was the wrong verb for a pane following
+someone else's cursor. `literalPathspec` (§1.5) is the smallest fix for the largest bug the
+review found: git globs the paths it is given, `--` does not stop it, and an unwrapped path in
+a `raw` argv acts on the user's other files.
 
 ---
 
@@ -1359,6 +1758,7 @@ import {
   useCommand,
   useEvent,
   useGit,
+  useListCursor,
   useTheme,
   type PaneProps,
   type Theme,
@@ -1404,10 +1804,12 @@ export default defineExtension({
     // Pane components are defined inside activate so they can close over `ctx`.
     function WorkflowRunsPane({ focused }: PaneProps) {
       const theme = useTheme();
-      const branch = useGit((s) => s.head.branch);
+      const branch = useGit((s) => (s.head.kind === "onBranch" ? s.head.branch : null));
       const [runs, setRuns] = useState<readonly Run[]>([]);
-      const [cursor, setCursor] = useState(0);
       const [error, setError] = useState<string | null>(null);
+      // j/k/g/G, clamped to the list, in one line — every list pane wants the same
+      // cursor, so it is API rather than four copies of the same useState (§5.11).
+      const cursor = useListCursor({ items: runs, idPrefix: "gh-workflows", noun: "run" });
 
       const refresh = useCallback(async () => {
         if (!branch) return setRuns([]);
@@ -1419,27 +1821,24 @@ export default defineExtension({
         ]);
         if (res.exitCode !== 0) return setError(res.stderr.trim() || "gh failed");
         setError(null);
+        // No cursor reset: the cursor clamps itself to a shorter list, and a refresh
+        // that returns the same runs should leave you where you were looking.
         setRuns(JSON.parse(res.stdout) as Run[]);
-        setCursor(0);
       }, [branch]);
 
       useEffect(() => { void refresh(); }, [refresh]); // initial load + every branch change
       useEvent("gh-workflows.refresh", refresh);       // palette command below
 
-      // Pane-scoped commands: active only while this pane is focused,
-      // disposed on unmount, listed in the cheat sheet.
-      useCommand({ id: "gh-workflows.next", title: "Next run", keys: "j", hidden: true,
-        run: () => setCursor((c) => Math.min(c + 1, runs.length - 1)) });
-      useCommand({ id: "gh-workflows.prev", title: "Previous run", keys: "k", hidden: true,
-        run: () => setCursor((c) => Math.max(c - 1, 0)) });
-      // Also a palette entry: running it from the palette focuses this pane
-      // first (focus-then-run), so the selection it acts on is the visible one.
+      // A pane-scoped command: active only while this pane is focused, disposed on
+      // unmount, listed in the cheat sheet. Also a palette entry — running it from the
+      // palette focuses this pane first (focus-then-run), so the selection it acts on
+      // is the visible one.
       useCommand({
         id: "gh-workflows.open-run",
         title: "Open workflow run in browser",
         keys: "o",
         run: async () => {
-          const run = runs[cursor];
+          const run = cursor.selected;
           if (run) await ctx.open(run.url);
         },
       });
@@ -1455,7 +1854,7 @@ export default defineExtension({
             return (
               <text
                 key={run.databaseId}
-                bg={i === cursor && focused ? theme.selection : undefined}
+                bg={i === cursor.index && focused ? theme.selection : undefined}
               >
                 <span fg={color}>{glyph}</span> {run.workflowName} — {run.displayTitle}
               </text>
@@ -1644,7 +2043,7 @@ export default defineExtension({
     // the polling timer lives (and dies) with the component — no ctx cleanup.
     function CiSegment() {
       const theme = useTheme();
-      const branch = useGit((s) => s.head.branch);
+      const branch = useGit((s) => (s.head.kind === "onBranch" ? s.head.branch : null));
       const [state, setState] = useState<"none" | "running" | "passed" | "failed">("none");
 
       useEffect(() => {
@@ -1678,7 +2077,12 @@ export default defineExtension({
 });
 ```
 
-### 4.3 conventional-commit — popup flow + porcelain
+### 4.3 conventional-commit — popup flow + a hand-off to `commit-flow`
+
+Composes a conventional-commit subject through prompts, then hands the draft to the bundled
+commit editor instead of committing blind — so the user still reviews it, adds a body, and
+submits in the standard UX. Exercises `needs` → typed `ctx.extensions.get`, and
+`CommitFlowApi.begin`'s {@link CommitFlowResult} to learn whether the message landed.
 
 ```ts
 import { defineExtension } from "laziergit";
@@ -1687,17 +2091,18 @@ const TYPES = ["feat", "fix", "chore", "docs", "refactor", "test", "perf"] as co
 
 export default defineExtension({
   name: "conventional-commit",
-  description: "Guided conventional-commit prompt",
+  description: "Compose a conventional-commit subject, then open it in the commit editor",
+  needs: ["commit-flow"], // ← makes ctx.extensions.get("commit-flow") legal and typed
+
   activate(ctx) {
     ctx.commands.register({
       id: "conventional-commit.create",
       title: "Commit (conventional)",
-      keys: "C",
+      // `shift+c`, not `"C"`: a bare letter binds its lowercase stroke, so `"C"` would claim
+      // the same `c` as the bundled `commit-flow.commit` and one would shadow the other.
+      keys: "shift+c",
       pane: "files", // contextual: bound while the bundled files pane is focused
       run: async () => {
-        if (ctx.git.state.status.staged.length === 0) {
-          return ctx.popups.notify("Nothing staged", "warning");
-        }
         const type = await ctx.popups.select({
           title: "Type",
           items: TYPES.map((t) => ({ label: t, value: t })),
@@ -1709,8 +2114,14 @@ export default defineExtension({
           validate: (v) => (v.trim().length === 0 ? "Subject is required" : null),
         });
         if (!subject) return;
-        await ctx.git.commit(`${type}${scope ? `(${scope})` : ""}: ${subject}`);
-        ctx.popups.notify("Committed", "success");
+
+        // Hand the composed subject to the standard commit UX rather than committing blind:
+        // `begin` prefills the editor and focuses it, the user finishes and submits, and the
+        // promise resolves with how the flow closed. commit-flow owns the commit rules
+        // (empty message, nothing staged) — this extension only composes.
+        const message = `${type}${scope ? `(${scope})` : ""}: ${subject}`;
+        const result = await ctx.extensions.get("commit-flow").begin({ message });
+        if (result === "committed") ctx.popups.notify("Committed", "success");
       },
     });
   },
@@ -1873,9 +2284,11 @@ on remount), and event subscriptions key on the event name (quiet while the emit
 Declare `needs` when you call an API; never for splices, bindings, or subscriptions.
 
 **Identity edge cases.** Extension names are the unit of identity everywhere (`ScopedId`,
-`ExtensionApis`, config sections), so collisions are resolved, never merged: a repo extension
-shadows a same-named global one (repo wins, diagnostic logged — the same precedence as config
-merging), and a second same-named extension in the same scope is a load error.
+`ExtensionApis`, config sections), so collisions are resolved, never merged: an extension from a
+higher-precedence scope shadows a same-named one from a lower (`bundled` < `global` < `repo`, so
+your copy of a bundled extension simply replaces it — diagnostic logged, naming the winning
+scope, the same precedence as config merging), and a second same-named extension in the same
+scope is a load error.
 
 ### 5.4 How `ctx.extensions.get("branches")` gets its type
 
@@ -1951,7 +2364,7 @@ handlers stay next to the `useState` they read. Commands still land in the catal
 cheat sheet, palette, and user rebinding stay complete without any extra registration — there
 is deliberately no second "raw key handler" API that would bypass the Command unit. Global
 commands belong in `activate`; the `pane` field on `CommandSpec` covers binding into *another*
-extension's pane (conventional-commit binding `C` in the files pane).
+extension's pane (conventional-commit binding `shift+c` in the files pane).
 
 Pane-scoped commands stay palette-complete because palette execution is **focus-then-run**
 (§1.7): the pane is focused, then the latest render's handler runs — so "open the selected
@@ -1960,6 +2373,22 @@ run" is one `useCommand`, not a `useCommand` plus a global twin. For the reverse
 event (the invoke channel — "do something now") and `createCell` (the data channel — "here is
 the latest value"). Selection state, meanwhile, flows outward by a different door entirely:
 export it, the way the bundled `RowSource.selected()` does.
+
+**A pane that owns the keyboard.** The one case that looks like it wants a raw key handler is
+a pane rendering a `<textarea>`: while you type a commit message, `q` must not quit. It gets
+`useKeyCapture` instead, which changes *which layers are enabled*, not *how keys are handled*
+— exactly what a popup does, one priority band lower (global < pane < capture < popup). The
+exit keys stay ordinary Commands marked `capture: true`, so they are still rebindable, still
+in the catalog, and still visible before you enter the editor. That is the whole reason the
+feature is a flag on `CommandSpec` and a hook that takes a boolean, rather than an
+`onKey(event)` that would take the Command unit out of the loop for the one pane that has the
+most keys to explain.
+
+The cheat sheet follows from the same principle: it answers "what can I press", so while a
+pane captures it collapses to that pane's capture commands and nothing else — listing `q` as
+"Quit" while `q` types the letter q would be a lie. Otherwise capture commands sit in their
+own section per pane, after that pane's ordinary keys, which is where you read them: before
+opening the editor, since `?` is inert once you are inside it.
 
 ### 5.9 Error containment
 
@@ -1983,11 +2412,12 @@ Full trust, no sandbox — containment is structural, per surface:
 | Public API | Internal mechanism |
 |---|---|
 | `ctx.panes.register` / statusline segments | `@opentui/react` slot registry plugin per pane/segment; the Layout renders one slot per configured id; the registry's built-in error boundary + failure placeholder provide containment for free |
-| Commands + `keys` / `useCommand` | `@opentui/keymap` command catalog + `registerLayer({ commands, bindings })`; pane scoping → layer targeted at the pane renderable (`targetMode: "focus-within"`), re-targeted by pane id when a remount replaces the renderable; `useCommand` re-points handlers via a latest-ref; palette = `getCommands()`, cheat sheet = `createBindingLookup` extras; `mod+` via the mod-bindings addon, `<leader>` via the leader addon |
+| Commands + `keys` / `useCommand` | `@opentui/keymap` command catalog + `registerLayer({ enabled, bindings })`, one layer per scope; pane scoping → a reactive matcher over laziergit's own focus model rather than renderer focus, so which pane owns the keyboard never depends on which Renderable holds the cursor; `useCommand` re-points handlers via a latest-ref; palette + cheat sheet read the resolved command catalog; `mod+` via a laziergit binding expander (cmd only where the keyboard protocol can report it), `<leader>` via the leader addon |
+| `useKeyCapture` / `capture: true` | priority bands, not a separate input path: global 0 < pane 100 < capture 500 < popup 1000. A capture disables the global and pane matchers and enables the capturing pane's capture layer; claims stack in the kernel so nested editors unwind in any order, and a capture is only honored while its pane is focused |
 | Menus | plain data + one generic popup component; an open menu pushes a modal high-priority keymap layer |
 | Registrations / `onDispose` | Effect `Scope` per activation owning a removable LIFO finalizer/supervision registry; `dispose()` = early finalizer run; consumed-API proxy attaches foreign Disposables to the caller's scope |
 | Hot reload | linked-target-aware extension fingerprint poll → reverse-topo deactivate → synchronous stale mark → lease-backed generation copy import → topo activate; serialized reload tails heal after failures |
-| `ctx.git` / `useGit` | git plumbing service (argv shell-out, Effect-internal: `Effect.callback` per child, lock retry on a `Schedule`, one concurrent fan-out per refresh) + snapshot store reconciled so unchanged slices and rows keep identity; React via `useSyncExternalStore`; ~2s fingerprint poll (`status --porcelain=v2` + `show-ref --head`), post-write refresh, and a refresh on the renderer's terminal-focus event |
+| `ctx.git` / `useGit` | git plumbing service (argv shell-out, Effect-internal: `Effect.callback` per child, lock retry on a `Schedule`, one concurrent fan-out per refresh) + snapshot store reconciled so unchanged slices and rows keep identity; React via `useSyncExternalStore`; ~2s fingerprint poll (`status --porcelain=v2`, `show-ref --head`, `stash list`, `config --get-regexp` — §5.12), post-write refresh, and a refresh on the renderer's terminal-focus event |
 | `ctx.events` | emit-time subscription snapshot; per-subscription FIFO delivery; disposal skips queued work; per-delivery catch |
 | `"laziergit"` module | `ensureRuntimePluginSupport({ additional: { laziergit } })` from `@opentui/react/runtime-plugin-support/configure`, imported before anything else — the FIRST install must carry the extra specifier: a later install that adds one the first lacked throws, while later installs without extras are compatible no-ops — so extension imports share the Core's React/OpenTUI/laziergit instances; works in `bun build --compile` binaries |
 
@@ -2015,8 +2445,9 @@ Full trust, no sandbox — containment is structural, per surface:
 - **A multi-line prompt** — {@link PopupToolkit.prompt} is one line by design. A commit message
   is not a prompt: it is an editing surface with its own layout, validation, and keys, so the
   bundled `commit-flow` renders one from OpenTUI's `<textarea>` in the Pane it already owns.
-  Any extension can do the same; widening the popup toolkit would make every caller pay for
-  the one case that needs it.
+  Any extension can do the same — `useKeyCapture` is the piece that makes it safe, silencing
+  every other binding while the editor has the keys (§5.8) — and widening the popup toolkit
+  would make every caller pay for the one case that needs it.
 - **Soft dependencies** (`extensions.find`) — an optional lookup has no ordering guarantee,
   reintroducing exactly the staleness `needs` + ripple restart exist to prevent; declare the need.
 - **Semver ranges on `needs`** — extensions are source-compiled TS checked against the host's
@@ -2026,9 +2457,25 @@ Full trust, no sandbox — containment is structural, per surface:
   `useTheme` without reactivation or remount. `ctx.config` is a constant plain object.
 - **An imperative statusline API** (`set(key, {text, tone})`) — segments are React components
   like every other UI surface; one paradigm, and `useGit` replaces manual event wiring.
-- **A blessed list/table component kit** — OpenTUI's primitives plus `useCommand` cover it; the
-  bundled panes will grow shared components that can be promoted later if they prove out, which
-  is cheaper than shrinking a shipped kit.
+- **A blessed list/table component kit** — OpenTUI's primitives plus `useCommand` cover the
+  *rendering*; a list pane composes `<box>`, `<text>`, and a highlight itself, and nothing here
+  imposes a row shape, a column model, or a scroll container. What the bundled panes did prove
+  out is the invisible half, and it was promoted rather than duplicated: `useListCursor` (the
+  cursor and its `j`/`k`/`g`/`G`) and `createRowSource` (the decoration providers, their
+  per-field merge, and the selected row). ADR-0001 gives `extensions/*` no sibling package to
+  share code through, so a shared component is public API or it is copy-paste — and four copies
+  of a clamping cursor is exactly the entropy this list exists to prevent. The line held is
+  behavior over chrome: laziergit ships the parts that must agree with the core (the command
+  catalog, the decoration contract) and none of the parts that are just markup.
+  **Closed in M4, the way this note asked for:** owning no scroll *container* had meant
+  owning no scroll *behavior* either, and every bundled list pane walked its cursor off the
+  bottom of its own `<scrollbox>` while the diff pane showed one screenful of a patch and
+  nothing else. Five real consumers made the shape knowable, so the seam shipped as the ref
+  this note predicted — {@link ListCursor.scrollRef} and {@link useScrollView} — and not as
+  a component kit. Extensions still write their own `<scrollbox>`, their own rows, and their
+  own highlight; what they no longer write is the arithmetic that has to agree with the
+  cursor. `ScrollSurface` is structural, so the seam adds no import an extension is not
+  already allowed to make.
 - **Toast/progress/spinner APIs beyond `notify`** — a pane that owns long work renders its own state.
 - **A `disabled` state on menu items** — `when` hides; a visible-but-inert item is presentation
   subtlety v1 skips (hiding unsuitable entries is Magit's default too).
@@ -2039,12 +2486,26 @@ Full trust, no sandbox — containment is structural, per surface:
   single files that import in milliseconds under Bun, and hot reload makes eager loading free.
   A declarative manifest can be derived later from `defineExtension`'s data fields without
   breaking anyone.
+- **A multi-file diff in one `<diff>`** — OpenTUI's `DiffRenderable` parses and lays out a
+  *single* file's unified patch; handed a diff that spans several files it renders only the
+  first. The bundled `diff` pane therefore splits a multi-file patch into one section per file
+  and renders a `<diff>` for each (filename above), which is also what lets it label and
+  highlight each file and print "no textual diff" for a binary or mode-only section. An
+  extension rendering its own diffs must split the same way; an upstream `<diff>` that accepts a
+  multi-file patch would let the pane drop the split with no change to this API.
+- **Sizing a Pane from its `placement` hint** — {@link PlacementHint} *places* a Pane (column,
+  order, `tabWith`) but carries no *size*: a hint-placed column always takes an equal width
+  share and cells split their column's height evenly. Column `weight` is config-only
+  (`layout.columns[].weight`), and per-cell height has no control at all yet. Likewise the
+  default startup focus lands on the Layout's first cell rather than the first Pane with rows to
+  walk (config `layout.focus` overrides it). These are layout refinements with known shapes,
+  post-v1 (PLAN.md) — not API gaps.
 - **NOT absent, on purpose: `ctx.exec`.** `Bun.$` remains fully available (full trust), but
   `exec` stays because its repo-root cwd default is a correctness detail that must live inside
   the `.d.ts` an agent learns from — forgetting `.cwd(ctx.git.root)` on `Bun.$` is the kind of
   silent bug types exist to prevent.
 
-### 5.12 What the git store watches, and three states its types cannot spell
+### 5.12 What the git store watches, and the one state its types cannot spell
 
 **Watching.** There is no fs-watching of `.git` (ADR-0001's git-service note, and lazygit's
 own conclusion). The store refreshes after every write laziergit issues, and otherwise on a
@@ -2062,19 +2523,18 @@ terminal regains focus — switching back from the terminal you just ran `git` i
 likeliest moment for the screen to be stale and the least tolerable moment to wait out an
 interval.
 
-**Three gaps, named rather than hidden.** Each is a case where git has a state the v1 model
-cannot represent, and each is a candidate for the M4 pass where the Bundled Extensions put
-real pressure on these types:
+**What git can say and the model cannot.** Two such states were fixed in M4, when the
+Bundled Extensions made the cost of leaving them concrete. An **unborn HEAD** used to be
+`Head.oid === ""` — unambiguous, since no object is named `""`, but implicit, and a shape a
+consumer could hand back to git; `Head` is now a union whose `unborn` variant simply has no
+oid, and which also drops the upstream a detached HEAD never had. A **gone upstream** used
+to collapse to `{ ahead: 0, behind: 0 }`, identical to a perfectly in-sync branch, which is
+the one thing a branches Pane most wants to tell apart; `UpstreamInfo.gone` now says it.
+Both were cheaper to change while nothing depended on the old shapes, which is why they went
+in with the first Extensions rather than after them.
 
-- **Unborn HEAD.** A repository with no commits has no oid, and `Head.oid: string` has no
-  room for that; it is `""`, which is unambiguous (no object is named `""`) but implicit.
-  `branches`, `commits`, and `tags` are all empty there too. A `Head` discriminated union
-  (`unborn` | `detached` | `onBranch`) would make the illegal states unrepresentable.
-- **Gone upstream.** When a branch's upstream has been deleted on the remote, git reports
-  `gone` rather than a divergence, and `UpstreamInfo` collapses it to `{ ahead: 0, behind: 0 }`
-  — the same shape as a perfectly in-sync branch, which is the one thing a branches Pane
-  most wants to distinguish. One added field (`gone: boolean`, or a variant) fixes it, and it
-  is cheaper now than after Extensions depend on the current shape.
+Two remain, deliberately:
+
 - **Which side of a conflict.** Porcelain v2 spells an unmerged path as `UU`, `AA`, `DU`,
   `UD`, `AU`, `UA`, or `DD` — both-modified, both-added, deleted-by-us, and so on —
   and `ChangeKind` has one `"conflicted"` value to put it in, so the store keeps the path and
@@ -2082,6 +2542,17 @@ real pressure on these types:
   the lazygit-grade one: "both added" and "modified by us, deleted by them" want different
   actions offered. The fix is a variant on `FileChange` carrying the pair, and it should land
   with the conflicts UI rather than ahead of it.
+
+- **Which side of the index a `FileChange` is on.** A path modified in both the index and the
+  working tree (`MM`) is one {@link FileChange} value — same kind, path, previousPath — that
+  the `files` pane draws twice, once under Staged and once under Unstaged. The pane knows
+  which is which from the *group* it drew the row under, but {@link FilesApi} is a
+  `RowSource<FileChange>`, so a *decorating* extension sees only the change and cannot tell the
+  staged line from the unstaged one — and the two lines necessarily share one decoration slot
+  (see {@link RowSourceOptions.key}). That is deliberate for v1: a decoration ("PR #42", "90d")
+  is a property of the path, not of which index side it sits on, so nothing bundled wants the
+  distinction. The fix, when something does, is the same shape as the conflict one — a row type
+  that carries the side — and it belongs with the first consumer that needs it, not ahead of it.
 
 **Conflicts in v1: show and delegate.** The bundled `files` extension surfaces conflicted
 paths as their own group, offers "open in editor" and "stage resolved" from `files.actions`,

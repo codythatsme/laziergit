@@ -15,6 +15,7 @@ function columns(...cells: (string | readonly string[])[][]): LayoutConfig {
       weight: 1,
       cells: column.map((cell) => (typeof cell === "string" ? [cell] : [...cell])),
     })),
+    focus: null,
   }
 }
 
@@ -110,6 +111,7 @@ it("preserves configured column weights and drops columns nothing landed in", ()
       { weight: 1, cells: [["absent"]] },
       { weight: 3, cells: [["diff"]] },
     ],
+    focus: null,
   }
 
   expect(resolveLayout(config, [pane("diff")]).columns).toEqual([
@@ -135,6 +137,44 @@ it("focuses the first live Pane and reports every focus change once", () => {
 
   expect(layout.focusedPaneId).toBe("two")
   expect(focusEvents).toEqual(["one", "two"])
+})
+
+it("settles startup focus on the Layout's first cell, not on whichever Pane registered first", () => {
+  const layout = new LayoutHost()
+  layout.setConfig(columns(["files"], ["diff"]))
+  // `files` needs `diff`, so the dependency's Pane is always the one that gets there first.
+  layout.setPanes([pane("diff")])
+  expect(layout.focusedPaneId).toBe("diff")
+
+  layout.setPanes([pane("diff"), pane("files")])
+  layout.settleInitialFocus()
+
+  expect(layout.focusedPaneId).toBe("files")
+})
+
+it("settles startup focus on the configured Pane, and leaves a chosen focus alone", () => {
+  const configured = { ...columns(["status"], ["files"]), focus: "files" }
+  const layout = new LayoutHost()
+  layout.setConfig(configured)
+  layout.setPanes([pane("status"), pane("files")])
+
+  layout.settleInitialFocus()
+  expect(layout.focusedPaneId).toBe("files")
+
+  // A second pass — a hot reload re-activating every Extension — must not undo a choice.
+  layout.focus("status")
+  layout.settleInitialFocus()
+  expect(layout.focusedPaneId).toBe("status")
+})
+
+it("ignores a configured startup focus naming a Pane nothing registered", () => {
+  const layout = new LayoutHost()
+  layout.setConfig({ ...columns(["status"], ["files"]), focus: "gh-workflows" })
+  layout.setPanes([pane("status"), pane("files")])
+
+  layout.settleInitialFocus()
+
+  expect(layout.focusedPaneId).toBe("status")
 })
 
 it("steps focus by whole cells, wrapping in both directions", () => {
@@ -169,6 +209,33 @@ it("cycles tabs inside the focused cell and leaves single-Pane cells alone", () 
   layout.focus("diff")
   layout.cycleTab(1)
   expect(layout.focusedPaneId).toBe("diff")
+})
+
+it("reveals a tabbed-away Pane without taking the keyboard off the focused one", () => {
+  const { layout, focusEvents } = host(
+    [pane("files"), pane("diff"), pane("commit-flow")],
+    columns(["files"], [["diff", "commit-flow"]]),
+  )
+  layout.focus("commit-flow")
+  layout.focus("files")
+  expect(layout.getSnapshot().activeTabs.get("layout:1.0")).toBe("commit-flow")
+
+  layout.reveal("diff")
+
+  // The diff Pane is what that cell shows...
+  expect(layout.getSnapshot().activeTabs.get("layout:1.0")).toBe("diff")
+  // ...and the keyboard never left the Pane the user is driving.
+  expect(layout.focusedPaneId).toBe("files")
+  expect(focusEvents).toEqual(["files", "commit-flow", "files"])
+})
+
+it("does nothing when asked to reveal a Pane that is not live or not placed", () => {
+  const { layout } = host([pane("files"), pane("diff", undefined, "reloading")], columns(["files"]))
+
+  // Revealing runs on cursor movement, so neither of these may throw the way `focus` does.
+  expect(() => layout.reveal("diff")).not.toThrow()
+  expect(() => layout.reveal("gh-workflows")).not.toThrow()
+  expect(layout.focusedPaneId).toBe("files")
 })
 
 it("remembers the visible tab of a cell across focus moves", () => {

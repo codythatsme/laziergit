@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import type * as Effect from "effect/Effect"
 
-import { createCell, defineExtension, option } from "./index"
+import { createCell, createRowSource, defineExtension, option, toneColor, type Theme, type Tone } from "./index"
 
 declare module "./types" {
   interface EventMap {
@@ -118,5 +118,91 @@ describe("createCell", () => {
     expect(cell.get()).toBe(1)
     cell.set(2)
     expect(cell.get()).toBe(2)
+  })
+})
+
+/** Distinct per token, so a mapping that reached for the wrong one is visible. */
+const theme: Theme = {
+  text: "#text",
+  textMuted: "#muted",
+  accent: "#accent",
+  success: "#success",
+  warning: "#warning",
+  danger: "#danger",
+  info: "#info",
+  background: "#background",
+  backgroundPanel: "#panel",
+  border: "#border",
+  borderFocused: "#borderFocused",
+  selection: "#selection",
+  diffAdded: "#added",
+  diffRemoved: "#removed",
+  diffHunkHeader: "#hunk",
+}
+
+describe("toneColor", () => {
+  it("maps every tone to a theme token, and no tone to ordinary text", () => {
+    // Both sides are mapped over Tone, so a new tone fails to compile until it is mapped
+    // and asserted — the whole point of the function is that no tone falls through.
+    const resolved: { readonly [K in Tone]: string } = {
+      neutral: toneColor(theme, "neutral"),
+      info: toneColor(theme, "info"),
+      success: toneColor(theme, "success"),
+      warning: toneColor(theme, "warning"),
+      danger: toneColor(theme, "danger"),
+      muted: toneColor(theme, "muted"),
+    }
+    const expected: { readonly [K in Tone]: string } = {
+      neutral: theme.text,
+      info: theme.info,
+      success: theme.success,
+      warning: theme.warning,
+      danger: theme.danger,
+      muted: theme.textMuted,
+    }
+
+    expect(resolved).toEqual(expected)
+    expect(toneColor(theme, undefined)).toBe(theme.text)
+  })
+})
+
+describe("createRowSource", () => {
+  it("reports the row the Pane last selected", () => {
+    const host = createRowSource<{ name: string }>({ key: (row) => row.name })
+
+    expect(host.api.selected()).toBeUndefined()
+    host.setSelected({ name: "one" })
+    expect(host.api.selected()).toEqual({ name: "one" })
+    host.setSelected(undefined)
+    expect(host.api.selected()).toBeUndefined()
+  })
+
+  it("keeps a decoration handle usable — as a no-op — after it is disposed", () => {
+    const host = createRowSource<{ name: string }>({ key: (row) => row.name })
+    let calls = 0
+    const handle = host.api.decorateRows(() => {
+      calls += 1
+      return undefined
+    })
+
+    handle.dispose()
+    // Both are "do something to my registration": the answer for a dead one is nothing,
+    // never a throw, because cleanup paths run late by nature.
+    expect(() => handle.refresh()).not.toThrow()
+    expect(() => handle.dispose()).not.toThrow()
+    expect(calls).toBe(0)
+  })
+
+  it("registers the same provider function twice as two providers", () => {
+    const host = createRowSource<{ name: string }>({ key: (row) => row.name })
+    const provider = () => undefined
+
+    const first = host.api.decorateRows(provider)
+    const second = host.api.decorateRows(provider)
+    expect(first).not.toBe(second)
+    expect(() => {
+      first.dispose()
+      second.dispose()
+    }).not.toThrow()
   })
 })
