@@ -419,7 +419,8 @@ export function createCell<T>(initial: T): Cell<T> {
       if (Object.is(current, value)) return
       current = value
       // Snapshotted, so a component unmounting in response cannot break the iteration.
-      for (const listener of [...listeners]) listener()
+      const listenerSnapshot = [...listeners]
+      for (const listener of listenerSnapshot) listener()
     },
     use() {
       return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
