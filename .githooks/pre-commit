@@ -4,4 +4,27 @@ set -eu
 repository_root=$(git rev-parse --show-toplevel)
 cd "$repository_root"
 
+# A raw NUL byte makes git treat a source file as binary: no line diffs, no line-based merge, and
+# both grep and ripgrep skip it silently (exit 1, not an error). Coding agents are this repo's
+# primary extension authors, so a source file grep cannot see is one they cannot work on.
+staged_sources=$(git diff --cached --name-only --diff-filter=ACMR -- "*.ts" "*.tsx")
+if [ -n "$staged_sources" ]; then
+  # Split on newlines only, so paths containing spaces stay whole, and disable globbing so the
+  # shell cannot expand a path that happens to look like a pattern.
+  set -f
+  IFS='
+'
+  for staged_path in $staged_sources; do
+    # Keep only the NULs and count them; a NUL cannot survive a shell variable, so it cannot be
+    # searched for as a grep pattern.
+    nul_count=$(git show ":$staged_path" | LC_ALL=C tr -dc '\000' | wc -c | tr -d '[:space:]')
+    if [ "$nul_count" != "0" ]; then
+      printf '%s\n' "pre-commit: $staged_path contains a raw NUL byte; write it as the \\0 escape." >&2
+      exit 1
+    fi
+  done
+  set +f
+  unset IFS
+fi
+
 exec bun run precommit
