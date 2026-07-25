@@ -110,6 +110,25 @@ describe("ImportCopyCache leases", () => {
     expect(await pathExists(lease.rootPath)).toBe(false)
   })
 
+  it("hides the container from the host repository's status for as long as it exists", async () => {
+    const root = await createTemporaryRoot()
+    const extensions = join(root, "extensions")
+    await fs.mkdir(extensions)
+    await fs.writeFile(join(extensions, "ignored.ts"), "export default {}")
+
+    const diagnostics: ImportCopyCacheDiagnostic[] = []
+    const cache = new ImportCopyCache({ directories: [extensions], diagnose: (entry) => diagnostics.push(entry) })
+    const lease = await cache.acquire(await candidateNamed(extensions, "ignored.ts"), 1)
+
+    // `*` ignores the ignore file too, so the container needs nothing from the repository.
+    expect(await fs.readFile(join(extensions, importCopyContainerName, ".gitignore"), "utf8")).toBe("*\n")
+    expect(diagnostics).toEqual([])
+
+    await cache.releaseAll()
+    expect(await pathExists(lease.rootPath)).toBe(false)
+    expect(await fs.readdir(extensions)).toEqual(["ignored.ts"])
+  })
+
   it("cleans each lease independently and retries paths whose cleanup failed", async () => {
     const root = await createTemporaryRoot()
     const extensions = join(root, "extensions")

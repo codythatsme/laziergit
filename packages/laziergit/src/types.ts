@@ -148,7 +148,8 @@ export interface GitState {
 }
 
 /**
- * Where HEAD points, as the three shapes git can actually produce.
+ * Where HEAD points — the three shapes git can produce, plus the one it cannot because
+ * there is no repository to ask.
  *
  * A union rather than four independent fields because the fields are not independent: an
  * unborn HEAD has no commit to name, a detached one has no branch and therefore no
@@ -158,9 +159,18 @@ export interface GitState {
  */
 export type Head =
   /**
+   * There is no repository here, so HEAD names nothing. Every other slice of
+   * {@link GitState} is empty beside it and every write rejects.
+   *
+   * Its own variant rather than an unborn HEAD with a nameless branch: laziergit runs
+   * wherever the user starts it, so "not a repository" is an ordinary state a Pane renders
+   * differently from a fresh `git init`, and a Pane that must tell them apart should not
+   * have to know that `""` is not a legal refname to do it.
+   */
+  | { readonly kind: "noRepository" }
+  /**
    * `git init` with nothing committed: HEAD is a symbolic ref to a branch that does not
-   * exist yet. Outside a repository the empty snapshot is this variant with `branch: ""`,
-   * which no real branch can be called.
+   * exist yet.
    */
   | { readonly kind: "unborn"; readonly branch: string }
   /** HEAD is a raw commit, so there is no branch to carry an upstream. */

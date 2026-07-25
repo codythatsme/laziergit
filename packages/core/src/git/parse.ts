@@ -178,12 +178,14 @@ export function parseHeadRef(stdout: string, exitCode: number): string | null {
  * upstream is *the same object* its row holds, so the two can never disagree.
  *
  * Unborn is decided by the missing oid and detached by the missing branch. They cannot
- * both hold: a detached HEAD *is* an oid, so it always has one. Should git ever report
- * neither — only reachable from empty output — unborn wins, because it is the variant
- * that claims the least and the one the empty store already serves.
+ * both hold: a detached HEAD *is* an oid, so it always has one. Git reporting neither is
+ * only reachable from empty output — nothing answered — which is `noRepository`, the
+ * variant that claims the least and the one the empty store already serves.
  */
 export function readHead(status: ParsedStatus, headBranch: string | null, branches: readonly Branch[]): Head {
-  if (status.oid === null) return { kind: "unborn", branch: headBranch ?? "" }
+  if (status.oid === null) {
+    return headBranch === null ? { kind: "noRepository" } : { kind: "unborn", branch: headBranch }
+  }
   if (headBranch === null) return { kind: "detached", oid: status.oid }
   return {
     kind: "onBranch",

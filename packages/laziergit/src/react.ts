@@ -153,6 +153,22 @@ export function useEvent<K extends keyof EventMap & string>(
   }, [event, pane?.extension, runtime])
 }
 
+/**
+ * Registers a Pane-scoped Command for as long as the component is mounted.
+ *
+ * Only `run` is live: it is read through a ref, so it always sees the current render's
+ * closure and a Command never acts on stale state. The rest of the spec — `title`, `keys`,
+ * `hidden`, `capture` — is read once, at registration, and a later render changing one of
+ * them does not re-register.
+ *
+ * That is deliberate rather than pending. Re-registering on every spec change would reorder
+ * {@link CommandSpec.keys} conflict resolution, which is insertion-ordered, so a Pane that
+ * recomputed a title would be able to take a key away from another Pane mid-session —
+ * trading a stale cheat-sheet label for nondeterministic key ownership. `keys` is a default
+ * the user's config overrides anyway (§1.7), and dynamic capture belongs to
+ * {@link useKeyCapture} (§5.8). A Command whose *identity* changes should change its `id`,
+ * which does re-register.
+ */
 export function useCommand(spec: Omit<CommandSpec, "pane">): void {
   const runtime = useRuntime()
   const pane = useEnclosingPane("useCommand")
@@ -204,6 +220,18 @@ export interface ScrollSurface {
   /** Total height of the content, in rows. */
   readonly scrollHeight: number
   readonly viewport: { readonly height: number }
+  /**
+   * Scroll the descendant carrying `childId` just far enough to be visible, or do nothing if
+   * it already is — OpenTUI's own `scrollIntoView({ block: "nearest" })`, which measures the
+   * element where it was actually laid out.
+   *
+   * This is what lets {@link ListCursor} follow a cursor without anyone computing a row
+   * number. Group headers, multi-line rows and a collapsed tree all change where a row lands
+   * on screen, and layout already knows where that is; arithmetic agreeing with layout is a
+   * second model to keep in step, and the one place it was tried it had to be undone by a
+   * proxy over this very interface.
+   */
+  scrollChildIntoView(childId: string): void
 }
 
 /** Imperative control of a Pane's `<scrollbox>` — see {@link useScrollView}. */
@@ -221,24 +249,6 @@ export interface ScrollView {
   scrollBy(rows: number): void
   /** Scroll to an absolute row, or to either end. Clamped to the content. */
   scrollTo(row: number | "start" | "end"): void
-}
-
-/**
- * Scroll `surface` the minimum needed to bring `row` on screen — the minimum, so a cursor
- * moving one row at a time scrolls one row at a time instead of recentring on every press.
- *
- * `scrollTop` clamps against the content height OpenTUI measured for the *previous* layout,
- * so the one render that both grows the list and jumps the cursor past the old end lands
- * short. The next cursor move corrects it, which is why this stays a plain assignment
- * rather than growing a retry: the alternative is a hook that re-renders itself.
- */
-function revealRow(surface: ScrollSurface, row: number): void {
-  const rows = surface.viewport.height
-  // Nothing laid out yet, so there is no viewport for the row to be inside of.
-  if (rows <= 0) return
-  const top = surface.scrollTop
-  if (row >= top && row < top + rows) return
-  surface.scrollTop = row < top ? row : row - rows + 1
 }
 
 /**
@@ -290,7 +300,9 @@ export interface ListCursorOptions<T> {
   items: readonly T[]
   /**
    * Your Extension's name: the Commands are registered as `${idPrefix}.cursor.*`, and the
-   * prefix is checked at runtime like every other {@link useCommand} id (§1.8).
+   * prefix is checked at runtime like every other {@link useCommand} id (§1.8). It also
+   * names the rows — see {@link ListCursor.rowId} — so an Extension with two list Panes
+   * gives them different prefixes, exactly as their Command ids already require.
    */
   idPrefix: string
   /** Singular noun for the cheat-sheet titles, e.g. `"file"` → "Next file". */
@@ -305,9 +317,9 @@ export interface ListCursor<T> {
   /** Move the cursor (clicking a row, or jumping to a row your Extension just created). */
   setIndex(index: number): void
   /**
-   * Callback ref for the Pane's `<scrollbox>`: attach it and the selected row is scrolled
-   * into view whenever the cursor moves past the edge of the viewport. Give the box
-   * `flexGrow={1} flexBasis={0}` — see {@link ScrollView.ref}.
+   * Callback ref for the Pane's `<scrollbox>`: attach it, put {@link rowId} on each row, and
+   * the selected row is scrolled into view whenever the cursor moves past the edge of the
+   * viewport. Give the box `flexGrow={1} flexBasis={0}` — see {@link ScrollView.ref}.
    *
    * ```tsx
    * <scrollbox ref={cursor.scrollRef} flexGrow={1} flexBasis={0}>{rows}</scrollbox>
@@ -317,6 +329,23 @@ export interface ListCursor<T> {
    * on and an invisible cursor is worse than no cursor.
    */
   readonly scrollRef: (surface: ScrollSurface | null) => void
+  /**
+   * The `id` to put on the element drawn for `items[index]`, so the cursor can find that row
+   * and scroll it into view.
+   *
+   * ```tsx
+   * {items.map((item, index) => (
+   *   <box key={item.id} id={cursor.rowId(index)}>…</box>
+   * ))}
+   * ```
+   *
+   * An id rather than a row number because the two are not the same thing the moment a Pane
+   * draws anything between its rows — a group header, a blank line, a second line of detail.
+   * Layout already knows where the row landed, so revealing asks it (see
+   * {@link ScrollSurface.scrollChildIntoView}) instead of keeping a parallel height model
+   * that has to agree with it.
+   */
+  rowId(index: number): string
 }
 
 /**
@@ -351,9 +380,11 @@ export function useListCursor<T>({ items, idPrefix, noun }: ListCursorOptions<T>
   // left behind).
   useEffect(() => {
     if (requested !== index) setRequested(index)
-    const node = surface.current
-    if (node) revealRow(node, index)
-  }, [requested, index])
+    // Layout has resolved by the time an effect runs, so the row is where OpenTUI will draw
+    // it and this needs no deferral — the reveal is a plain call, not a hook that schedules
+    // a frame and re-renders itself.
+    surface.current?.scrollChildIntoView(`${idPrefix}.row.${index}`)
+  }, [requested, index, idPrefix])
 
   // Each motion binds the vim key and the arrow/nav key that means the same thing, so muscle
   // memory from either reaches the same Command. A user rebinding one of these in config
@@ -395,7 +426,8 @@ export function useListCursor<T>({ items, idPrefix, noun }: ListCursorOptions<T>
   }, [])
 
   const setIndex = useCallback((next: number) => setRequested(next), [])
-  return { index, selected: items[index], setIndex, scrollRef }
+  const rowId = useCallback((row: number) => `${idPrefix}.row.${row}`, [idPrefix])
+  return { index, selected: items[index], setIndex, scrollRef, rowId }
 }
 
 export function createCell<T>(initial: T): Cell<T> {

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { importCopyContainerName, type ExtensionCandidate } from "./discovery"
+import { importCopyContainerName, importCopyIgnoreName, type ExtensionCandidate } from "./discovery"
 
 export type ProcessState = "live" | "dead" | "unknown"
 export type ProcessStateProbe = (pid: number) => ProcessState
@@ -28,6 +28,9 @@ export interface ImportCopyLease {
 
 /** `<pid>-<generation>-<timestamp>-<sequence>-<extension>`, inside the cache container. */
 const CACHE_NAME = /^(\d+)-(\d+)-(\d+)-(.+)$/
+
+/** `*` matches the ignore file too, so the container hides itself with no outside cooperation. */
+const CONTAINER_IGNORE_CONTENT = "*\n"
 
 function normalizeError(error: unknown): Error {
   if (error instanceof Error) return error
@@ -210,7 +213,9 @@ export class ImportCopyCache {
     try {
       // The container is created on demand rather than at startup, so an Extension directory
       // nobody has loaded from stays exactly as its owner left it.
-      await fs.mkdir(dirname(copyRoot), { recursive: true })
+      const container = dirname(copyRoot)
+      await fs.mkdir(container, { recursive: true })
+      await this.#writeContainerIgnore(container)
       let entryPath: string
       if (candidate.rootPath === candidate.entryPath) {
         await fs.mkdir(copyRoot)
@@ -256,8 +261,16 @@ export class ImportCopyCache {
     // the same container, and `rmdir` refusing a non-empty directory is how we ask.
     await Promise.all(
       this.#directories.map(async (directory) => {
+        const container = join(directory, importCopyContainerName)
         try {
-          await fs.rmdir(join(directory, importCopyContainerName))
+          // Our own ignore file must not be what keeps the container alive, but it is dropped
+          // only once it is alone: while another laziergit still holds copies here, those copies
+          // are what the ignore file is for.
+          const entries = await fs.readdir(container)
+          if (entries.length === 1 && entries[0] === importCopyIgnoreName) {
+            await fs.rm(join(container, importCopyIgnoreName))
+          }
+          await fs.rmdir(container)
         } catch {
           // A container that is missing, in use, or unwritable is not an error to report.
         }
@@ -276,6 +289,22 @@ export class ImportCopyCache {
     this.#sequence += 1
     const name = `${process.pid}-${generation}-${Date.now()}-${this.#sequence}-${basename(candidate.rootPath)}`
     return join(dirname(candidate.rootPath), importCopyContainerName, name)
+  }
+
+  /**
+   * The container is written into somebody else's working tree — most repositories reach here
+   * through their own `.laziergit/extensions` — so laziergit's scratch copies would otherwise
+   * surface as untracked files in that repository's status, and discarding them would delete a
+   * copy out from under a running Extension. Rewritten on every acquire because that is both
+   * idempotent and free of the stat-then-write race a conditional check would introduce.
+   */
+  async #writeContainerIgnore(container: string): Promise<void> {
+    try {
+      await fs.writeFile(join(container, importCopyIgnoreName), CONTAINER_IGNORE_CONTENT)
+    } catch (error) {
+      // A visible container is untidy, not fatal: the copy it holds still imports.
+      this.#report(`Failed to ignore import-copy cache root ${container}`, error)
+    }
   }
 
   async #release(lease: ImportCopyLeaseImplementation): Promise<void> {

@@ -86,6 +86,14 @@ function isExtensionFile(name: string): boolean {
  */
 export const importCopyContainerName = ".laziergit-cache"
 
+/**
+ * The one file inside the container that is not an import copy — it is what keeps the
+ * container out of the host repository's status. Named here beside the container so the
+ * cache and everything that reads the container back agree on what is scratch and what is
+ * bookkeeping.
+ */
+export const importCopyIgnoreName = ".gitignore"
+
 function isExcludedTreeEntry(name: string): boolean {
   // `startsWith`, so copies written flat by an older build are still skipped rather than
   // fingerprinted as Extension content forever.

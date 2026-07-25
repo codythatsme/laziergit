@@ -2,7 +2,8 @@
 import {
   createRowSource,
   defineExtension,
-  GitError,
+  describeGitFailure,
+  remoteWebUrl,
   toneColor,
   useCommand,
   useGit,
@@ -12,7 +13,6 @@ import {
   type CommitsApi,
   type Head,
   type PaneProps,
-  type Remote,
 } from "laziergit"
 import { useEffect } from "react"
 
@@ -54,49 +54,14 @@ type ResetMode = "soft" | "mixed" | "hard"
 
 /**
  * Why there is no log to draw. The three read identically as "zero rows" and mean entirely
- * different things, and the one the store cannot say on its own is "there is no repository":
- * outside one it serves an unborn HEAD whose branch is `""`, a name no refname can have. So
- * that is decoded here, at the boundary, exactly as the status Pane decodes it — keying the
- * message on `kind === "unborn"` alone promises a first commit in a directory git has never
- * heard of.
+ * different things — telling an unborn HEAD from no repository is what keeps the empty
+ * state from promising a first commit in a directory git has never heard of.
  */
 type EmptyReason = "noRepository" | "unborn" | "loaded"
 
 function emptyReason(head: Head): EmptyReason {
-  if (head.kind !== "unborn") return "loaded"
-  return head.branch === "" ? "noRepository" : "unborn"
-}
-
-/**
- * The scp-style SSH spelling git prints for most hosts (`git@github.com:owner/repo.git`),
- * and the plain HTTP(S) one. The part before `@` may not contain a slash, so a local path
- * that happens to hold one — `/Users/ann@work/repo` — is not mistaken for a host.
- */
-const sshRemote = /^(?:ssh:\/\/)?[^@\s/]+@([^\s:/]+)[:/](\S+?)(?:\.git)?\/?$/
-const httpRemote = /^(https?:\/\/\S+?)(?:\.git)?\/?$/
-
-/**
- * The web page a remote corresponds to, or null when it has none — a `file://` remote, a
- * bare directory, a sibling clone. Returning null is the point: it is what lets the "open
- * on remote" item hide itself rather than offer a URL nobody can visit.
- *
- * `origin` before whatever comes first: §0's transform reaches for `remotes[0]`, which is
- * the same answer in a one-remote repository and the wrong one as soon as a fork is added.
- *
- * Character for character the same pair the status Pane opens the repository with, and kept
- * that way by hand because ADR-0001 gives the two no package to share it through: a remote
- * one of them recognises and the other does not is an inconsistency the user cannot explain.
- */
-function webRemoteUrl(remotes: readonly Remote[]): string | null {
-  const remote = remotes.find((candidate) => candidate.name === "origin") ?? remotes[0]
-  if (remote === undefined) return null
-
-  const url = remote.fetchUrl.trim()
-  const ssh = sshRemote.exec(url)
-  const host = ssh?.[1]
-  const path = ssh?.[2]
-  if (host !== undefined && path !== undefined) return `https://${host}/${path}`
-  return httpRemote.exec(url)?.[1] ?? null
+  if (head.kind === "noRepository") return "noRepository"
+  return head.kind === "unborn" ? "unborn" : "loaded"
 }
 
 export default defineExtension({
@@ -112,8 +77,7 @@ export default defineExtension({
 
     /** `GitError` carries git's own words, and they beat anything this Extension could invent. */
     function report(error: unknown): void {
-      if (error instanceof GitError) return ctx.popups.notify(error.stderr.trim() || error.message, "error")
-      ctx.popups.notify(error instanceof Error ? error.message : String(error), "error")
+      ctx.popups.notify(describeGitFailure(error), "error")
     }
 
     async function attempt(done: string, action: () => Promise<unknown>): Promise<void> {
@@ -249,9 +213,9 @@ export default defineExtension({
               label: "Open this commit on the remote",
               // Hidden rather than inert when there is nothing to open: a `file://` remote
               // or a sibling clone has no web page, and §1.9 hides what cannot apply.
-              when: () => webRemoteUrl(ctx.git.state.remotes) !== null,
+              when: () => remoteWebUrl(ctx.git.state.remotes) !== null,
               run: async (commit) => {
-                const base = webRemoteUrl(ctx.git.state.remotes)
+                const base = remoteWebUrl(ctx.git.state.remotes)
                 // `when` already hid the item; re-reading keeps a null out of the URL if the
                 // remote went away between opening the menu and pressing the key.
                 if (base === null) return ctx.popups.notify("No web remote configured", "warning")
@@ -295,10 +259,12 @@ export default defineExtension({
 
     function CommitRow({
       commit,
+      id,
       now,
       selected,
     }: {
       readonly commit: Commit
+      readonly id: string
       readonly now: number
       readonly selected: boolean
     }) {
@@ -308,7 +274,7 @@ export default defineExtension({
       const badge = decoration?.badge
 
       return (
-        <text bg={selected ? theme.selection : undefined}>
+        <text id={id} bg={selected ? theme.selection : undefined}>
           <span fg={dim ? theme.textMuted : theme.accent}>{commit.shortOid}</span>
           {/* A fixed-width gutter, so the merge marker reads as a column instead of shifting
               every merge row's subject one place right. */}
@@ -383,7 +349,13 @@ export default defineExtension({
         <box flexDirection="column" flexGrow={1} flexBasis={0}>
           <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
             {commits.map((commit, index) => (
-              <CommitRow key={commit.oid} commit={commit} now={now} selected={index === cursor.index && focused} />
+              <CommitRow
+                key={commit.oid}
+                id={cursor.rowId(index)}
+                commit={commit}
+                now={now}
+                selected={index === cursor.index && focused}
+              />
             ))}
           </scrollbox>
           {truncated && cursor.index === commits.length - 1 ? (

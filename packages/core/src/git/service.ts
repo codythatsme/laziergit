@@ -280,8 +280,10 @@ export class GitService {
       const branches = parseBranches(outputs.branches.stdout, headBranch)
       const head = readHead(status, headBranch, branches)
 
+      // Asking for a log needs a commit to start from, which is exactly the two variants
+      // carrying an oid — spelled positively so a later variant cannot slip through.
       const commits =
-        head.kind === "unborn"
+        head.kind !== "detached" && head.kind !== "onBranch"
           ? Effect.succeed("")
           : Effect.catch(
               Effect.map(execGit(root, commitArgs(this.#config.commitLimit)), (output) => output.stdout),
@@ -436,13 +438,18 @@ export class GitService {
     })
   }
 
-  /** Republishes after a write, so the caller's `await` already sees the result on the screen. */
+  /**
+   * Republishes after a write, so the caller's `await` already sees the result on the
+   * screen — whether git said yes or no. A failed write is not a write that did nothing: a
+   * conflicting `stash pop`, a `pull --rebase` that stops on a conflict, a `discard` whose
+   * `clean` fails after its `restore` landed, all move the repository while rejecting, and
+   * a success-only refresh would leave the store reporting the state from before. A refresh
+   * that turns out to have nothing to report is already coalesced, so it costs one read.
+   */
   #refreshed<A>(effect: Effect.Effect<A, GitError>): Effect.Effect<A, GitError> {
-    return Effect.flatMap(effect, (value) =>
-      Effect.map(
-        Effect.promise(() => this.refresh()),
-        () => value,
-      ),
+    return Effect.ensuring(
+      effect,
+      Effect.promise(() => this.refresh()),
     )
   }
 

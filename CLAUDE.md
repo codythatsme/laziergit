@@ -12,7 +12,7 @@ A lazygit-inspired git TUI: light core, everything is a TypeScript Extension. Th
 ## Hard rules
 
 - **Everything is an extension** (ADR-0001): `extensions/*` may import only `"laziergit"` — never `packages/core` internals. `packages/laziergit` must never depend on `packages/core`.
-- **Effect stays internal** (ADR-0002): Effect v4 beta in `packages/core` only; the public API is plain async TS. Never let an Effect type leak into `packages/laziergit`.
+- **Effect stays internal** (ADR-0002): Effect v4 beta runs in `packages/core` only; the public API is plain async TS. The single exception is `ctx.effect`, whose three signatures in `packages/laziergit` are types-only imports against an `effect` peer dependency — no Effect *value* may cross, and nothing else in the public surface may name an Effect type.
 - **Bun only** (ADR-0003): `@opentui/react` on React 19; no build step for extensions.
 - Menus are data; every ctx registration is auto-disposed on deactivate; hot-reload correctness (scope disposal + stale-ctx poisoning) is an M1 gate, not a retrofit.
 - Git: shell out to system git via argv arrays (never string shell); no fs-watching of `.git` — refresh-after-mutation + ~2s fingerprint poll.
