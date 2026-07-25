@@ -28,7 +28,7 @@
     "dev": "bun packages/core/src/main.tsx",
     "format": "oxfmt --write packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
     "format:check": "oxfmt --check packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
-    "lint": "oxlint packages extensions scripts",
+    "lint": "oxlint --deny-warnings packages extensions scripts",
     "precommit": "bun run format:check && bun run lint && bun run typecheck",
     "prepare": "git config core.hooksPath .githooks",
     "test": "bun test --timeout 30000 ./packages",

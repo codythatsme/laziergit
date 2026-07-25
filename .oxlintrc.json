@@ -4,6 +4,8 @@
     "typeAware": true
   },
   "rules": {
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
     "typescript/no-redundant-type-constituents": "off"
   }
 }
