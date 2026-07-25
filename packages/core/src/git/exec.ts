@@ -10,8 +10,32 @@ import { GitError, type GitOutput } from "laziergit"
  *   surface (diff headers, error text naming a path) would otherwise arrive as
  *   `"h\303\251llo"`. Setting it once means no C-string unquoter is ever needed.
  * - `color.ui=false` — a user with `color.ui=always` cannot tint anything we parse.
+ * - the `diff.*` four — the diff Pane reads the file a patch section is about out of that
+ *   section's `--- a/`/`+++ b/` header, and each of these rewrites that header: `noprefix`
+ *   drops the prefixes, `mnemonicPrefix` swaps them for `i/`, `w/`, `c/`, `o/`, and
+ *   `srcPrefix`/`dstPrefix` replace them outright. Unpinned, a user who sets any of them sees
+ *   every file in a multi-file diff named "(unnamed)" and highlighted as no language at all.
+ *
+ * The other setting that reshapes a patch, an external differ, cannot be pinned here: `-c
+ * diff.external=` does not override the `GIT_EXTERNAL_DIFF` environment variable, and the flag
+ * that does — `--no-ext-diff` — is a diff option that `status`, `add` and `commit` reject. It
+ * goes on the argvs that actually produce a patch.
  */
-const baseFlags = ["--no-pager", "-c", "core.quotepath=false", "-c", "color.ui=false"] as const
+const baseFlags = [
+  "--no-pager",
+  "-c",
+  "core.quotepath=false",
+  "-c",
+  "color.ui=false",
+  "-c",
+  "diff.noprefix=false",
+  "-c",
+  "diff.mnemonicPrefix=false",
+  "-c",
+  "diff.srcPrefix=a/",
+  "-c",
+  "diff.dstPrefix=b/",
+] as const
 
 /**
  * Reads additionally suppress the *optional* index rewrite `git status` performs to

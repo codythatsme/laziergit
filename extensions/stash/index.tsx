@@ -180,19 +180,26 @@ export default defineExtension({
       id,
       now,
       selected,
+      focused,
     }: {
       readonly entry: StashEntry
       readonly id: string
       readonly now: number
       readonly selected: boolean
+      readonly focused: boolean
     }) {
       const theme = useTheme()
       const decoration = rows.useDecoration(entry)
+      const dim = decoration?.dim === true
 
       return (
-        <text id={id} bg={selected ? theme.selection : undefined}>
-          <span fg={theme.accent}>{stashRef(entry)}</span>
-          <span fg={decoration?.dim === true ? theme.textMuted : theme.text}>{` ${entry.message}`}</span>
+        <text id={id} bg={selected && focused ? theme.selection : undefined}>
+          {/* The marker, not the highlight, is what says where the cursor is while another
+              Pane holds focus — the state in which the diff on screen is still this Pane's
+              selection and the user needs to see which row that was. */}
+          <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
+          <span fg={dim ? theme.textMuted : theme.accent}>{stashRef(entry)}</span>
+          <span fg={dim ? theme.textMuted : theme.text}>{` ${entry.message}`}</span>
           {/* Absent for a stash taken on a detached HEAD, where git recorded no branch. */}
           {entry.branch === null ? null : <span fg={theme.textMuted}>{` on ${entry.branch}`}</span>}
           <span fg={theme.textMuted}>{` ${relativeAge(entry.createdAt, now)}`}</span>
@@ -230,6 +237,9 @@ export default defineExtension({
         diff.show(selected === undefined ? null : { kind: "stash", ref: stashRef(selected), path: null })
       }, [focused, selected])
 
+      // A selection is empty only when the list is, and the empty state below already says so
+      // — a toast would repeat it, so every key with nothing to act on is a silent no-op. The
+      // same rule in the files, branches and commits Panes.
       useCommand({
         id: "stash.apply",
         title: "Apply stash",
@@ -283,7 +293,8 @@ export default defineExtension({
               id={cursor.rowId(index)}
               entry={entry}
               now={now}
-              selected={index === cursor.index && focused}
+              selected={index === cursor.index}
+              focused={focused}
             />
           ))}
         </scrollbox>

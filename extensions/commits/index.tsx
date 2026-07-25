@@ -262,11 +262,13 @@ export default defineExtension({
       id,
       now,
       selected,
+      focused,
     }: {
       readonly commit: Commit
       readonly id: string
       readonly now: number
       readonly selected: boolean
+      readonly focused: boolean
     }) {
       const theme = useTheme()
       const decoration = rows.useDecoration(commit)
@@ -274,7 +276,11 @@ export default defineExtension({
       const badge = decoration?.badge
 
       return (
-        <text id={id} bg={selected ? theme.selection : undefined}>
+        <text id={id} bg={selected && focused ? theme.selection : undefined}>
+          {/* The marker, not the highlight, is what says where the cursor is while another
+              Pane holds focus — the state in which the diff on screen is still this Pane's
+              selection and the user needs to see which row that was. */}
+          <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
           <span fg={dim ? theme.textMuted : theme.accent}>{commit.shortOid}</span>
           {/* A fixed-width gutter, so the merge marker reads as a column instead of shifting
               every merge row's subject one place right. */}
@@ -310,12 +316,15 @@ export default defineExtension({
         diff.show({ kind: "commit", ref: selected.oid, path: null })
       }, [focused, selected])
 
+      // A selection is empty only when the list is, and the empty state below already says so
+      // — a toast would repeat it, so a key with nothing to act on is a silent no-op. The same
+      // rule in the files, branches and stash Panes.
       useCommand({
         id: "commits.menu",
         title: "Commit actions",
         keys: "x",
         run: async () => {
-          if (selected === undefined) return ctx.popups.notify("No commit to act on", "warning")
+          if (selected === undefined) return
           await ctx.menus.open("commits.actions", selected)
         },
       })
@@ -354,7 +363,8 @@ export default defineExtension({
                 id={cursor.rowId(index)}
                 commit={commit}
                 now={now}
-                selected={index === cursor.index && focused}
+                selected={index === cursor.index}
+                focused={focused}
               />
             ))}
           </scrollbox>

@@ -3,6 +3,7 @@ import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { act } from "react"
 
+import { gitIsolationEnv } from "../git/test-repo"
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
 
 installHarnessLifecycle()
@@ -38,22 +39,10 @@ const diffStub = `
   })
 `
 
-/**
- * Pinned identity and no user config, so a developer's own `~/.gitconfig` cannot change what
- * these tests observe — the same isolation the harness itself initialises the repository with.
- */
 async function git(harness: Harness, ...args: readonly string[]): Promise<string> {
   const child = Bun.spawn(["git", ...args], {
     cwd: harness.directory,
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_SYSTEM: "/dev/null",
-      GIT_AUTHOR_NAME: "Test",
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "Test",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-    },
+    env: { ...process.env, ...gitIsolationEnv },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

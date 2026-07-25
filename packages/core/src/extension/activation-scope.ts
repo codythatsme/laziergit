@@ -4,12 +4,26 @@ import { StaleContextError, type Disposable, type StaleReason } from "laziergit"
 import { normalizeError, type Diagnostics } from "./diagnostics"
 
 type Finalizer = () => void | Promise<void>
-type FinalizerState = "pending" | "running" | "done" | "detached"
 
+/**
+ * How far through its life one tracked finalizer is, as one shape per phase: the callback
+ * exists exactly while it is still owed a call, and the completion promise exactly while
+ * there is a run for a second caller to wait on. Carrying them as independent fields would
+ * make "running with nothing to await" and "pending with nothing to run" expressible, and
+ * every reader would then owe them a fallback. `detached` (the supervised promise settled
+ * first, so the cleanup is moot) and `done` (the finalizer ran) are the two ways of being
+ * over; nothing branches on which, but they are kept apart because they say different
+ * things about how a record got here.
+ */
+type FinalizerPhase =
+  | { readonly kind: "pending"; readonly finalizer: Finalizer }
+  | { readonly kind: "running"; readonly completion: Promise<void> }
+  | { readonly kind: "detached" }
+  | { readonly kind: "done" }
+
+/** A box, not a value: identity is what {@link ActivationScope} tracks and removes by. */
 interface FinalizerRecord {
-  finalizer: Finalizer | undefined
-  state: FinalizerState
-  completion: Promise<void> | undefined
+  phase: FinalizerPhase
 }
 
 const completed = Promise.resolve()
@@ -142,20 +156,15 @@ export class ActivationScope {
   }
 
   #register(finalizer: Finalizer): FinalizerRecord {
-    const record: FinalizerRecord = {
-      finalizer,
-      state: "pending",
-      completion: undefined,
-    }
+    const record: FinalizerRecord = { phase: { kind: "pending", finalizer } }
     this.#finalizers.push(record)
     return record
   }
 
   #detach(record: FinalizerRecord): boolean {
-    if (record.state !== "pending") return false
+    if (record.phase.kind !== "pending") return false
 
-    record.state = "detached"
-    record.finalizer = undefined
+    record.phase = { kind: "detached" }
     this.#remove(record)
     return true
   }
@@ -166,28 +175,26 @@ export class ActivationScope {
   }
 
   #run(record: FinalizerRecord): Promise<void> {
-    if (record.state === "running") return record.completion ?? completed
-    if (record.state !== "pending") return completed
-
-    record.state = "running"
-    const finalizer = record.finalizer
-    record.finalizer = undefined
+    const phase = record.phase
+    if (phase.kind === "running") return phase.completion
+    if (phase.kind !== "pending") return completed
 
     let resolveCompletion: () => void = () => undefined
     const completion = new Promise<void>((resolve) => {
       resolveCompletion = resolve
     })
-    record.completion = completion
+    // Only now is the record running: the phase and the promise a second caller awaits are
+    // published together, so no window exists in which one is set without the other.
+    record.phase = { kind: "running", completion }
 
     const finish = () => {
       this.#remove(record)
-      record.state = "done"
-      record.completion = undefined
+      record.phase = { kind: "done" }
       resolveCompletion()
     }
 
     try {
-      Promise.resolve(finalizer?.()).then(finish, (error: unknown) => {
+      Promise.resolve(phase.finalizer()).then(finish, (error: unknown) => {
         this.#reportFinalizerFailure(error)
         finish()
       })

@@ -3,6 +3,7 @@ import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { act } from "react"
 
+import { gitIsolationEnv } from "../git/test-repo"
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
 
 installHarnessLifecycle()
@@ -56,23 +57,10 @@ const decoratorStub = `
   })
 `
 
-/**
- * Pinned identity and no user config, so a developer's own `~/.gitconfig` — signing, merge
- * drivers, default branch — can never change what these tests observe.
- */
-const isolation: Readonly<Record<string, string>> = {
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
-  GIT_AUTHOR_NAME: "Test",
-  GIT_AUTHOR_EMAIL: "test@example.com",
-  GIT_COMMITTER_NAME: "Test",
-  GIT_COMMITTER_EMAIL: "test@example.com",
-}
-
 async function run(cwd: string, args: readonly string[]): Promise<{ stdout: string; exitCode: number }> {
   const child = Bun.spawn(["git", ...args], {
     cwd,
-    env: { ...process.env, ...isolation },
+    env: { ...process.env, ...gitIsolationEnv },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

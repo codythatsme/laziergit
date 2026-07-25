@@ -140,6 +140,26 @@ it("rejects an inherited property name as a theme token", () => {
   expect(Object.prototype.toString.call(loaded.core.theme)).toBe("[object Object]")
 })
 
+it("reports a misspelled key in the Layout, in a Layout column, and in the status line", () => {
+  const loaded = loadConfig(
+    documents(
+      null,
+      `{
+        "layout": { "colums": [["status", "files"]], "columns": [{ "cells": ["diff"], "wieght": 2 }] },
+        "statusline": { "lft": ["branch"] }
+      }`,
+    ),
+  )
+
+  // The published schema closes all three of these sections, so a typo the editor underlines
+  // must not load as a silently empty Layout with nothing said about it.
+  expect(loaded.problems).toEqual([
+    { path: "layout.colums", message: "Unknown Layout setting" },
+    { path: "layout.columns[0].wieght", message: "Unknown Layout column setting" },
+    { path: "statusline.lft", message: "Unknown statusline setting" },
+  ])
+})
+
 it("validates an Extension section against its own schema, falling back per option", () => {
   const schema = {
     limit: option.number({ default: 15, min: 1, max: 100 }),
@@ -183,6 +203,20 @@ it("rejects a git section that is not an object, and a fractional interval", () 
   expect(loadConfig(documents(`{ "git": { "commitLimit": 1.5 } }`, null)).problems).toEqual([
     { path: "git.commitLimit", message: "Expected a whole number" },
   ])
+})
+
+it("does not read an Extension option off Object.prototype", () => {
+  // Through `loadConfig`, because the hazard is the section object the loader rebuilds: an
+  // object literal written here would carry the prototype whatever the loader does.
+  const loaded = loadConfig(documents(null, `{ "extensions": { "labels": { "limit": 5 } } }`))
+  const resolved = resolveExtensionConfig(
+    "labels",
+    { toString: option.string({ default: "plain" }), limit: option.number({ default: 15 }) },
+    loaded.extensions.get("labels"),
+  )
+
+  expect(resolved.values).toEqual({ toString: "plain", limit: 5 })
+  expect(resolved.problems).toEqual([])
 })
 
 it("produces total defaults for an Extension with no config section", () => {

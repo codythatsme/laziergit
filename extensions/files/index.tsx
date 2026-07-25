@@ -355,10 +355,7 @@ export default defineExtension({
     }
 
     async function openMenu(row: FileRow | undefined): Promise<void> {
-      if (row === undefined) {
-        ctx.popups.notify("No file selected")
-        return
-      }
+      if (row === undefined) return
       await ctx.menus.open("files.actions", row.change)
     }
 
@@ -482,6 +479,9 @@ export default defineExtension({
         )
       }, [focused, selected])
 
+      // A selection is empty only when the list is, and the empty state below already says so
+      // — a toast would repeat it, so every key with nothing to act on is a silent no-op. The
+      // same rule in the branches, commits and stash Panes.
       useCommand({
         id: "files.toggle-stage",
         title: "Stage / unstage file",

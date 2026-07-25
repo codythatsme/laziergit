@@ -3,11 +3,12 @@ import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { act } from "react"
 
+import { gitIsolationEnv } from "../git/test-repo"
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
 
 installHarnessLifecycle()
 
-/** The shipped Extension itself, symlinked into the harness's bundled scope (see bundled.test.tsx). */
+/** The shipped Extension itself, symlinked into the harness's bundled scope the way `main.tsx` loads it. */
 const commitsExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commits")
 
 /**
@@ -17,10 +18,9 @@ const commitsExtension = resolve(import.meta.dir, "..", "..", "..", "..", "exten
  */
 const ignored = ".gitignore\nbundled/\nglobal/\nrepo/\n*.json\n*.jsonc\n"
 
-/** Pinned identity and no user config, so a developer's `~/.gitconfig` cannot move a fixture. */
+/** The commits Pane renders the author, so this fixture overrides the shared identity with a recognisable one. */
 const isolation: Readonly<Record<string, string>> = {
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
+  ...gitIsolationEnv,
   GIT_AUTHOR_NAME: "Ada Lovelace",
   GIT_AUTHOR_EMAIL: "ada@example.com",
   GIT_COMMITTER_NAME: "Ada Lovelace",

@@ -416,12 +416,18 @@ export function createExtensionContext(
     popups,
     statusline,
     extensions: scope.guard({
-      get(name: string) {
+      /**
+       * The one assertion the hub needs, and no wider than that. `ExtensionHub.get` returns
+       * a type conditional on the caller's own `needs` tuple, which this untyped host — it
+       * hands back whatever the other Extension exported — can neither compute nor satisfy
+       * structurally; `never` is what every instantiation of that conditional accepts.
+       */
+      get(name: string): never {
         const lookup = hosts.getExtensionApi(name)
         if (lookup.state === "missing") throw new Error(`Required extension "${name}" has no live API`)
-        return guardConsumedApi(lookup.api, scope)
+        return guardConsumedApi(lookup.api, scope) as never
       },
-    } as object) as never,
+    }),
     effect: scope.guard(createEffectEscape(extension, scope, hosts)),
     signal: scope.signal,
     exec(command, args = [], options = {}) {

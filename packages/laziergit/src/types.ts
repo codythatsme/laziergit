@@ -397,6 +397,14 @@ export interface Theme {
   readonly danger: string
   readonly info: string
   readonly background: string
+  /**
+   * The raised chrome that sits *above* {@link background} — popups and the status line.
+   *
+   * Not a Pane background, despite the name: a Pane draws on {@link background} like
+   * everything else in the Layout, and "panel" here means the lifted surface, not the
+   * CONTEXT.md sense of the word. Renaming it is a breaking change to every user theme, so
+   * the name stays and this says what it means.
+   */
   readonly backgroundPanel: string
   readonly border: string
   readonly borderFocused: string

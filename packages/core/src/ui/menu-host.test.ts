@@ -99,6 +99,27 @@ it("resolves a key claimed twice across the whole menu, not group by group", () 
   errorSpy.mockRestore()
 })
 
+it("reports a standing key conflict once, however often the menu is opened", () => {
+  const { menus, diagnostics } = createHost()
+  const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+  menus.register("branches", {
+    id: "branches.actions",
+    title: () => "Branch",
+    groups: [group("Manage", { key: "d", label: "Delete branch" })],
+  })
+  menus.extend("github-prs", "branches.actions", {
+    group: "GitHub",
+    items: [{ key: "d", label: "Draft PR", run: () => undefined }],
+  })
+
+  menus.open("branches", "branches.actions", null)
+  menus.open("branches", "branches.actions", null)
+  menus.open("branches", "branches.actions", null)
+
+  expect(diagnostics.getSnapshot()).toHaveLength(1)
+  errorSpy.mockRestore()
+})
+
 it("hides an item whose `when` says no, and treats a throwing `when` as hidden", () => {
   const { menus, popups, diagnostics } = createHost()
   const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)

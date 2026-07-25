@@ -10,13 +10,16 @@ import type { CommandEntry } from "../extension/command-host"
 import { normalizeError, type Diagnostics } from "../extension/diagnostics"
 
 /**
- * Priority bands. The keymap breaks ties by registration recency, which across
- * Extensions is arbitrary, so every laziergit layer states its band explicitly.
+ * Priority bands, one per {@link LayerScope} kind. The keymap breaks ties by registration
+ * recency, which across Extensions is arbitrary, so every laziergit layer states its band
+ * explicitly. Capture sits above every Pane layer and below a popup: a modal still
+ * outranks a Pane that captures keys.
  */
-const globalLayerPriority = 0
-const paneLayerPriority = 100
-/** Above every Pane layer, below a popup: a modal still outranks a Pane that captures keys. */
-const captureLayerPriority = 500
+const layerPriority: Record<LayerScope["kind"], number> = {
+  global: 0,
+  pane: 100,
+  capture: 500,
+}
 export const modalLayerPriority = 1000
 
 export interface KeymapInstallOptions {
@@ -94,21 +97,27 @@ export function installKeymap<TTarget extends object, TEvent extends KeymapEvent
   }
 }
 
-/** The audience of one keymap layer: whose Commands it carries, and in which mode. */
-interface LayerScope {
-  /** The Pane the layer belongs to, or null for the global layer. */
-  readonly paneId: string | null
-  /** Carries `capture: true` Commands, live only while that Pane is capturing raw input. */
-  readonly capture: boolean
+/**
+ * The audience of one keymap layer: whose Commands it carries, and in which mode. A
+ * `"capture"` layer carries the `capture: true` Commands that are live only while its Pane
+ * is capturing raw input, and it names a Pane because capture is a property of a Pane —
+ * a global Command's {@link CommandEntry.capture} is always false, so a capturing global
+ * layer is not a state this type can describe.
+ */
+type LayerScope = { readonly kind: "global" } | { readonly kind: "pane" | "capture"; readonly paneId: string }
+
+function scopeOf(entry: CommandEntry): LayerScope {
+  if (entry.pane === undefined) return { kind: "global" }
+  return { kind: entry.capture ? "capture" : "pane", paneId: entry.pane }
 }
 
 function describeScope(scope: LayerScope): string {
-  if (scope.paneId === null) return "global"
-  return scope.capture ? `"${scope.paneId}" capture` : `"${scope.paneId}"`
+  if (scope.kind === "global") return "global"
+  return scope.kind === "capture" ? `"${scope.paneId}" capture` : `"${scope.paneId}"`
 }
 
 function scopeKey(scope: LayerScope): string {
-  return `${scope.paneId ?? ""}\0${scope.capture ? "capture" : "normal"}`
+  return scope.kind === "global" ? "\0global" : `${scope.paneId}\0${scope.kind}`
 }
 
 /**
@@ -196,7 +205,7 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
     const byScope = new Map<string, { readonly scope: LayerScope; readonly entries: CommandEntry[] }>()
     for (const entry of this.#entries) {
       if (entry.keys.length === 0) continue
-      const scope: LayerScope = { paneId: entry.pane ?? null, capture: entry.capture }
+      const scope = scopeOf(entry)
       const layer = byScope.get(scopeKey(scope)) ?? { scope, entries: [] }
       layer.entries.push(entry)
       byScope.set(scopeKey(scope), layer)
@@ -218,11 +227,7 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   #registerScope(scope: LayerScope, bindings: readonly Binding<TTarget, TEvent>[]): () => void {
     try {
       return this.#keymap.registerLayer({
-        priority: scope.capture
-          ? captureLayerPriority
-          : scope.paneId === null
-            ? globalLayerPriority
-            : paneLayerPriority,
+        priority: layerPriority[scope.kind],
         enabled: this.#matcher(scope),
         bindings,
       })
@@ -239,9 +244,9 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
         const capturing = this.capturingPaneId
         // A capture layer answers only to its own Pane's capture; every other layer is
         // suppressed for as long as any capture is in force.
-        if (scope.capture) return scope.paneId !== null && capturing === scope.paneId
+        if (scope.kind === "capture") return capturing === scope.paneId
         if (capturing !== null) return false
-        return scope.paneId === null || this.#focusedPaneId === scope.paneId
+        return scope.kind === "global" || this.#focusedPaneId === scope.paneId
       },
       subscribe: (onChange) => {
         this.#matcherListeners.add(onChange)

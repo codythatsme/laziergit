@@ -3,6 +3,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ConfigOption, ConfigSchema, ConfigValue, Theme } from "laziergit"
 
+import { errorCode } from "../extension/diagnostics"
 import { defaultTheme } from "../extension/theme"
 import { parseJsonc } from "./jsonc"
 
@@ -165,9 +166,15 @@ function readLayoutCell(value: unknown, path: string, log: ProblemLog): LayoutCe
   return log.reject(path, "A Layout cell must be a Pane id or an array of Pane ids")
 }
 
+const layoutColumnKeys = new Set(["weight", "cells"])
+
 function readLayoutColumn(value: unknown, path: string, log: ProblemLog): LayoutColumn | undefined {
   const source = Array.isArray(value) ? { cells: value } : value
   if (!isRecord(source)) return log.reject(path, "A Layout column must be an array of cells or an object")
+
+  for (const key of Object.keys(source)) {
+    if (!layoutColumnKeys.has(key)) log.reject(`${path}.${key}`, "Unknown Layout column setting")
+  }
 
   const rawCells = source.cells
   if (!Array.isArray(rawCells)) return log.reject(`${path}.cells`, "A Layout column must declare an array of cells")
@@ -190,12 +197,21 @@ function readLayoutColumn(value: unknown, path: string, log: ProblemLog): Layout
   return { weight, cells }
 }
 
+const layoutKeys = new Set(["columns", "focus"])
+
 function readLayout(value: unknown, log: ProblemLog): LayoutConfig | null {
   if (value === undefined) return null
   if (!isRecord(value)) {
     log.reject("layout", "layout must be an object with a columns array")
     return null
   }
+
+  // Reported before anything is read: a misspelled `columns` leaves a Layout that is valid and
+  // empty, which is indistinguishable from having declared no Layout at all.
+  for (const key of Object.keys(value)) {
+    if (!layoutKeys.has(key)) log.reject(`layout.${key}`, "Unknown Layout setting")
+  }
+
   const columns: LayoutColumn[] = []
   if (Array.isArray(value.columns)) {
     for (const [index, rawColumn] of value.columns.entries()) {
@@ -265,6 +281,12 @@ function readStatusline(value: unknown, log: ProblemLog): StatuslineConfig {
   if (!isRecord(value)) {
     log.reject("statusline", "statusline must be an object with left, right, and hidden arrays")
     return emptyConfig.core.statusline
+  }
+
+  // Keyed off the default section rather than a second list of names, as `git` and `theme` are:
+  // a new statusline setting cannot ship without a default, so it can never be missed here.
+  for (const key of Object.keys(value)) {
+    if (!Object.hasOwn(emptyConfig.core.statusline, key)) log.reject(`statusline.${key}`, "Unknown statusline setting")
   }
 
   const readIds = (key: "left" | "right" | "hidden"): readonly string[] => {
@@ -348,7 +370,12 @@ function readExtensionSections(
       log.reject(`extensions.${name}`, "An Extension config section must be an object")
       continue
     }
-    sections.set(name, Object.freeze({ ...section }))
+    // The copy must not hand back the prototype the parser deliberately left off:
+    // `resolveExtensionConfig` reads every declared option by name, so an Extension with an
+    // option called `toString` or `constructor` would find `Object.prototype`'s and reject it
+    // as a bad value the user never wrote.
+    const isolated: Record<string, unknown> = Object.assign(Object.create(null), section)
+    sections.set(name, Object.freeze(isolated))
   }
   return sections
 }
@@ -461,11 +488,6 @@ export interface ConfigDocument {
   readonly text: string | null
   /** Why the file could not be read, when that is the reason `text` is null. */
   readonly unreadable?: string
-}
-
-function errorCode(error: unknown): string | undefined {
-  const code = (error as NodeJS.ErrnoException).code
-  return typeof code === "string" ? code : undefined
 }
 
 /**

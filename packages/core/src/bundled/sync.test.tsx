@@ -4,11 +4,12 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { act } from "react"
 
+import { gitIsolationEnv } from "../git/test-repo"
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
 
 installHarnessLifecycle()
 
-/** The shipped Extension itself, symlinked into the bundled scope (the `bundled.test.tsx` pattern). */
+/** The shipped Extension itself, symlinked into the bundled scope the way `main.tsx` loads it. */
 const syncExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "sync")
 
 /** Remotes and clones live outside the harness directory, so they are cleaned up here. */
@@ -18,22 +19,10 @@ afterEach(async () => {
   await Promise.all(temporaries.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
-/**
- * Pinned identity and no user config: a developer's own `~/.gitconfig` — a default branch,
- * `push.default`, signing — must not change what these tests observe.
- */
 async function git(cwd: string, ...args: readonly string[]): Promise<string> {
   const child = Bun.spawn(["git", ...args], {
     cwd,
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_SYSTEM: "/dev/null",
-      GIT_AUTHOR_NAME: "Test",
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "Test",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-    },
+    env: { ...process.env, ...gitIsolationEnv },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

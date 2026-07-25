@@ -236,29 +236,30 @@ export default defineExtension({
       branch,
       id,
       selected,
+      focused,
     }: {
       readonly branch: Branch
       readonly id: string
       readonly selected: boolean
+      readonly focused: boolean
     }) {
       const theme = useTheme()
       const decoration = rows.useDecoration(branch)
       const upstream = upstreamLabel(branch.upstream)
+      const dim = decoration?.dim === true
       const badge = decoration?.badge
 
       return (
-        <text id={id} bg={selected ? theme.selection : undefined}>
-          <span fg={theme.accent}>{branch.isHead ? "*" : " "}</span>
-          <span fg={theme.text}>{` ${branch.name}  `}</span>
-          <span fg={toneColor(theme, upstream.tone)}>{upstream.text}</span>
+        <text id={id} bg={selected && focused ? theme.selection : undefined}>
+          {/* The marker, not the highlight, is what says where the cursor is while another
+              Pane holds focus — the state in which the diff on screen is still this Pane's
+              selection and the user needs to see which row that was. */}
+          <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
+          <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "*" : " "}</span>
+          <span fg={dim ? theme.textMuted : theme.text}>{` ${branch.name}  `}</span>
+          <span fg={dim ? theme.textMuted : toneColor(theme, upstream.tone)}>{upstream.text}</span>
           <span fg={theme.textMuted}>{`  ${relativeAge(branch.lastCommit.authoredAt, Date.now())}`}</span>
-          {badge === undefined ? null : (
-            // `dim` is the decorator saying "this is context, not news", so it outranks the
-            // tone — which is only ever a hue.
-            <span fg={decoration?.dim === true ? theme.textMuted : toneColor(theme, decoration?.tone)}>
-              {`  ${badge}`}
-            </span>
-          )}
+          {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
         </text>
       )
     }
@@ -287,6 +288,9 @@ export default defineExtension({
         diff.show({ kind: "commit", ref: selectedOid, path: null })
       }, [focused, selectedOid])
 
+      // A selection is empty only when the list is, and the empty state below already says so
+      // — a toast would repeat it, so every key with nothing to act on is a silent no-op. The
+      // same rule in the files, commits and stash Panes.
       useCommand({
         id: "branches.checkout",
         title: "Check out branch",
@@ -334,7 +338,8 @@ export default defineExtension({
               key={branch.name}
               id={cursor.rowId(index)}
               branch={branch}
-              selected={index === cursor.index && focused}
+              selected={index === cursor.index}
+              focused={focused}
             />
           ))}
         </scrollbox>
