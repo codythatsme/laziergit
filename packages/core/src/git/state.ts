@@ -7,15 +7,14 @@ const noFiles = Object.freeze([])
  * no repository to read. Frozen down to the leaves so the very first publish already has
  * the stable slice identities every later reconcile compares against.
  *
- * `head` is unborn because that is the only variant which asserts nothing false here:
- * there is no commit, which matches the empty `branches`, `commits`, and `tags` beside it.
- * The other two would each invent an object — a detached HEAD is an oid, and an on-branch
- * HEAD is an oid plus a branch. The nameless branch is the residue: `""` is not a legal
- * refname, so it can never be confused with a real branch, and a Pane rendering an unborn
- * HEAD prints a fixed label ("no commits yet") rather than the name anyway.
+ * `head` is `noRepository`, the one variant that asserts nothing at all — every other one
+ * would have to invent something git never said: an oid, a branch name, or both. It is also
+ * what the store keeps serving outside a repository, so a Pane reads the same answer at
+ * startup and after a failed open rather than distinguishing "not read yet" from "nothing
+ * to read".
  */
 export const emptyGitState: GitState = Object.freeze({
-  head: Object.freeze({ kind: "unborn", branch: "" }),
+  head: Object.freeze({ kind: "noRepository" }),
   branches: Object.freeze([]),
   remotes: Object.freeze([]),
   tags: Object.freeze([]),

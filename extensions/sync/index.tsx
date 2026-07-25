@@ -161,9 +161,11 @@ export default defineExtension({
 
     function refuse(head: WithoutBranch, verb: string): void {
       ctx.popups.notify(
-        head.kind === "unborn"
-          ? `Cannot ${verb}: ${head.branch === "" ? "there is no repository here" : `${head.branch} has no commits yet`}`
-          : `Cannot ${verb}: HEAD is detached at ${head.oid.slice(0, 7)} — check out a branch first`,
+        head.kind === "noRepository"
+          ? `Cannot ${verb}: there is no repository here`
+          : head.kind === "unborn"
+            ? `Cannot ${verb}: ${head.branch} has no commits yet`
+            : `Cannot ${verb}: HEAD is detached at ${head.oid.slice(0, 7)} — check out a branch first`,
         "warning",
       )
     }
@@ -346,7 +348,8 @@ export default defineExtension({
       title: (head) => {
         if (head.kind === "detached") return `Sync (detached at ${head.oid.slice(0, 7)})`
         if (head.kind === "onBranch") return `Sync ${head.branch}`
-        return head.branch === "" ? "Sync (no repository)" : `Sync (${head.branch}, no commits yet)`
+        if (head.kind === "noRepository") return "Sync (no repository)"
+        return `Sync (${head.branch}, no commits yet)`
       },
       groups: [
         {

@@ -5,7 +5,7 @@ import { act } from "react"
 import { StaleContextError, type ExtensionContext, type PaneHandle } from "laziergit"
 
 import { createHarness, installHarnessLifecycle, renderApp, type Harness } from "../test-harness"
-import { importCopyContainerName } from "./discovery"
+import { importCopyContainerName, importCopyIgnoreName } from "./discovery"
 
 installHarnessLifecycle()
 
@@ -42,14 +42,21 @@ function testGlobals() {
   }
 }
 
-/** Live import copies, which live in each Extension directory's cache container. */
+/**
+ * Live import copies, which live in each Extension directory's cache container. The
+ * container's own `.gitignore` is bookkeeping rather than a copy, so it is filtered out —
+ * these counts are assertions about how many generations are alive.
+ */
 async function cacheNames(harness: Harness): Promise<readonly string[]> {
   const names = await Promise.all(
     [harness.bundled, harness.global, harness.repo].map((directory) =>
       readdir(join(directory, importCopyContainerName)).catch(() => []),
     ),
   )
-  return names.flat().sort()
+  return names
+    .flat()
+    .filter((name) => name !== importCopyIgnoreName)
+    .sort()
 }
 
 async function runFixture(path: string, cwd: string, timeoutMs = 5_000): Promise<{ stdout: string; stderr: string }> {
@@ -624,9 +631,11 @@ describe("Extension discovery and import boundary", () => {
 
     await harness.kernel.start()
     expect(harness.kernel.getSnapshot()).toEqual([expect.objectContaining({ name: "effect-user", state: "active" })])
+    // This harness makes no repository, and the Effect face reports that as such rather than
+    // as an unborn HEAD — the same answer the Promise face gives.
     expect(harness.kernel.getExtensionApi("effect-user")).toEqual({
       state: "live",
-      api: { head: "unborn", clean: true },
+      api: { head: "noRepository", clean: true },
     })
   })
 

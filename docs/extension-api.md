@@ -526,17 +526,25 @@ tagged with the extension name, and routed to the log file / debug pane.
   }
 
   /**
-   * Where HEAD points, as the three shapes git can actually produce. A union rather
-   * than four independent fields because the fields are not independent: an unborn
-   * HEAD has no commit to name, a detached one has no branch and therefore no
-   * upstream, and only a branch with a commit behind it has both. Reading an oid off
-   * a repository with no commits is a type error, not a `""`.
+   * Where HEAD points — the three shapes git can produce, plus the one it cannot
+   * because there is no repository to ask. A union rather than four independent
+   * fields because the fields are not independent: an unborn HEAD has no commit to
+   * name, a detached one has no branch and therefore no upstream, and only a branch
+   * with a commit behind it has both. Reading an oid off a repository with no commits
+   * is a type error, not a `""`.
    */
   export type Head =
     /**
+     * There is no repository here, so HEAD names nothing. Every other slice of
+     * {@link GitState} is empty beside it and every write rejects. Its own variant
+     * rather than an unborn HEAD with a nameless branch: laziergit runs wherever the
+     * user starts it, so "not a repository" is an ordinary state a Pane renders
+     * differently from a fresh `git init`.
+     */
+    | { readonly kind: "noRepository" }
+    /**
      * `git init` with nothing committed: HEAD is a symbolic ref to a branch that does
-     * not exist yet. Outside a repository the empty snapshot is this variant with
-     * `branch: ""`, which no real branch can be called.
+     * not exist yet.
      */
     | { readonly kind: "unborn"; readonly branch: string }
     /** HEAD is a raw commit, so there is no branch to carry an upstream. */
@@ -1035,6 +1043,14 @@ tagged with the extension name, and routed to the log file / debug pane.
    * ```ts
    * useCommand({ id: "x.open", title: "Open", keys: "o", run: () => open(rows[cursor]) });
    * ```
+   * Only `run` is live — it is read through a ref, so it always sees the current
+   * render's closure. `title`, `keys`, `hidden` and `capture` are read once, at
+   * registration; changing one on a later render does not re-register. That is
+   * deliberate: re-registering would reorder the insertion-ordered `keys`
+   * conflict resolution, letting a pane that merely recomputed a title take a key
+   * from another pane mid-session. A command whose identity changes should change
+   * its `id`, which does re-register.
+   *
    * Registered on mount, disposed on unmount; the binding is active only while
    * the pane is focused. The latest render's `run` is always the one invoked
    * (latest-ref, the same guarantee {@link useEvent} makes) — no dependency
@@ -1105,7 +1121,12 @@ tagged with the extension name, and routed to the log file / debug pane.
   export interface ListCursorOptions<T> {
     /** The rows the cursor walks; pass the newest array every render. */
     items: readonly T[];
-    /** Your extension name — the commands are `${idPrefix}.cursor.down` and friends. */
+    /**
+     * Your extension name — the commands are `${idPrefix}.cursor.down` and
+     * friends, and the rows are `${idPrefix}.row.${index}` (see
+     * {@link ListCursor.rowId}). An extension with two list panes gives them
+     * different prefixes, exactly as their command ids already require.
+     */
     idPrefix: string;
     /** Singular noun for the cheat-sheet titles: "file" → "Next file". */
     noun: string;
@@ -1118,17 +1139,34 @@ tagged with the extension name, and routed to the log file / debug pane.
     /** Move the cursor — a click, or a row your extension just created. */
     setIndex(index: number): void;
     /**
-     * Callback ref for the pane's `<scrollbox>`: attach it and the selected row
-     * is scrolled into view whenever the cursor moves past the edge of the
-     * viewport, by the minimum needed (so `j` scrolls one row rather than
-     * recentring). Give the box `flexGrow={1} flexBasis={0}` — see
-     * {@link ScrollView.ref}.
+     * Callback ref for the pane's `<scrollbox>`: attach it, put {@link rowId} on
+     * each row, and the selected row is scrolled into view whenever the cursor
+     * moves past the edge of the viewport, by the minimum needed (so `j` scrolls
+     * one row rather than recentring). Give the box
+     * `flexGrow={1} flexBasis={0}` — see {@link ScrollView.ref}.
      *
      * ```tsx
      * <scrollbox ref={cursor.scrollRef} flexGrow={1} flexBasis={0}>{rows}</scrollbox>
      * ```
      */
     readonly scrollRef: (surface: ScrollSurface | null) => void;
+    /**
+     * The `id` to put on the element drawn for `items[index]`, so the cursor can
+     * find that row and scroll it into view.
+     *
+     * ```tsx
+     * {items.map((item, index) => (
+     *   <box key={item.id} id={cursor.rowId(index)}>…</box>
+     * ))}
+     * ```
+     *
+     * An id rather than a row number, because the two stop being the same number
+     * the moment a pane draws anything between its rows — a group header, a blank
+     * line, a second line of detail. Layout already knows where the row landed, so
+     * revealing asks it (see {@link ScrollSurface.scrollChildIntoView}) instead of
+     * keeping a parallel height model that has to agree with it.
+     */
+    rowId(index: number): string;
   }
 
   /**
@@ -1185,6 +1223,14 @@ tagged with the extension name, and routed to the log file / debug pane.
     /** Total height of the content, in rows. */
     readonly scrollHeight: number;
     readonly viewport: { readonly height: number };
+    /**
+     * Scroll the descendant carrying `childId` just far enough to be visible, or
+     * do nothing if it already is — OpenTUI's own
+     * `scrollIntoView({ block: "nearest" })`, which measures the element where it
+     * was actually laid out. This is what lets {@link ListCursor} follow a cursor
+     * without anyone computing a row number.
+     */
+    scrollChildIntoView(childId: string): void;
   }
 
   /**
@@ -2408,6 +2454,16 @@ Full trust, no sandbox — containment is structural, per surface:
 
 `GitError` carries argv/exit/stderr so command handlers can show real git messages.
 
+**What containment does not cover: an extension that never finishes.** Every row above catches
+a *throw*; none of them catches a *hang*. `deactivate()` is awaited, and so is the scope close
+that drains finalizers, so an extension whose `deactivate` never settles — or whose finalizer
+does not — wedges reload and quit for the whole app. There is no timeout, deliberately:
+bounding the drain would race a still-running finalizer against the next activation, which is
+exactly the hot-reload corruption the per-activation scope exists to prevent (§5.3). Under
+ADR-0001's in-process, full-trust model a hung extension is the one failure the host cannot
+contain, and it is cheaper to say so than to trade a wedged quit for a corrupted reload. (The
+renderer still handles ctrl+C independently of the kernel, so the process itself is killable.)
+
 ### 5.10 Implementation mapping (public API → vendored mechanism)
 
 | Public API | Internal mechanism |
@@ -2476,7 +2532,14 @@ Full trust, no sandbox — containment is structural, per surface:
   a component kit. Extensions still write their own `<scrollbox>`, their own rows, and their
   own highlight; what they no longer write is the arithmetic that has to agree with the
   cursor. `ScrollSurface` is structural, so the seam adds no import an extension is not
-  already allowed to make.
+  already allowed to make. The first version of it *did* still make a pane write that
+  arithmetic: the reveal took an item index and used it as a screen row, so `files` — whose
+  group headers make the two differ — had to wrap the surface in a getter/setter proxy that
+  shifted `scrollTop` in both directions. The seam now reveals rows by id
+  ({@link ListCursor.rowId} → {@link ScrollSurface.scrollChildIntoView}), which is OpenTUI
+  measuring where it actually drew the row, so headers, multi-line rows and an eventual
+  collapsible tree cost a pane nothing. Two coordinate systems that have to agree is a model
+  to keep in step; asking layout is not.
 - **Toast/progress/spinner APIs beyond `notify`** — a pane that owns long work renders its own state.
 - **A `disabled` state on menu items** — `when` hides; a visible-but-inert item is presentation
   subtlety v1 skips (hiding unsuitable entries is Magit's default too).
@@ -2532,7 +2595,7 @@ terminal regains focus — switching back from the terminal you just ran `git` i
 likeliest moment for the screen to be stale and the least tolerable moment to wait out an
 interval.
 
-**What git can say and the model cannot.** Two such states were fixed in M4, when the
+**What git can say and the model cannot.** Three such states have been fixed, when the
 Bundled Extensions made the cost of leaving them concrete. An **unborn HEAD** used to be
 `Head.oid === ""` — unambiguous, since no object is named `""`, but implicit, and a shape a
 consumer could hand back to git; `Head` is now a union whose `unborn` variant simply has no
@@ -2541,6 +2604,18 @@ to collapse to `{ ahead: 0, behind: 0 }`, identical to a perfectly in-sync branc
 the one thing a branches Pane most wants to tell apart; `UpstreamInfo.gone` now says it.
 Both were cheaper to change while nothing depended on the old shapes, which is why they went
 in with the first Extensions rather than after them.
+
+**No repository** was the third, and it is the one that shows what the ledger is for. It
+used to be an unborn HEAD carrying `branch: ""` — a name no refname can have, so unambiguous
+in the same way `oid === ""` was, and wrong in the same way. By the end of M4 five of the
+eight Bundled Extensions decoded that empty string at six sites under three different names,
+two of them having built a local union purely to repair it, and `commit-flow` was reading
+`kind === "unborn"` to mean "no commit to amend" — correct only by accident, because the
+state it actually needed to exclude was hiding inside the variant it tested. `Head` now has
+a fourth variant, `{ kind: "noRepository" }`, and the six decoders are gone. The lesson is
+the cost curve, not the encoding: the first two were fixed while nothing depended on them
+and cost nothing; this one waited until six things did, and the repair had to reach into
+five Extensions and a semantic bug none of the types could see.
 
 Two remain, deliberately:
 

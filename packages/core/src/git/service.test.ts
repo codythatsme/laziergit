@@ -262,6 +262,26 @@ it("runs the branch and stash porcelain", async () => {
   expect(state(service).status.unstaged.map((file) => file.path)).toEqual(["seed.txt"])
 })
 
+it("republishes after a write that failed, because a failed write still moved the repository", async () => {
+  const repo = await createSeededRepo()
+  const service = await open(repo.path)
+  await repo.write("seed.txt", "stashed\n")
+  await service.stash.save({ message: "parked" })
+  // A commit on the same line, so the pop below conflicts instead of applying cleanly.
+  await repo.write("seed.txt", "committed\n")
+  await repo.git("add", "seed.txt")
+  await repo.commit("conflicting edit")
+
+  const failure = await service.stash.pop().catch((error: unknown) => error)
+  if (!(failure instanceof GitError)) throw new Error(`Expected a GitError, got ${String(failure)}`)
+
+  // The pop rejected, but it wrote conflict markers and recorded the conflict on the way
+  // out. Refreshing on the success channel alone would leave the store reporting a clean
+  // tree over a repository mid-conflict.
+  expect(state(service).status.conflicted.map((file) => file.path)).toEqual(["seed.txt"])
+  expect(state(service).status.isClean).toBe(false)
+})
+
 it("discards both tracked edits and untracked files", async () => {
   const repo = await createSeededRepo()
   const service = await open(repo.path)
@@ -479,9 +499,9 @@ it("serves an empty snapshot outside a repository and fails writes with a clear 
   const service = await open(repo.path)
 
   expect(service.available).toBe(false)
-  // Unborn with a nameless branch: the one variant that invents no object where there is
-  // not even a repository (see `emptyGitState`).
-  expect(state(service).head).toEqual({ kind: "unborn", branch: "" })
+  // Its own variant, not an unborn HEAD with a nameless branch: nothing here is a fact
+  // about HEAD, because nothing answered (see `emptyGitState`).
+  expect(state(service).head).toEqual({ kind: "noRepository" })
   expect(state(service).status.isClean).toBe(true)
   // Not diagnosed: running outside a repository is a supported mode, not a failure.
   expect(reports).toEqual([])
@@ -538,7 +558,7 @@ it("fires a selector subscription only on a change to the selected value", async
   const service = await open(repo.path)
   const branches: (string | null)[] = []
   const subscription = service.subscribeSelector(
-    (snapshot) => (snapshot.head.kind === "detached" ? null : snapshot.head.branch),
+    (snapshot) => (snapshot.head.kind === "onBranch" || snapshot.head.kind === "unborn" ? snapshot.head.branch : null),
     (value) => branches.push(value),
   )
 
@@ -739,6 +759,21 @@ it("retries a write that lost a race for index.lock", async () => {
 
   await staged
   expect(state(service).status.staged.map((file) => file.path)).toEqual(["locked.txt"])
+})
+
+it("does not retry a command that merely printed `index.lock` on its stdout", async () => {
+  const repo = await createSeededRepo()
+  const service = await open(repo.path)
+  await repo.write("notes.txt", "the lock lives at .git/index.lock\n")
+  await repo.write("other.txt", "no lock here\n")
+
+  // What the diff Pane runs for an untracked file: always a nonzero exit, with the file's
+  // own bytes on stdout. Retrying it would cost the whole ~1.26s budget and seven spawns.
+  const started = Date.now()
+  const output = await service.raw(["diff", "--no-index", "--", "notes.txt", "other.txt"], { allowFailure: true })
+  expect(output.stdout).toContain("index.lock")
+  expect(output.exitCode).not.toBe(0)
+  expect(Date.now() - started).toBeLessThan(1000)
 })
 
 it("never runs git through a shell, so a hostile path is only ever a path", async () => {

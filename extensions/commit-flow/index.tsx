@@ -2,7 +2,7 @@
 import {
   createCell,
   defineExtension,
-  GitError,
+  describeGitFailure,
   useCommand,
   useGit,
   useKeyCapture,
@@ -10,9 +10,21 @@ import {
   type CommitFlowApi,
   type CommitFlowResult,
   type FileChange,
+  type Head,
   type PaneProps,
 } from "laziergit"
 import { useEffect, useRef } from "react"
+
+/**
+ * Whether HEAD names a commit at all — the precondition for amending.
+ *
+ * Spelled as the two variants that carry an oid rather than as "not unborn", because the
+ * other two both lack one for different reasons and a negation would silently pick up any
+ * variant added later.
+ */
+function hasCommit(head: Head): boolean {
+  return head.kind === "detached" || head.kind === "onBranch"
+}
 
 /** Staged paths the idle summary names before it falls back to a count. */
 const listedPaths = 6
@@ -72,24 +84,6 @@ interface OpenOptions {
   readonly message?: string
   readonly amend?: boolean
   readonly signoff?: boolean
-}
-
-/**
- * What git said, verbatim.
- *
- * `GitError.stderr` is where a rejected `pre-commit` hook or a bad pathspec actually
- * explains itself; the message is a summary built from it, so stderr is preferred and the
- * message is the fallback for the failures that produce none. Line structure survives: a
- * rejected hook prints its complaint across several lines and the toast renders them.
- */
-function reason(error: unknown): string {
-  const text =
-    error instanceof GitError && error.stderr.trim().length > 0
-      ? error.stderr
-      : error instanceof Error
-        ? error.message
-        : String(error)
-  return text.trim()
 }
 
 function countLabel(count: number): string {
@@ -254,7 +248,7 @@ export default defineExtension({
     async function open(options: OpenOptions): Promise<CommitFlowResult> {
       const amend = options.amend === true
       // The Head union answers this before git has to: there is no commit to rewrite.
-      if (amend && ctx.git.state.head.kind === "unborn") {
+      if (amend && !hasCommit(ctx.git.state.head)) {
         ctx.popups.notify("No commit to amend yet", "warning")
         return "abandoned"
       }
@@ -294,7 +288,7 @@ export default defineExtension({
         // editor no keyboard at all. Say so, rather than opening one nobody can type into.
         // Nothing to hand back, either: focus never moved.
         endFlow("abandoned")
-        ctx.popups.notify(reason(error), "error")
+        ctx.popups.notify(describeGitFailure(error), "error")
       }
       return settled.promise
     }
@@ -328,7 +322,7 @@ export default defineExtension({
       try {
         await ctx.git.commit(message, { amend: draft.amend, signoff: draft.signoff })
       } catch (error) {
-        ctx.popups.notify(reason(error), "error")
+        ctx.popups.notify(describeGitFailure(error), "error")
         return
       }
       await closeFlow("committed")
@@ -511,7 +505,7 @@ export default defineExtension({
                 try {
                   await ctx.git.stage("all")
                 } catch (error) {
-                  ctx.popups.notify(reason(error), "error")
+                  ctx.popups.notify(describeGitFailure(error), "error")
                   return
                 }
                 await start({})
@@ -522,7 +516,7 @@ export default defineExtension({
               label: "Amend the last commit",
               // Read from the store rather than the target: the menu's target is the working
               // tree, and whether there is a commit to amend is a fact about HEAD.
-              when: () => ctx.git.state.head.kind !== "unborn",
+              when: () => hasCommit(ctx.git.state.head),
               run: () => start({ amend: true }),
             },
             {

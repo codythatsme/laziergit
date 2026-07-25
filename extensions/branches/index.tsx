@@ -2,6 +2,7 @@
 import {
   createRowSource,
   defineExtension,
+  describeGitFailure,
   GitError,
   toneColor,
   useCommand,
@@ -45,15 +46,11 @@ function upstreamLabel(upstream: UpstreamInfo | null): UpstreamLabel {
 
 /**
  * Whether there is a repository here at all — the distinction an empty branch list cannot
- * make on its own, since a fresh repository and no repository both have zero branches.
- *
- * {@link Head} cannot say it either: outside one the store serves an unborn HEAD whose
- * branch is `""`, a name no real branch can have. That is the only signal an Extension gets,
- * so it is decoded here — once, at the boundary — and both the empty state and
- * `branches.create` read the answer instead of re-deriving it from an empty string.
+ * make on its own, since a fresh repository and no repository both have zero branches. Both
+ * the empty state and `branches.create` read this rather than the list length.
  */
 function hasRepository(head: Head): boolean {
-  return !(head.kind === "unborn" && head.branch === "")
+  return head.kind !== "noRepository"
 }
 
 const minute = 60_000
@@ -83,18 +80,6 @@ function relativeAge(authoredAt: number, now: number): string {
   if (elapsed < month) return `${Math.floor(elapsed / week)}w`
   if (elapsed < year) return `${Math.floor(elapsed / month)}mo`
   return `${Math.floor(elapsed / year)}y`
-}
-
-/**
- * Git's own words, verbatim.
- *
- * Credential prompting is off by design (§5.11), so stderr is the whole story of a failed
- * push or fetch — a friendlier paraphrase would be a worse one, and would throw away the
- * hint git already wrote for this exact situation.
- */
-function describeFailure(error: unknown): string {
-  if (error instanceof GitError) return error.stderr.trim() || error.message
-  return error instanceof Error ? error.message : String(error)
 }
 
 /**
@@ -137,7 +122,7 @@ export default defineExtension({
     const rows = createRowSource<Branch>({ key: (row) => row.name })
     const diff = ctx.extensions.get("diff")
 
-    const fail = (error: unknown): void => ctx.popups.notify(describeFailure(error), "error")
+    const fail = (error: unknown): void => ctx.popups.notify(describeGitFailure(error), "error")
 
     async function checkout(branch: Branch): Promise<void> {
       // `git checkout` on the branch you are already on succeeds and does nothing, which
@@ -247,14 +232,22 @@ export default defineExtension({
       void ctx.menus.open("branches.actions", branch).catch(fail)
     }
 
-    function BranchRow({ branch, selected }: { readonly branch: Branch; readonly selected: boolean }) {
+    function BranchRow({
+      branch,
+      id,
+      selected,
+    }: {
+      readonly branch: Branch
+      readonly id: string
+      readonly selected: boolean
+    }) {
       const theme = useTheme()
       const decoration = rows.useDecoration(branch)
       const upstream = upstreamLabel(branch.upstream)
       const badge = decoration?.badge
 
       return (
-        <text bg={selected ? theme.selection : undefined}>
+        <text id={id} bg={selected ? theme.selection : undefined}>
           <span fg={theme.accent}>{branch.isHead ? "*" : " "}</span>
           <span fg={theme.text}>{` ${branch.name}  `}</span>
           <span fg={toneColor(theme, upstream.tone)}>{upstream.text}</span>
@@ -337,7 +330,12 @@ export default defineExtension({
         // the frame around it instead of scrolling inside it.
         <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
           {branches.map((branch, index) => (
-            <BranchRow key={branch.name} branch={branch} selected={index === cursor.index && focused} />
+            <BranchRow
+              key={branch.name}
+              id={cursor.rowId(index)}
+              branch={branch}
+              selected={index === cursor.index && focused}
+            />
           ))}
         </scrollbox>
       )

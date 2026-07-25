@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import * as laziergitRuntime from "laziergit"
 
-import { importCopyContainerName } from "./discovery"
+import { importCopyContainerName, importCopyIgnoreName } from "./discovery"
 import { ExtensionKernel } from "./kernel"
 
 ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
@@ -80,7 +80,8 @@ async function cacheNames(): Promise<readonly string[]> {
   const names = await Promise.all(
     [global, repo].map((directory) => readdir(join(directory, importCopyContainerName)).catch(() => [])),
   )
-  return names.flat()
+  // The container's own `.gitignore` is bookkeeping, not a generation's copy.
+  return names.flat().filter((name) => name !== importCopyIgnoreName)
 }
 
 function lifecycleCounts(prefix: "lone" | "directory") {

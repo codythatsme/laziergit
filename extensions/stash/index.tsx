@@ -2,7 +2,7 @@
 import {
   createRowSource,
   defineExtension,
-  GitError,
+  describeGitFailure,
   toneColor,
   useCommand,
   useGit,
@@ -49,16 +49,6 @@ function stashRef(entry: StashEntry): string {
   return `stash@{${entry.index}}`
 }
 
-/**
- * What to put in front of the user when a write fails. Read off `stderr` rather than
- * `message`: a {@link GitError} built from a failure git wrote nothing about still has a
- * message, and that fallback is the only thing standing between the user and a blank toast.
- */
-function describe(error: unknown): string {
-  if (error instanceof GitError) return error.stderr.trim() || error.message
-  return error instanceof Error ? error.message : String(error)
-}
-
 function branchNameProblem(value: string): string | null {
   const name = value.trim()
   if (name === "") return "Enter a branch name"
@@ -88,7 +78,7 @@ export default defineExtension({
       try {
         await action()
       } catch (error) {
-        ctx.popups.notify(describe(error), "error")
+        ctx.popups.notify(describeGitFailure(error), "error")
       }
     }
 
@@ -187,10 +177,12 @@ export default defineExtension({
 
     function StashRow({
       entry,
+      id,
       now,
       selected,
     }: {
       readonly entry: StashEntry
+      readonly id: string
       readonly now: number
       readonly selected: boolean
     }) {
@@ -198,7 +190,7 @@ export default defineExtension({
       const decoration = rows.useDecoration(entry)
 
       return (
-        <text bg={selected ? theme.selection : undefined}>
+        <text id={id} bg={selected ? theme.selection : undefined}>
           <span fg={theme.accent}>{stashRef(entry)}</span>
           <span fg={decoration?.dim === true ? theme.textMuted : theme.text}>{` ${entry.message}`}</span>
           {/* Absent for a stash taken on a detached HEAD, where git recorded no branch. */}
@@ -286,7 +278,13 @@ export default defineExtension({
           {entries.map((entry, index) => (
             // Keyed by ref rather than oid: two stashes of identical content on the same
             // second are the same commit object, and the index is unique by construction.
-            <StashRow key={stashRef(entry)} entry={entry} now={now} selected={index === cursor.index && focused} />
+            <StashRow
+              key={stashRef(entry)}
+              id={cursor.rowId(index)}
+              entry={entry}
+              now={now}
+              selected={index === cursor.index && focused}
+            />
           ))}
         </scrollbox>
       )

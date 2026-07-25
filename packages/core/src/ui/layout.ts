@@ -257,11 +257,6 @@ export class LayoutHost {
     if (next) this.#focusCell(next)
   }
 
-  focusIndex(index: number): void {
-    const cell = this.#focusableCells()[index]
-    if (cell) this.#focusCell(cell)
-  }
-
   /** Cycles the visible tab inside the focused cell. */
   cycleTab(delta: number): void {
     const cell = this.#cells().find((candidate) => candidate.key === this.#focusedCell)

@@ -138,8 +138,9 @@ it("renders an empty store, without polling, outside a repository", async () => 
 
   await renderApp(harness)
   // Degraded, not broken: `useGit` still resolves and the Pane still renders. The empty
-  // store serves an unborn HEAD, which is the variant that claims no commit exists.
-  expect(frame(harness)).toContain("on unborn 0c clean")
+  // store serves `noRepository`, the variant that claims nothing at all — a Pane can tell
+  // it from a fresh `git init` without inspecting a branch name.
+  expect(frame(harness)).toContain("on noRepository 0c clean")
   expect(harness.kernel.git.available).toBe(false)
   expect(harness.kernel.diagnostics.getSnapshot()).toEqual([])
 })

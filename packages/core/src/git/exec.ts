@@ -47,6 +47,7 @@ const maxRetries = 6
 /**
  * Both fragments are matched bare and unanchored, deliberately: `index.lock` alone also
  * catches a linked worktree's and a submodule's lock file, which a fuller path would miss.
+ * That is only safe because {@link isLockContention} reads stderr alone — see there.
  */
 const lockFragments = ["index.lock", "cannot lock ref"] as const
 
@@ -71,10 +72,16 @@ type ExecFailure =
   | { readonly kind: "spawn"; readonly error: GitSpawnError }
   | { readonly kind: "locked"; readonly output: GitOutput }
 
+/**
+ * stderr only, because stdout is repository *content*: the diff Pane's untracked-file view
+ * runs `diff --no-index`, which always exits nonzero with the file's own bytes on stdout,
+ * so a file that merely mentions `index.lock` would otherwise spend the whole retry budget
+ * — before `allowFailure` is consulted, so no caller could opt out. git reports lock
+ * contention on stderr.
+ */
 function isLockContention(output: GitOutput): boolean {
   if (output.exitCode === 0) return false
-  const text = `${output.stdout}\n${output.stderr}`
-  return lockFragments.some((fragment) => text.includes(fragment))
+  return lockFragments.some((fragment) => output.stderr.includes(fragment))
 }
 
 function argv(args: readonly string[], write: boolean): readonly string[] {

@@ -2,7 +2,7 @@
 import {
   createRowSource,
   defineExtension,
-  GitError,
+  describeGitFailure,
   toneColor,
   useCommand,
   useGit,
@@ -13,11 +13,10 @@ import {
   type FilesApi,
   type Head,
   type PaneProps,
-  type ScrollSurface,
   type Theme,
   type WorkingTreeStatus,
 } from "laziergit"
-import { useCallback, useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo } from "react"
 
 /**
  * The four groups, in the order they are drawn: conflicts first because nothing else can
@@ -122,21 +121,6 @@ function sectionsOf(status: WorkingTreeStatus): readonly FileSection[] {
   return sections
 }
 
-/**
- * How many group headers are drawn above the row at `index` — the distance between the flat
- * cursor position and the screen line the user actually looks at. A section contributes its
- * header exactly when the section starts at or before that row, and sections are in order.
- */
-function headersAbove(sections: readonly FileSection[], index: number): number {
-  let headers = 0
-  for (const section of sections) {
-    const first = section.rows[0]
-    if (first === undefined || first.index > index) break
-    headers += 1
-  }
-  return headers
-}
-
 /** Renames read as the move they are; every other kind is just its path. */
 function labelOf(change: FileChange): string {
   return change.previousPath === null ? change.path : `${change.previousPath} → ${change.path}`
@@ -148,15 +132,12 @@ function pathsOf(change: FileChange): readonly string[] {
 }
 
 /**
- * Whether there is a repository at all.
- *
- * Outside one the store serves an unborn HEAD whose branch is `""` — a name no real branch
- * can have, and the only signal an Extension gets (the status Pane decodes the same one).
- * Without this check an empty status reads as "working tree clean", which claims a healthy,
- * fully committed repository in the one place where there is no repository to be clean.
+ * Whether there is a repository at all. Without this check an empty status reads as "working
+ * tree clean", which claims a healthy, fully committed repository in the one place where
+ * there is no repository to be clean.
  */
 function inRepository(head: Head): boolean {
-  return head.kind !== "unborn" || head.branch !== ""
+  return head.kind !== "noRepository"
 }
 
 /**
@@ -250,19 +231,6 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`
 }
 
-/**
- * What to put in front of the user when git says no. {@link GitError} carries git's own
- * stderr and credential prompting is off by design (§5.11), so git's sentence is the whole
- * explanation; anything else reaching here is a bug in this Extension and should say so.
- */
-function failureMessage(error: unknown): string {
-  if (error instanceof GitError) {
-    const stderr = error.stderr.trim()
-    return stderr === "" ? error.message : stderr
-  }
-  return error instanceof Error ? error.message : String(error)
-}
-
 export default defineExtension({
   name: "files",
   description: "Working-tree, staged, untracked, and conflicted file changes",
@@ -273,7 +241,7 @@ export default defineExtension({
     const diff = ctx.extensions.get("diff")
 
     const fail = (action: string, error: unknown): void => {
-      ctx.popups.notify(`${action}: ${failureMessage(error)}`, "error")
+      ctx.popups.notify(`${action}: ${describeGitFailure(error)}`, "error")
     }
 
     async function stage(paths: readonly string[] | "all"): Promise<void> {
@@ -450,10 +418,12 @@ export default defineExtension({
 
     function FileLine({
       row,
+      id,
       selected,
       focused,
     }: {
       readonly row: FileRow
+      readonly id: string
       readonly selected: boolean
       readonly focused: boolean
     }) {
@@ -463,7 +433,7 @@ export default defineExtension({
       const badge = decoration?.badge
 
       return (
-        <text bg={selected && focused ? theme.selection : undefined}>
+        <text id={id} bg={selected && focused ? theme.selection : undefined}>
           {/* The marker, not the highlight, is what says where the cursor is while another
               Pane holds focus — the state in which the diff on screen is still this Pane's
               selection and the user needs to see which row that was. */}
@@ -486,41 +456,6 @@ export default defineExtension({
       const rows = useMemo(() => sections.flatMap((section) => section.rows), [sections])
       const cursor = useListCursor({ items: rows, idPrefix: "files", noun: "file" })
       const selected = cursor.selected
-
-      // The cursor counts file rows, but the scrollbox draws a header above every group, so
-      // the row the seam is asked to reveal sits that many lines further down the screen.
-      // Kept in a ref written during render — the "latest value" shape `useCommand` uses —
-      // because the reveal runs inside `useListCursor`'s own effect, which is registered
-      // before any effect this component could update the offset from.
-      const headerOffset = useRef(0)
-      headerOffset.current = headersAbove(sections, cursor.index)
-
-      const scrollRef = useCallback(
-        (surface: ScrollSurface | null) => {
-          // The same box in the cursor's coordinates. The reveal reads `scrollTop`, decides
-          // against it, and writes it back, and the offset is a constant for the one row it
-          // is revealing — so shifting both ends is an exact translation, not a guess.
-          cursor.scrollRef(
-            surface === null
-              ? null
-              : {
-                  get scrollTop() {
-                    return surface.scrollTop - headerOffset.current
-                  },
-                  set scrollTop(row: number) {
-                    surface.scrollTop = row + headerOffset.current
-                  },
-                  get scrollHeight() {
-                    return surface.scrollHeight
-                  },
-                  get viewport() {
-                    return surface.viewport
-                  },
-                },
-          )
-        },
-        [cursor.scrollRef],
-      )
 
       useEffect(() => {
         host.setSelected(selected?.change)
@@ -584,13 +519,14 @@ export default defineExtension({
         // `flexBasis={0}` alongside `flexGrow`, or the box's flex size is its *content*
         // height: a list longer than the Pane makes the box taller than the Pane, which
         // paints over the Pane above it instead of scrolling inside its own frame.
-        <scrollbox ref={scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
+        <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
           {sections.map((section) => (
             <box key={section.group} flexDirection="column">
               <text fg={theme.textMuted} content={groupTitles[section.group]} />
               {section.rows.map((row) => (
                 <FileLine
                   key={`${row.group}\0${row.change.path}`}
+                  id={cursor.rowId(row.index)}
                   row={row}
                   selected={row.index === cursor.index}
                   focused={focused}
