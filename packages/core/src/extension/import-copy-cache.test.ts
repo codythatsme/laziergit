@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
+import { errorCode } from "./diagnostics"
 import { discoverExtensions, importCopyContainerName, type ExtensionCandidate } from "./discovery"
 import { ImportCopyCache, type ImportCopyCacheDiagnostic } from "./import-copy-cache"
 
@@ -20,7 +21,7 @@ async function pathExists(path: string): Promise<boolean> {
     await fs.stat(path)
     return true
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false
+    if (errorCode(error) === "ENOENT") return false
     throw error
   }
 }

@@ -491,6 +491,27 @@ it("passes stdin through to git", async () => {
   expect((await service.raw(["cat-file", "-p", output.stdout.trim()])).stdout).toBe("hello\n")
 })
 
+/**
+ * The diff Pane reads the file a patch section is about out of its `+++ b/` header, so any of
+ * git's prefix settings would rename every file in a multi-file diff to "(unnamed)". All four
+ * are set at once because each pin is what defeats the setting of the same name: drop any one
+ * of them and this repository's config renames the prefixes again.
+ */
+it("keeps the a/ and b/ patch prefixes whatever the repository's own diff config says", async () => {
+  const repo = await createSeededRepo()
+  await repo.git("config", "diff.noprefix", "true")
+  await repo.git("config", "diff.mnemonicPrefix", "true")
+  await repo.git("config", "diff.srcPrefix", "src/")
+  await repo.git("config", "diff.dstPrefix", "dst/")
+  await repo.write("seed.txt", "edited\n")
+  const service = await open(repo.path)
+
+  const output = await service.raw(["diff", "--no-ext-diff", "-U3"])
+  expect(output.stdout).toContain("diff --git a/seed.txt b/seed.txt")
+  expect(output.stdout).toContain("--- a/seed.txt")
+  expect(output.stdout).toContain("+++ b/seed.txt")
+})
+
 // ---- outside a repository -------------------------------------------------------------
 
 it("serves an empty snapshot outside a repository and fails writes with a clear reason", async () => {

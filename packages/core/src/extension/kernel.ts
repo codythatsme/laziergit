@@ -190,6 +190,7 @@ export class ExtensionKernel {
   readonly #renderer: CliRenderer
   readonly #onQuit: (() => void) | undefined
   readonly #listeners = new Set<() => void>()
+  /** Keyed by Extension name, in activation order — the order deactivation walks in reverse. */
   readonly #activations = new Map<string, Activation>()
   readonly #notifier = createNotifier(this.notifications.publish)
   readonly #slotOwners = new SlotOwners()
@@ -202,7 +203,6 @@ export class ExtensionKernel {
   #modalFocus: { readonly renderable: Renderable | null } | undefined
   #leader: string | undefined
   #disposeLeader: (() => void) | undefined
-  #activationOrder: string[] = []
   #snapshot: readonly ExtensionStatus[] = []
   #reloadGeneration = 0
   #reloadTimer: ReturnType<typeof setTimeout> | undefined
@@ -586,7 +586,7 @@ export class ExtensionKernel {
   async #reloadNow(): Promise<void> {
     if (this.#stopped) return
 
-    const previousOwners = [...this.#activationOrder]
+    const previousOwners = [...this.#activations.keys()]
     // Core's own modals list Commands that are about to be torn down and re-registered.
     this.popups.closeForExtension(coreOwner)
     this.panes.prepareReload(previousOwners)
@@ -792,7 +792,6 @@ export class ExtensionKernel {
     }
 
     for (const name of selected.keys()) visit(name, [])
-    this.#activationOrder = []
 
     const hosts: ContextHosts = {
       diagnostics: this.diagnostics,
@@ -835,9 +834,8 @@ export class ExtensionKernel {
             this.#diagnose({ extension: name, phase: "config", message: `${problem.path}: ${problem.message}` })
           }
           const context = createExtensionContext(name, config.values, scope, hosts)
-          const api = await item.extension.spec.activate(context as never)
+          const api = await item.extension.spec.activate(context)
           this.#activations.set(name, { imported: item, scope, api })
-          this.#activationOrder.push(name)
           pending.delete(item)
           this.#updateStatus(item.candidate, "active")
         } catch (error) {
@@ -866,7 +864,8 @@ export class ExtensionKernel {
   }
 
   async #deactivateAll(reason: "reload" | "quit"): Promise<void> {
-    for (const name of [...this.#activationOrder].reverse()) {
+    // Snapshotted before the loop deletes its way through the map it was taken from.
+    for (const name of [...this.#activations.keys()].reverse()) {
       const activation = this.#activations.get(name)
       if (!activation) continue
 
@@ -918,7 +917,6 @@ export class ExtensionKernel {
         })
       }
     }
-    this.#activationOrder = []
   }
 
   #treeFingerprint(): Promise<string> {
@@ -991,7 +989,7 @@ export class ExtensionKernel {
   }
 
   async #stopNow(): Promise<void> {
-    const owners = [...this.#activationOrder]
+    const owners = [...this.#activations.keys()]
 
     await this.#attemptShutdown("watch scan", async () => {
       await this.#watchScan

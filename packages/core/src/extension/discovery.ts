@@ -3,6 +3,9 @@ import { access, lstat, readFile, readdir, readlink, realpath, stat } from "node
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path"
 
+import { isPathInside } from "../path-containment"
+import { errorCode, normalizeError } from "./diagnostics"
+
 /**
  * Every scope, weakest first: an Extension from a later scope shadows a same-named one from
  * any earlier scope. Discovery, import, and fingerprinting all walk this order, so which copy
@@ -63,17 +66,6 @@ function compareNames(left: { readonly name: string }, right: { readonly name: s
   return left.name < right.name ? -1 : left.name > right.name ? 1 : 0
 }
 
-function normalizeError(error: unknown): Error {
-  if (error instanceof Error) return error
-  if (typeof error === "string") return new Error(error)
-  return new Error(String(error))
-}
-
-function errorCode(error: unknown): string | undefined {
-  const code = (error as NodeJS.ErrnoException).code
-  return typeof code === "string" ? code : undefined
-}
-
 function isExtensionFile(name: string): boolean {
   return !name.startsWith(".") && !name.endsWith(".d.ts") && (name.endsWith(".ts") || name.endsWith(".tsx"))
 }
@@ -98,14 +90,6 @@ function isExcludedTreeEntry(name: string): boolean {
   // `startsWith`, so copies written flat by an older build are still skipped rather than
   // fingerprinted as Extension content forever.
   return name === "node_modules" || name.startsWith(importCopyContainerName)
-}
-
-function isPathInside(rootPath: string, childPath: string): boolean {
-  const childRelativePath = relative(rootPath, childPath)
-  return (
-    childRelativePath === "" ||
-    (!isAbsolute(childRelativePath) && childRelativePath !== ".." && !childRelativePath.startsWith(`..${sep}`))
-  )
 }
 
 function crossesExcludedTreeEntry(rootPath: string, childPath: string): boolean {

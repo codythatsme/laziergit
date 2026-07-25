@@ -9,8 +9,11 @@ const created: string[] = []
  * Repositories built for tests are pinned to a fixed identity and an empty global config,
  * so a developer's own `~/.gitconfig` — signing, default branch, hooks — can never change
  * what a test observes.
+ *
+ * Exported because every fixture that shells out to git needs exactly this: when it was last
+ * corrected for CI, the hand-copied duplicates had to be found and fixed one file at a time.
  */
-const isolation: Readonly<Record<string, string>> = Object.freeze({
+export const gitIsolationEnv: Readonly<Record<string, string>> = Object.freeze({
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CONFIG_SYSTEM: "/dev/null",
   GIT_AUTHOR_NAME: "Test",
@@ -36,7 +39,7 @@ export function registerRepoCleanup(): void {
 async function run(cwd: string, args: readonly string[]): Promise<string> {
   const child = Bun.spawn(["git", ...args], {
     cwd,
-    env: { ...process.env, ...isolation },
+    env: { ...process.env, ...gitIsolationEnv },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

@@ -69,6 +69,7 @@ function groupKey(group: { readonly id?: string; readonly title?: string }): str
 export class MenuHost {
   readonly #menus = new Map<string, RegisteredMenu>()
   readonly #splices = new Set<RegisteredSplice>()
+  readonly #reportedConflicts = new Set<string>()
   readonly #diagnostics: Diagnostics
   readonly #popups: PopupHost
   readonly #notify: Notifier
@@ -178,15 +179,25 @@ export class MenuHost {
     const byKey = new Map<string, OwnedItem>()
     for (const owned of items) {
       const previous = byKey.get(owned.item.key)
-      if (previous) {
-        this.#report(
-          owned.owner,
-          `Menu "${id}" key "${owned.item.key}" moved from "${previous.item.label}" to "${owned.item.label}"`,
-        )
-      }
+      if (previous) this.#reportConflict(id, previous, owned)
       byKey.set(owned.item.key, owned)
     }
     return new Set(byKey.values())
+  }
+
+  /**
+   * Reported once per distinct conflict, as the Command catalog reports its own: the merge
+   * is redone on every open, and a conflict between two standing registrations says nothing
+   * new the second time the user presses the key that opens the menu.
+   */
+  #reportConflict(id: string, previous: OwnedItem, winner: OwnedItem): void {
+    const signature = `${id}\0${winner.item.key}\0${previous.item.label}\0${winner.item.label}`
+    if (this.#reportedConflicts.has(signature)) return
+    this.#reportedConflicts.add(signature)
+    this.#report(
+      winner.owner,
+      `Menu "${id}" key "${winner.item.key}" moved from "${previous.item.label}" to "${winner.item.label}"`,
+    )
   }
 
   #isVisible(owned: OwnedItem, target: unknown, id: string): boolean {

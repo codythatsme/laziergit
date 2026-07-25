@@ -1,7 +1,9 @@
 import * as fs from "node:fs/promises"
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path"
+import { basename, dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 
+import { isPathInside } from "../path-containment"
+import { errorCode, normalizeError } from "./diagnostics"
 import { importCopyContainerName, importCopyIgnoreName, type ExtensionCandidate } from "./discovery"
 
 export type ProcessState = "live" | "dead" | "unknown"
@@ -32,17 +34,6 @@ const CACHE_NAME = /^(\d+)-(\d+)-(\d+)-(.+)$/
 /** `*` matches the ignore file too, so the container hides itself with no outside cooperation. */
 const CONTAINER_IGNORE_CONTENT = "*\n"
 
-function normalizeError(error: unknown): Error {
-  if (error instanceof Error) return error
-  if (typeof error === "string") return new Error(error)
-  return new Error(String(error))
-}
-
-function errorCode(error: unknown): string | undefined {
-  const code = (error as NodeJS.ErrnoException).code
-  return typeof code === "string" ? code : undefined
-}
-
 function defaultProcessState(pid: number): ProcessState {
   if (pid === process.pid) return "live"
   try {
@@ -58,14 +49,6 @@ function cacheOwnerPid(name: string): number | undefined {
   if (!match) return undefined
   const pid = Number(match[1])
   return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
-}
-
-function isPathInside(rootPath: string, childPath: string): boolean {
-  const childRelativePath = relative(rootPath, childPath)
-  return (
-    childRelativePath === "" ||
-    (!isAbsolute(childRelativePath) && childRelativePath !== ".." && !childRelativePath.startsWith(`..${sep}`))
-  )
 }
 
 function directoryLinkType(platform: NodeJS.Platform): "dir" | "junction" {

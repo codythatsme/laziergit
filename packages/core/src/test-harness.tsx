@@ -11,6 +11,7 @@ import * as laziergitRuntime from "laziergit"
 import { App } from "./app"
 import type { ClipboardWriterSpec } from "./extension/context"
 import { ExtensionKernel } from "./extension/kernel"
+import { gitIsolationEnv } from "./git/test-repo"
 import type { UiSlotRegistry } from "./ui/slots"
 
 type Plugin = Parameters<UiSlotRegistry["register"]>[0]
@@ -86,20 +87,12 @@ export interface HarnessOptions {
 }
 
 /**
- * Pinned identity and no user config, so a developer's own `~/.gitconfig` can never change
- * what a test observes. `-q` and the explicit default branch keep `git init` off stderr,
- * which the reload fixture asserts is empty.
+ * Nulling the global config also nulls the developer's `init.defaultBranch`, so the branch
+ * name is pinned per-command instead: on a git old enough to still default to `master`, every
+ * test that reads or asserts on `main` would otherwise fail for a reason unrelated to it.
  */
 async function initRepository(directory: string): Promise<void> {
-  const env = {
-    ...process.env,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_SYSTEM: "/dev/null",
-    GIT_AUTHOR_NAME: "Test",
-    GIT_AUTHOR_EMAIL: "test@example.com",
-    GIT_COMMITTER_NAME: "Test",
-    GIT_COMMITTER_EMAIL: "test@example.com",
-  }
+  const env = { ...process.env, ...gitIsolationEnv }
   const commands = [
     ["-c", "init.defaultBranch=main", "init", "--quiet"],
     ["config", "user.name", "Test"],

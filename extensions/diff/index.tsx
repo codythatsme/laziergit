@@ -80,7 +80,12 @@ interface DiffFetch {
  * must not have to encode git's rules to get a diff back.
  */
 function fetchFor(target: DiffTarget, context: number, untracked: ReadonlySet<string>): DiffFetch {
-  const unified = `-U${context}`
+  // `-U`, plus the one patch-shaping pin the core cannot make on every invocation for us:
+  // `GIT_EXTERNAL_DIFF` in the environment beats `-c diff.external=`, so only `--no-ext-diff`
+  // disarms a user's own differ — and it is a diff option that `status`, `add` and `commit`
+  // reject, so it cannot join the flags every git invocation carries. Without it a custom
+  // differ's output has no `@@` in it, and every changed file reads as "no textual diff".
+  const patchFlags = ["--no-ext-diff", `-U${context}`]
   // No pathspec means the whole of that side, which is what a Pane whose selection is not
   // one file should show — not an empty diff. `literalPathspec` because every path git takes
   // is a *pattern*: unwrapped, a file called `foo[1].txt` diffs `foo1.txt` as well (§1.5).
@@ -98,11 +103,14 @@ function fetchFor(target: DiffTarget, context: number, untracked: ReadonlySet<st
       // could not access — and a nonzero exit may still carry the patch, because `--no-index`
       // exits 1 to mean the two files differ, which is the ordinary case here.
       if (target.path !== null && untracked.has(target.path)) {
-        return { argv: ["diff", "--no-index", unified, "--", "/dev/null", target.path], nonZeroExitMayCarryPatch: true }
+        return {
+          argv: ["diff", "--no-index", ...patchFlags, "--", "/dev/null", target.path],
+          nonZeroExitMayCarryPatch: true,
+        }
       }
-      return { argv: ["diff", unified, ...pathspec], nonZeroExitMayCarryPatch: false }
+      return { argv: ["diff", ...patchFlags, ...pathspec], nonZeroExitMayCarryPatch: false }
     case "staged":
-      return { argv: ["diff", "--cached", unified, ...pathspec], nonZeroExitMayCarryPatch: false }
+      return { argv: ["diff", "--cached", ...patchFlags, ...pathspec], nonZeroExitMayCarryPatch: false }
     case "commit":
       // `--format=` strips the commit header `show` would otherwise prepend; the parser
       // behind `<diff>` wants a bare patch.
@@ -117,7 +125,7 @@ function fetchFor(target: DiffTarget, context: number, untracked: ReadonlySet<st
       // this merge brought into this branch — and is byte-identical to no flag at all on a
       // non-merge commit, so the ordinary case is untouched.
       return {
-        argv: ["show", "--format=", unified, "--first-parent", target.ref, ...pathspec],
+        argv: ["show", "--format=", ...patchFlags, "--first-parent", target.ref, ...pathspec],
         nonZeroExitMayCarryPatch: false,
       }
     case "stash":
@@ -126,12 +134,15 @@ function fetchFor(target: DiffTarget, context: number, untracked: ReadonlySet<st
       // the diff a stash entry *is* — its first parent is the commit it was taken against,
       // and `git diff stash@{0}^1 stash@{0}` is byte-identical to `stash show -p`.
       if (target.path !== null) {
-        return { argv: ["diff", unified, `${target.ref}^1`, target.ref, ...pathspec], nonZeroExitMayCarryPatch: false }
+        return {
+          argv: ["diff", ...patchFlags, `${target.ref}^1`, target.ref, ...pathspec],
+          nonZeroExitMayCarryPatch: false,
+        }
       }
       // `show` must sit immediately after `stash`: the service reads the argv element
       // *directly* after the subcommand as its operand, and only the exact pair
       // `stash show` is on its read-only list. A flag in between makes this a mutation.
-      return { argv: ["stash", "show", "-p", unified, target.ref], nonZeroExitMayCarryPatch: false }
+      return { argv: ["stash", "show", "-p", ...patchFlags, target.ref], nonZeroExitMayCarryPatch: false }
   }
 }
 

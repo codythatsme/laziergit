@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { act } from "react"
 
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import { gitIsolationEnv } from "./test-repo"
 
 installHarnessLifecycle()
 
@@ -36,15 +37,7 @@ const livePane = `
 async function git(harness: Harness, ...args: readonly string[]): Promise<void> {
   const child = Bun.spawn(["git", ...args], {
     cwd: harness.directory,
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_SYSTEM: "/dev/null",
-      GIT_AUTHOR_NAME: "Test",
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "Test",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-    },
+    env: { ...process.env, ...gitIsolationEnv },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

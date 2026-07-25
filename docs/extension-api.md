@@ -24,7 +24,7 @@ same shape, shipped inside the distribution rather than these directories.)
 | Entry point | `defineExtension()` — one function, six fields |
 | `ctx` | eleven members — `config` · `git` · `events` · `commands` · `panes` · `menus` · `popups` · `statusline` · `extensions` · `effect` · `signal` — plus four methods: `exec()`, `open()`, `copy()`, `onDispose()` |
 | React hooks | `useGit`, `useEvent`, `useCommand`, `useTheme`, and the pane-building `useListCursor`, `useScrollView`, `useKeyCapture` — 7 hooks (plus `createCell` for activate → component data) |
-| Pure helpers | `option` (config), `toneColor` + `createRowSource` (row decorations), `literalPathspec` (pathspec safety) — plain functions, no runtime |
+| Pure helpers | `option` (config), `toneColor` + `createRowSource` (row decorations), `literalPathspec` (pathspec safety), `describeGitFailure` (what to show when git says no) — plain functions, no runtime |
 | Augmentable registries | `ExtensionApis`, `EventMap`, `MenuMap` — 3 interfaces, one pattern |
 | Everything else | plain data types |
 
@@ -671,11 +671,43 @@ tagged with the extension name, and routed to the log file / debug pane.
    * not shift with the user's locale.
    */
   export class GitError extends Error {
+    /**
+     * The same account, ready to show. The constructor sets it to
+     * `stderr.trim()`, falling back to the argv and exit code for the failures
+     * git says nothing about — so unlike `stderr` it is never empty, which is
+     * the whole reason to prefer it when all you want is a sentence for the
+     * user. Reach for `stderr` when you are *matching* on git's wording.
+     */
+    readonly message: string;
     readonly args: readonly string[];
     readonly exitCode: number;
     readonly stdout: string;
     readonly stderr: string;
   }
+
+  /**
+   * The sentence to put in front of the user when git says no — git's own,
+   * because it wrote it for this exact situation and a friendlier paraphrase
+   * would be a worse one. A {@link GitError} yields its `message` — internal
+   * newlines and all, so a rejected `pre-commit` hook reaches the toast across
+   * several lines. Anything else reaching here is a bug in the calling
+   * extension rather than a refusal from git, and says so plainly instead of
+   * hiding behind a generic message.
+   *
+   * ```ts
+   * try {
+   *   await ctx.git.commit(message);
+   * } catch (error) {
+   *   ctx.popups.notify(describeGitFailure(error), "error");
+   * }
+   * ```
+   *
+   * Public API rather than a snippet each extension copies: all eight bundled
+   * extensions wanted it, six wrote it under five different names, and five of
+   * those re-spelled the `stderr.trim() || message` fallback {@link GitError}
+   * had already applied for them.
+   */
+  export function describeGitFailure(error: unknown): string;
 
   /**
    * All git access. Reads come from the reactive store; writes go through
@@ -706,12 +738,44 @@ tagged with the extension name, and routed to the log file / debug pane.
     /**
      * Run git with explicit argv (never through a shell). The escape hatch for
      * everything without a helper. Throws {@link GitError} on nonzero exit
-     * unless `allowFailure`. Mutating subcommands trigger a store refresh,
+     * unless `allowFailure`. A mutating argv refreshes the store afterwards,
      * same as the helpers.
      *
      * **Wrap every path you put in the argv in {@link literalPathspec}.** No
      * shell is involved, but git does its own globbing: every path git takes is
      * a *pathspec*, and `--` does not turn that off.
+     *
+     * **Whether your argv counts as mutating is decided from the argv alone,
+     * before git runs**, and the rule is spelled out here because you cannot
+     * predict it otherwise. The subcommand is the first argv element that does
+     * not start with `-` (a value-taking global — `-c`, `-C`, `--config-env`,
+     * `--exec-path`, `--git-dir`, `--namespace`, `--super-prefix`,
+     * `--work-tree` — swallows the element after it). It is a **read** if that
+     * subcommand is one of `blame`, `cat-file`, `check-attr`, `check-ignore`,
+     * `check-ref-format`, `count-objects`, `describe`, `diff`, `diff-files`,
+     * `diff-index`, `diff-tree`, `for-each-ref`, `grep`, `log`, `ls-files`,
+     * `ls-remote`, `ls-tree`, `merge-base`, `name-rev`, `rev-list`,
+     * `rev-parse`, `shortlog`, `show`, `show-ref`, `status`, `var`,
+     * `verify-commit`, `verify-tag`, `whatchanged`; or if the subcommand and
+     * **the argv element immediately after it** spell one of the read-only
+     * pairs `bisect log`, `notes list`, `notes show`, `reflog show`,
+     * `remote get-url`, `stash list`, `stash show`, `submodule status`,
+     * `worktree list`. Everything else is assumed to mutate — including an argv
+     * with no subcommand at all, like `["--version"]` — because a missed refresh
+     * leaves the screen disagreeing with the repository while a spurious one
+     * costs a coalesced re-read.
+     *
+     * The pair rule is strict adjacency, and that is the part that surprises
+     * people: `["reflog", "show", "-n", "5"]` is a read, while the same command
+     * spelled `["reflog", "-n", "5"]` is a write — as are
+     * `["branch", "--contains", "HEAD"]`, `["remote", "-v"]` and
+     * `["tag", "--list"]`. Spell the second word of a pair immediately after the
+     * first, and put your flags after both.
+     *
+     * A misclassified read is worse than a wasted refresh: a pane that reloads
+     * on `git.refreshed` (§1.6) — the pattern the bundled diff pane uses — has
+     * its read trigger the refresh that triggers the read, and the loop keeps
+     * itself alive with nothing in the repository changing.
      */
     raw(args: readonly string[], options?: RawOptions): Promise<GitOutput>;
 
@@ -1109,9 +1173,11 @@ tagged with the extension name, and routed to the log file / debug pane.
    * {@link useCommand}, so it inherits its pane requirement and its runtime
    * check on `idPrefix`.
    *
-   * Attach {@link ListCursor.scrollRef} to the pane's `<scrollbox>` or the
-   * cursor walks off the bottom of it and the selection — which is still what
-   * every key acts on — becomes invisible. Half-page motions (`ctrl+d` /
+   * Attach {@link ListCursor.scrollRef} to the pane's `<scrollbox>` *and*
+   * {@link ListCursor.rowId} to each row — a ref has nothing to reveal while the
+   * rows are unnamed — or the cursor walks off the bottom of the box and the
+   * selection, which is still what every key acts on, becomes invisible.
+   * Half-page motions (`ctrl+d` /
    * `ctrl+u`) remain absent here, but they are no longer impossible: a pane
    * that wants them can measure with {@link ScrollView.viewportRows} and move
    * the cursor with {@link ListCursor.setIndex}.
@@ -1143,11 +1209,16 @@ tagged with the extension name, and routed to the log file / debug pane.
      * each row, and the selected row is scrolled into view whenever the cursor
      * moves past the edge of the viewport, by the minimum needed (so `j` scrolls
      * one row rather than recentring). Give the box
-     * `flexGrow={1} flexBasis={0}` — see {@link ScrollView.ref}.
+     * `focusable={false} flexGrow={1} flexBasis={0}` — see {@link ScrollView.ref}
+     * for what each of those is load-bearing for.
      *
      * ```tsx
-     * <scrollbox ref={cursor.scrollRef} flexGrow={1} flexBasis={0}>{rows}</scrollbox>
+     * <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
+     *   {rows}
+     * </scrollbox>
      * ```
+     * Every row needs `id={cursor.rowId(index)}` on it ({@link rowId}); without
+     * that this ref has nothing to reveal.
      */
     readonly scrollRef: (surface: ScrollSurface | null) => void;
     /**
@@ -1186,7 +1257,7 @@ tagged with the extension name, and routed to the log file / debug pane.
    * useCommand({ id: "x.down", title: "Scroll down", keys: "j", run: () => scroll.scrollBy(1) });
    * useCommand({ id: "x.page", title: "Page down", keys: "ctrl+d",
    *              run: () => scroll.scrollBy(scroll.viewportRows() / 2) });
-   * <scrollbox ref={scroll.ref} flexGrow={1} flexBasis={0}>
+   * <scrollbox ref={scroll.ref} focusable={false} flexGrow={1} flexBasis={0}>
    *   <diff diff={patch} view={view} />
    * </scrollbox>
    * ```
@@ -1199,6 +1270,11 @@ tagged with the extension name, and routed to the log file / debug pane.
      * `flexGrow={1} flexBasis={0}`: without the basis its flex size is its
      * *content* height, so a long document makes the box taller than the pane
      * and paints over the pane's own header instead of scrolling inside it.
+     *
+     * Give it `focusable={false}` too. OpenTUI's `<scrollbox>` is focusable by
+     * default, and OpenTUI has a single focus slot, so a pane leaving the
+     * default on puts its box in the running for a focus laziergit hands to the
+     * popup layer's inputs — every bundled pane passes it.
      */
     readonly ref: (surface: ScrollSurface | null) => void;
     /**
@@ -1298,7 +1374,7 @@ autocompletes every prop; this table only orients. The ones the examples lean on
 | `<box>` | flex container | `flexDirection`, `flexGrow`, `width`/`height` (fixed columns), `padding`, `gap`, `border` |
 | `<text>` | one styled text run | `fg`, `bg` (row highlight); children may include `<span>` |
 | `<span>` | inline styled fragment inside `<text>` | `fg`, `bg`, `attributes` |
-| `<scrollbox>` | scrollable column for overflow content | `flexGrow={1} flexBasis={0}` (see {@link ScrollView.ref}), plus `ref` from {@link useScrollView} or {@link ListCursor.scrollRef} — it does **not** scroll itself, because laziergit never gives a renderable the terminal's focus |
+| `<scrollbox>` | scrollable column for overflow content | `focusable={false} flexGrow={1} flexBasis={0}` (see {@link ScrollView.ref}), plus `ref` from {@link useScrollView} or {@link ListCursor.scrollRef} — it does **not** scroll itself, because laziergit never gives a renderable the terminal's focus |
 | `<select>` | focusable list with built-in cursor | `options`, selection styling — or roll your own rows with `useCommand` j/k |
 | `<diff>` | syntax-highlighted diff | `diff` (unified text), `view` (`"unified"` / `"split"`), `filetype` (per-language tree-sitter highlighting) |
 | `<code>` | highlighted source block | `content`, `filetype` |
@@ -1369,8 +1445,21 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
      * survives the owner's reloads and is disposed with YOUR extension.
      * `group` names a group id to append to ({@link MenuGroup.id}); no match —
      * or no `group` at all — creates a new trailing group, titled with the id
-     * when there is one. Item key conflicts: later registration wins, with a
-     * logged diagnostic.
+     * when there is one.
+     *
+     * Item key conflicts resolve by **position in the merged menu** — groups in
+     * order, items in order within a group, the last one standing takes the key
+     * — and not by recency. The owner's groups are laid out first and splices
+     * appended after them, so a splice takes a contested key from the owner
+     * however early it registered, and a splice landing in a trailing group
+     * beats one appended into an earlier group whichever registered first.
+     * Deliberately not the keymap's last-registration rule: the owner
+     * re-registers its whole spec on each of its own hot reloads, so recency
+     * would hand every contested key back to it the moment it reloaded, and a
+     * splice is meant to be standing. The loser is dropped from the menu
+     * entirely, where a Command that loses a key keeps its palette row — a menu
+     * item is reachable by its key and nothing else, so keyless and absent are
+     * the same thing. Either way the conflict is a logged diagnostic.
      */
     extend<Id extends keyof MenuMap & string>(
       id: Id,
@@ -1895,12 +1984,19 @@ export default defineExtension({
       if (runs.length === 0) return <text fg={theme.textMuted}>no runs for {branch}</text>;
 
       return (
-        <scrollbox>
+        // Every prop here is load-bearing. `scrollRef` plus the rows' `rowId` keep the
+        // selected row — the row every key acts on — inside the viewport. `flexBasis={0}`
+        // stops the box being sized by its *content*: a list longer than the pane would
+        // make it taller than the pane and paint over its neighbour instead of scrolling.
+        // `focusable={false}` keeps it out of OpenTUI's single focus slot, which belongs
+        // to the popup layer's inputs.
+        <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
           {runs.map((run, i) => {
             const { glyph, color } = icon(run, theme);
             return (
               <text
                 key={run.databaseId}
+                id={cursor.rowId(i)}
                 bg={i === cursor.index && focused ? theme.selection : undefined}
               >
                 <span fg={color}>{glyph}</span> {run.workflowName} — {run.displayTitle}
@@ -2394,8 +2490,13 @@ menu) both possible and fully typed; spliceable-by-default is the point of menus
 your name while extending anyone's. For a private one-off menu, `ctx.popups.menu` renders the
 same `MenuGroup` data ad hoc with no registry entry — the popup toolkit's `menu` without the
 global-augmentation friction. `when(target)` keeps spliced items honest per-row (false =
-hidden, never grayed-out-but-activatable); key conflicts resolve last-wins with a logged
-diagnostic (mirroring the keymap layer). Groups carry a stable `id` for splice addressing
+hidden, never grayed-out-but-activatable); key conflicts resolve by position in the merged
+menu — owner groups first, splices appended after — with a logged diagnostic, so a splice
+outranks the owner's own item whatever order the two registered in. Deliberately *not* the
+keymap's last-registration rule: the owner re-registers its spec on every hot reload, which
+under recency would hand it back every key a splice had taken. The loser is dropped rather than
+left keyless, because a menu item has no palette row to survive in the way a Command that loses
+a key does. Groups carry a stable `id` for splice addressing
 (defaulting to `title`) so a menu owner can retitle presentation text without silently
 rerouting other extensions' splices, and splices themselves are standing data keyed by menu id
 — they survive the owner's reloads and apply on (re)registration (§5.3). Transient-style

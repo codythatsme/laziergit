@@ -3,6 +3,7 @@ import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { act } from "react"
 
+import { gitIsolationEnv } from "../git/test-repo"
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
 
 installHarnessLifecycle()
@@ -94,19 +95,6 @@ const syncSource = `
 `
 
 /**
- * Pinned identity and no user config, matching how the harness initialised the repository:
- * a developer's own `~/.gitconfig` must not be able to change what a test observes.
- */
-const isolation: Readonly<Record<string, string>> = {
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
-  GIT_AUTHOR_NAME: "Test",
-  GIT_AUTHOR_EMAIL: "test@example.com",
-  GIT_COMMITTER_NAME: "Test",
-  GIT_COMMITTER_EMAIL: "test@example.com",
-}
-
-/**
  * Reads the repository behind the app's back, so assertions test git and not the store.
  *
  * Inside `act` because spawning git is the one thing here that takes real time while the
@@ -118,7 +106,7 @@ async function git(harness: Harness, ...args: readonly string[]): Promise<string
   await act(async () => {
     const child = Bun.spawn(["git", ...args], {
       cwd: harness.directory,
-      env: { ...process.env, ...isolation },
+      env: { ...process.env, ...gitIsolationEnv },
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
