@@ -305,6 +305,59 @@ describe("popups", () => {
     expect(frame(harness)).toContain("named seedx")
   })
 
+  it("submits what was typed even when Enter arrives before the render that would show it", async () => {
+    const harness = await createHarness()
+    await twoPanes(harness)
+
+    await press(harness, () => void harness.kernel.commands.execute("alpha.ask"))
+    expect(frame(harness)).toContain("Name it")
+
+    // One `act`, so React commits nothing between the keystroke and the Enter: the popup's
+    // `return` binding runs on the key layer, which is not a React event and does not wait
+    // for a render. Typing each key in its own `act` — as every other popup test does —
+    // flushes in between and cannot catch this. A person hitting enter straight after a
+    // paste, and every automated driver, produces exactly this ordering.
+    await press(harness, () => {
+      void harness.setup.mockInput.typeText("x")
+      harness.setup.mockInput.pressEnter()
+    })
+
+    expect(frame(harness)).not.toContain("Name it")
+    expect(frame(harness)).toContain("named seedx")
+  })
+
+  it("chooses the row the cursor is on even when Enter arrives before the render that moves it", async () => {
+    const harness = await createHarness()
+    await twoPanes(harness)
+
+    await press(harness, () => void harness.kernel.commands.execute("alpha.pick"))
+    expect(frame(harness)).toContain("Pick one")
+
+    // Same ordering as the prompt case above: holding `down` and hitting enter, or typing a
+    // filter and hitting enter, delivers both keys before React commits either.
+    await press(harness, () => {
+      harness.setup.mockInput.pressArrow("down")
+      harness.setup.mockInput.pressEnter()
+    })
+
+    expect(frame(harness)).toContain("picked 2")
+  })
+
+  it("filters and chooses in one breath, without a render in between", async () => {
+    const harness = await createHarness()
+    await twoPanes(harness)
+
+    await press(harness, () => void harness.kernel.commands.execute("alpha.pick"))
+    expect(frame(harness)).toContain("Pick one")
+
+    await press(harness, () => {
+      void harness.setup.mockInput.typeText("second")
+      harness.setup.mockInput.pressEnter()
+    })
+
+    expect(frame(harness)).toContain("picked 2")
+  })
+
   it("resolves a select with the caller's own value, not the row index", async () => {
     const harness = await createHarness()
     await twoPanes(harness)
