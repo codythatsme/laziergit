@@ -2559,9 +2559,17 @@ most keys to explain.
 
 The cheat sheet follows from the same principle: it answers "what can I press", so while a
 pane captures it collapses to that pane's capture commands and nothing else — listing `q` as
-"Quit" while `q` types the letter q would be a lie. Otherwise capture commands sit in their
-own section per pane, after that pane's ordinary keys, which is where you read them: before
-opening the editor, since `?` is inert once you are inside it.
+"Quit" while `q` types the letter q would be a lie. Otherwise it is the **focused pane's**
+sheet: that pane's ordinary keys, then its capture commands (which is where you read them —
+before opening the editor, since `?` is inert once you are inside it), then the globals last.
+Other panes are not listed at all. A sheet that enumerated every live pane answered a
+question nobody asked — most of it was keys that do nothing until you tab elsewhere — and the
+globals trail rather than lead because they are the same on every screen, but the pane-jump
+keys are global commands and this is the only place they are written down.
+
+Unlike the palette, the sheet keeps `hidden` commands: `j`/`k`/`g` are exactly what someone
+opening it wants confirmed, and the compact answer for everything else is now the hint bar
+(§1.7), which leaves the sheet free to be the complete one.
 
 ### 5.9 Error containment
 

@@ -377,7 +377,9 @@ export class ExtensionKernel {
   }
 
   openCheatSheet(): Promise<void> {
-    return this.popups.cheatSheet(coreOwner, "Keybindings", this.#cheatSheetSections()).promise
+    const focused = this.layout.focusedPaneId
+    const title = focused === null ? "Keybindings" : `Keybindings — ${focused}`
+    return this.popups.cheatSheet(coreOwner, title, this.#cheatSheetSections()).promise
   }
 
   /** Core owns the `git.*` and `app.*` namespaces; both names are reserved, so no Extension can spoof them. */
@@ -464,10 +466,17 @@ export class ExtensionKernel {
    * empty one: a Pane that captures without an exit Command has trapped the user, and a
    * bare heading says so louder than an absent section.)
    *
-   * Otherwise capture Commands still get a section of their own per Pane, listed after
-   * that Pane's ordinary keys, because they answer a different question — not "what does
-   * this Pane do" but "what gets me back out of the editor it can show". That is worth
-   * reading *before* entering it, which is the only time this sheet can be opened anyway.
+   * Otherwise the sheet is the *focused* Pane's, not the app's. Listing every live Pane's
+   * keys turned the one question it answers — "what can I press here" — into a catalogue
+   * the reader had to search, and most of it was keys that would do nothing until they had
+   * tabbed somewhere else. Capture Commands still get a section of their own, listed after
+   * the Pane's ordinary keys, because they answer a different question — not "what does this
+   * Pane do" but "what gets me back out of the editor it can show". That is worth reading
+   * *before* entering it, which is the only time this sheet can be opened anyway.
+   *
+   * The globals come last, and only last: they are the same everywhere, so they are the
+   * fallback rather than the answer — but the Pane-jump keys are global Commands and this is
+   * the only place they are written down.
    */
   #cheatSheetSections(): readonly CheatSheetSection[] {
     const entries = this.commands.getSnapshot()
@@ -478,23 +487,17 @@ export class ExtensionKernel {
     }
 
     const sections: CheatSheetSection[] = []
+    // Only a Pane that exists right now: the sheet answers "what can I press", so a Command
+    // bound into a Pane nothing registered has nothing to say here.
+    if (focused !== null && this.panes.isLive(focused)) {
+      const ordinary = cheatSheetEntries(entries.filter((entry) => entry.pane === focused && !entry.capture))
+      if (ordinary.length > 0) sections.push({ title: focused, entries: ordinary })
+      const captured = this.#captureEntries(entries, focused)
+      if (captured.length > 0) sections.push({ title: `${focused} (capturing keys)`, entries: captured })
+    }
+
     const globals = cheatSheetEntries(entries.filter((entry) => entry.pane === undefined))
     if (globals.length > 0) sections.push({ title: "Global", entries: globals })
-
-    // Only Panes that exist right now: the cheat sheet answers "what can I press", so a
-    // Command bound into a Pane nothing registered has nothing to say here.
-    const panes = [
-      ...new Set(
-        entries.flatMap((entry) => (entry.pane !== undefined && this.panes.isLive(entry.pane) ? [entry.pane] : [])),
-      ),
-    ].sort((left, right) => (left === focused ? -1 : right === focused ? 1 : left.localeCompare(right)))
-    for (const pane of panes) {
-      const ordinary = cheatSheetEntries(entries.filter((entry) => entry.pane === pane && !entry.capture))
-      if (ordinary.length > 0)
-        sections.push({ title: pane === focused ? `${pane} (focused)` : pane, entries: ordinary })
-      const captured = this.#captureEntries(entries, pane)
-      if (captured.length > 0) sections.push({ title: `${pane} (capturing keys)`, entries: captured })
-    }
     return sections
   }
 
