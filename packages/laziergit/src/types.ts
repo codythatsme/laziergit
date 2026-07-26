@@ -529,10 +529,15 @@ export type StashApi = RowSource<StashEntry>
  * A union rather than a flat record with a nullable `ref`, because `{ kind: "commit", ref:
  * null }` was representable and meant nothing: the diff Pane had to carry a runtime branch
  * for a state no caller could sensibly build. `path` narrows any of them to one file.
+ *
+ * `branch` and `commit` fetch the same patch — a branch name is a ref like any other — and
+ * differ only in the context the Pane prints above it. That difference is the whole point:
+ * a Pane whose rows are clipped to one line needs somewhere to show the name in full, and
+ * `{ kind: "commit", ref: tip }` can only ever name the commit.
  */
 export type DiffTarget =
   | { readonly kind: "workingTree" | "staged"; readonly path: string | null }
-  | { readonly kind: "commit" | "stash"; readonly ref: string; readonly path: string | null }
+  | { readonly kind: "commit" | "stash" | "branch"; readonly ref: string; readonly path: string | null }
 
 export interface DiffApi {
   current(): DiffTarget | null

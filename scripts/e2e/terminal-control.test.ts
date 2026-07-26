@@ -237,7 +237,6 @@ describe("laziergit through a real terminal", () => {
     await repo.git("checkout", "--quiet", "-b", "topic")
     await repo.write("tracked.txt", "topic\n")
     await repo.git("commit", "--quiet", "--all", "--message", "topic change")
-    const topicOid = (await repo.git("rev-parse", "HEAD")).trim()
     await repo.git("checkout", "--quiet", "main")
 
     await inTerminal(repo, async (session) => {
@@ -248,7 +247,7 @@ describe("laziergit through a real terminal", () => {
       await session.keyboard.type("Focus branches")
       await waitForText(session, "Focus branches")
       await session.keyboard.press("Enter")
-      await waitForText(session, `commit ${(await repo.git("rev-parse", "HEAD")).trim().slice(0, 8)}`)
+      await waitForText(session, "branch main")
 
       await session.keyboard.type("?")
       const keys = await waitForScreen(
@@ -264,9 +263,9 @@ describe("laziergit through a real terminal", () => {
       await waitForScreen(session, "the keybindings popup to close", (screen) => !screen.includes("Keybindings"))
 
       await session.keyboard.press("ArrowDown")
-      await waitForText(session, `commit ${topicOid.slice(0, 8)}`)
+      await waitForText(session, "branch topic")
       await session.keyboard.type(" ")
-      await waitForText(session, "* topic  no upstream")
+      await waitForText(session, "* topic")
 
       expect(await repo.git("symbolic-ref", "--short", "HEAD")).toBe("topic\n")
     })

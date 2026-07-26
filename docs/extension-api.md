@@ -1742,10 +1742,17 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
    * `ref`, because `{ kind: "commit", ref: null }` was representable and
    * meant nothing: the diff pane carried a runtime branch for a state no
    * caller could sensibly build. `path` narrows any of them to one file.
+   *
+   * `branch` and `commit` fetch identically — a branch name is a ref like any
+   * other — and differ only in the context the pane prints above the patch.
+   * That difference is the whole point of the third kind: list rows are one
+   * line each and clip (§1.8), so the name that ran off the right edge has to
+   * be readable somewhere, and `{ kind: "commit", ref: tip }` can only ever
+   * name the commit.
    */
   export type DiffTarget =
     | { readonly kind: "workingTree" | "staged"; readonly path: string | null }
-    | { readonly kind: "commit" | "stash"; readonly ref: string; readonly path: string | null };
+    | { readonly kind: "commit" | "stash" | "branch"; readonly ref: string; readonly path: string | null };
 
   /** Exported API of the bundled diff extension. */
   export interface DiffApi {

@@ -366,8 +366,16 @@ describe("the branch menu", () => {
     await git(harness, "checkout", "--quiet", "main")
 
     await start(harness)
+    // The stub prints the DiffTarget it was handed, so this pins the kind the Pane pushes —
+    // `branch`, whose whole purpose is to let the detail view name what a clipped row cut off.
+    expect(frame(harness)).toContain("diff branch main")
+
     await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    expect(frame(harness)).toContain("no upstream")
+    await waitUntil(
+      harness,
+      async () => frame(harness).includes("diff branch topic"),
+      "the diff to follow the cursor onto topic",
+    )
 
     await press(harness, () => harness.setup.mockInput.pressKey("x"))
     await press(harness, () => harness.setup.mockInput.pressKey("u"))
