@@ -1,5 +1,27 @@
 /** @jsxImportSource @opentui/react */
-import { createCell, defineExtension, GitError, useGit, useTheme, type Head, type UpstreamInfo } from "laziergit"
+import {
+  createCell,
+  defineExtension,
+  describeGitFailure,
+  GitError,
+  remoteWebUrl,
+  useGit,
+  useTheme,
+  type Head,
+  type Theme,
+  type UpstreamInfo,
+} from "laziergit"
+import type { ReactNode } from "react"
+
+/**
+ * The last segment of the repository root, without `node:path` — an Extension may import
+ * only `"laziergit"`, `"react"` and `"@opentui/react"` (ADR-0001). Trailing separators are
+ * dropped so a root of `/work/repo/` still names itself `repo`.
+ */
+function directoryName(root: string): string {
+  const segments = root.split(/[/\\]/).filter((segment) => segment !== "")
+  return segments.at(-1) ?? root
+}
 
 /** The two {@link Head} variants that have nothing to push or pull. */
 type WithoutBranch = Exclude<Head, { kind: "onBranch" }>
@@ -60,6 +82,30 @@ function divergence(upstream: UpstreamInfo): string {
   return `↑${upstream.ahead} ↓${upstream.behind}`
 }
 
+/**
+ * The same counts for a glance rather than a report: only the ones above zero.
+ *
+ * Not {@link divergence}, which always prints both — a toast is read once, deliberately,
+ * and says exactly where the branch ended up; the status line is read continuously, and a
+ * standing `↓0` is a column of nothing happening.
+ */
+function drift(upstream: UpstreamInfo): string {
+  const parts: string[] = []
+  if (upstream.ahead > 0) parts.push(`↑${upstream.ahead}`)
+  if (upstream.behind > 0) parts.push(`↓${upstream.behind}`)
+  return parts.join(" ")
+}
+
+/** The divergence half of the status line segment, as zero or one span. */
+function upstreamSpans(upstream: UpstreamInfo | null, theme: Theme): readonly ReactNode[] {
+  if (upstream === null) return []
+  if (upstream.gone) {
+    return [<span key="sync" fg={theme.danger}>{` ${upstream.remote}/${upstream.branch} gone`}</span>]
+  }
+  const counts = drift(upstream)
+  return counts === "" ? [] : [<span key="sync" fg={theme.info}>{` ${counts}`}</span>]
+}
+
 /** How the upstream is spelled everywhere the user reads it. */
 function upstreamName(upstream: UpstreamInfo): string {
   return `${upstream.remote}/${upstream.branch}`
@@ -101,6 +147,11 @@ export default defineExtension({
   description: "Push, pull, and fetch the current branch",
 
   activate(ctx) {
+    // Read once, in activate: the repository root is constant for the session, so neither
+    // the segment nor the menu has to touch the ctx surface while rendering.
+    const root = ctx.git.root
+    const repoName = directoryName(root)
+
     /**
      * The operation in flight, and the whole of sync's progress reporting.
      *
@@ -286,24 +337,48 @@ export default defineExtension({
       if (outcome.kind === "done") ctx.popups.notify(fetchedSummary(), "success")
     }
 
+    /**
+     * Where HEAD is, and how far it has drifted from its upstream — the whole of what the
+     * status line says about the repository.
+     *
+     * It says the branch as well as the divergence because there is no Pane left that says
+     * it unconditionally: the branches Pane marks HEAD with a `*`, but it scrolls, and on a
+     * detached HEAD there is no row to mark. One segment, on the row that is always there.
+     */
     function SyncSegment() {
       const theme = useTheme()
       const busy = running.use()
       const head = useGit((state) => state.head)
 
-      // The progress indicator outranks the divergence: it is the only place a running
-      // fetch is visible, and the numbers it covers are about to change anyway.
-      if (busy !== null) return <text content={`⟳ ${busy}`} fg={theme.warning} />
-      // No branch, no upstream, or no repository at all — nothing to be ahead or behind of.
-      if (head.kind !== "onBranch" || head.upstream === null) return null
+      // Every branch below returns `<span>` children of one `<text>`, never a `content`
+      // prop. React reuses the same renderable across a re-render, and switching that one
+      // instance between the two forms leaves OpenTUI's text buffer with no chunks — it
+      // throws `text.chunks` on the next paint, and the slot's error boundary then collapses
+      // this segment for the rest of the session. Which is exactly what a fetch did: the
+      // spinner below is the only state that used `content`.
+      const spans =
+        // The progress indicator outranks everything else: it is the only place a running
+        // fetch is visible, and the numbers it covers are about to change anyway.
+        busy !== null
+          ? [<span key="busy" fg={theme.warning}>{`⟳ ${busy}`}</span>]
+          : head.kind === "noRepository"
+            ? []
+            : head.kind === "detached"
+              ? [<span key="head" fg={theme.warning}>{`detached at ${head.oid.slice(0, 7)}`}</span>]
+              : [
+                  <span key="head" fg={theme.accent}>
+                    {head.branch}
+                  </span>,
+                  // `gone` and in-sync are both `↑0 ↓0` (§1.5), so drawing them alike is the
+                  // exact mistake `UpstreamInfo.gone` exists to prevent. Everything else that
+                  // is merely "nothing to report" — no upstream, no commits yet, in sync —
+                  // prints nothing, so what is on the line is always something that happened.
+                  ...upstreamSpans(head.kind === "onBranch" ? head.upstream : null, theme),
+                ]
 
-      const upstream = head.upstream
-      // `gone` and in-sync are both `↑0 ↓0` (§1.5), so drawing them alike is the exact
-      // mistake `UpstreamInfo.gone` exists to prevent.
-      if (upstream.gone) return <text content={`${upstream.remote}/${upstream.branch} gone`} fg={theme.danger} />
-
-      const inSync = upstream.ahead === 0 && upstream.behind === 0
-      return <text content={divergence(upstream)} fg={inSync ? theme.textMuted : theme.text} />
+      // Nothing to say takes no width rather than an empty box beside everyone else's data.
+      if (spans.length === 0) return null
+      return <text wrapMode="none">{spans}</text>
     }
 
     ctx.statusline.register({ id: "sync", component: SyncSegment, align: "right" })
@@ -332,10 +407,28 @@ export default defineExtension({
     })
     ctx.commands.register({ id: "sync.fetch", title: "Fetch all remotes", keys: "f", run: () => fetch(false) })
     ctx.commands.register({
+      // Global and keyed, where the status Pane had it buried in a menu: a poll runs every
+      // couple of seconds anyway, so this is for the moment you changed something outside
+      // laziergit and do not want to wait for it.
+      id: "sync.refresh",
+      title: "Refresh",
+      keys: "shift+r",
+      run: async () => {
+        try {
+          await ctx.git.refresh()
+        } catch (error) {
+          ctx.popups.notify(describeGitFailure(error), "error")
+        }
+      },
+    })
+    ctx.commands.register({
       id: "sync.menu",
-      title: "Sync actions",
+      title: "Repository actions",
       keys: "shift+s",
-      run: () => ctx.menus.open("sync.actions", ctx.git.state.head),
+      // The whole state, not just HEAD: the repository-level items below need the remotes,
+      // and a target that carried only what push and pull needed is what kept them in a
+      // Pane of their own for as long as there was one.
+      run: () => ctx.menus.open("sync.actions", ctx.git.state),
     })
 
     /**
@@ -349,11 +442,11 @@ export default defineExtension({
      */
     ctx.menus.register({
       id: "sync.actions",
-      title: (head) => {
-        if (head.kind === "detached") return `Sync (detached at ${head.oid.slice(0, 7)})`
-        if (head.kind === "onBranch") return `Sync ${head.branch}`
-        if (head.kind === "noRepository") return "Sync (no repository)"
-        return `Sync (${head.branch}, no commits yet)`
+      title: ({ head }) => {
+        if (head.kind === "detached") return `${repoName} (detached at ${head.oid.slice(0, 7)})`
+        if (head.kind === "onBranch") return `${repoName} — ${head.branch}`
+        if (head.kind === "noRepository") return `${repoName} (no repository)`
+        return `${repoName} (${head.branch}, no commits yet)`
       },
       groups: [
         {
@@ -363,14 +456,14 @@ export default defineExtension({
             // One handler behind two entries: `push` already branches on the upstream, and
             // `when` keeps exactly one of them on screen — so the labels differ where they
             // must (what the user is about to agree to) and the behaviour cannot drift.
-            { key: "p", label: "Push", when: tracking, run: push },
-            { key: "u", label: "Push and set upstream", when: untracked, run: push },
+            { key: "p", label: "Push", when: ({ head }) => tracking(head), run: push },
+            { key: "u", label: "Push and set upstream", when: ({ head }) => untracked(head), run: push },
             {
               key: "o",
               label: "Force push (with lease)",
               // Needs an upstream: the lease is a claim about a remote ref this branch is
               // already tracking, and there is nothing to claim without one.
-              when: tracking,
+              when: ({ head }) => tracking(head),
               run: forcePush,
             },
           ],
@@ -379,8 +472,8 @@ export default defineExtension({
           id: "pull",
           title: "Pull",
           items: [
-            { key: "l", label: "Pull", when: onBranch, run: () => pull(false) },
-            { key: "r", label: "Pull (rebase)", when: onBranch, run: () => pull(true) },
+            { key: "l", label: "Pull", when: ({ head }) => onBranch(head), run: () => pull(false) },
+            { key: "r", label: "Pull (rebase)", when: ({ head }) => onBranch(head), run: () => pull(true) },
           ],
         },
         {
@@ -390,6 +483,41 @@ export default defineExtension({
           items: [
             { key: "f", label: "Fetch all remotes", run: () => fetch(false) },
             { key: "n", label: "Fetch and prune", run: () => fetch(true) },
+          ],
+        },
+        {
+          // The repository itself rather than one branch's traffic — the actions the status
+          // Pane used to own, rehomed rather than dropped when it went. They live here
+          // because this is the only menu whose target is the whole {@link GitState}, which
+          // is what "open *this repository*" needs to know where to point.
+          id: "repository",
+          title: "Repository",
+          items: [
+            {
+              // `b`, not the `o` the status Pane used: `o` is force-push in the group above,
+              // and one menu is one keyspace.
+              key: "b",
+              label: "Open repository in browser",
+              when: (state) => remoteWebUrl(state.remotes) !== null,
+              run: async (state) => {
+                const url = remoteWebUrl(state.remotes)
+                // `when` already established there is one; this narrows the type rather than
+                // asking the same question a second time.
+                if (url !== null) await ctx.open(url)
+              },
+            },
+            {
+              key: "y",
+              label: "Copy repository root path",
+              run: async () => {
+                try {
+                  await ctx.copy(root)
+                  ctx.popups.notify(root, "success")
+                } catch (error) {
+                  ctx.popups.notify(describeGitFailure(error), "error")
+                }
+              },
+            },
           ],
         },
       ],

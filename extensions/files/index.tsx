@@ -556,7 +556,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "files.focus",
       title: "Focus the files pane",
-      keys: "2",
+      keys: "1",
       run: () => pane.focus(),
     })
 

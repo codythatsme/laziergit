@@ -340,7 +340,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "branches.focus",
       title: "Focus branches",
-      keys: "3",
+      keys: "2",
       run: () => pane.focus(),
     })
 

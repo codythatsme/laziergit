@@ -163,7 +163,7 @@ describe("the commits action menu", () => {
     const parent = await repo.oid("HEAD~1")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
 
@@ -188,7 +188,7 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "c")
@@ -208,7 +208,7 @@ describe("the commits action menu", () => {
     await writeFile(join(repo.harness.directory, "first-commit.txt"), "edited\n")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "h")
@@ -235,7 +235,7 @@ describe("the commits action menu", () => {
     await repo.run("add", "first-commit.txt")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "m")
@@ -261,7 +261,7 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "s")
@@ -283,7 +283,7 @@ describe("the commits action menu", () => {
     const parent = await repo.oid("HEAD~1")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "s")
@@ -305,7 +305,7 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "x")
     await press(repo.harness, "v")
 
@@ -329,7 +329,7 @@ describe("the commits action menu", () => {
     await repo.run("merge", "--quiet", "--no-ff", "--no-edit", "-m", "merge feature", "feature")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "x")
 
     // The merge is the newest commit and so the selected row. Offering the item here would
@@ -354,7 +354,7 @@ describe("the commits action menu", () => {
     await repo.run("remote", "add", "origin", repo.harness.directory)
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "x")
 
     expect(frame(repo.harness)).toContain("Check out this commit")
@@ -367,7 +367,7 @@ describe("the commits action menu", () => {
     await repo.run("remote", "add", "origin", "git@github.com:acme/tools.git")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "4")
+    await press(repo.harness, "3")
     await press(repo.harness, "x")
 
     expect(frame(repo.harness)).toContain("Open this commit on the remote")

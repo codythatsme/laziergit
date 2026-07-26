@@ -1733,13 +1733,14 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
     useDecoration(row: Row): RowDecoration | undefined;
   }
 
-  // The eight Bundled Extensions are `status`, `files`, `branches`, `commits`,
-  // `stash`, `diff`, `commit-flow`, and `sync` (push/pull/fetch). Every one of
-  // the eight declares an `.actions` menu id below — the universal splice seam.
-  // The four list extensions additionally export RowSource APIs; `diff` and
-  // `commit-flow` export the small APIs beneath. `status` and `sync` export no
-  // API: they have no rows and nothing to consume — their seam IS their menu,
-  // and an ExtensionApis entry exists only where there is an API worth calling.
+  // The seven Bundled Extensions are `files`, `branches`, `commits`, `stash`,
+  // `diff`, `commit-flow`, and `sync` (push/pull/fetch, and the repository
+  // itself). Every one of the seven declares an `.actions` menu id below — the
+  // universal splice seam. The four list extensions additionally export
+  // RowSource APIs; `diff` and `commit-flow` export the small APIs beneath.
+  // `sync` exports no API: it has no rows and nothing to consume — its seam IS
+  // its menu, and an ExtensionApis entry exists only where there is an API
+  // worth calling.
 
   export type BranchesApi = RowSource<Branch>;
   export type FilesApi = RowSource<FileChange>;
@@ -1808,12 +1809,15 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
     "files.actions": FileChange;
     "commits.actions": Commit;
     "stash.actions": StashEntry;
-    /** Repo-level actions, opened from the status pane. */
-    "status.actions": GitState;
     /** The commit transient — the premier Magit-precedent splice target. */
     "commit-flow.actions": WorkingTreeStatus;
-    /** Push/pull/fetch actions. */
-    "sync.actions": Head;
+    /**
+     * Push/pull/fetch, plus the repository-level actions (open in browser,
+     * copy root). The whole state rather than just `Head`, because "open *this
+     * repository*" needs the remotes and a narrower target is what kept those
+     * actions in a pane of their own for as long as there was one.
+     */
+    "sync.actions": GitState;
     /** Actions on whatever the diff pane is showing. */
     "diff.actions": DiffTarget;
   }
@@ -1870,20 +1874,20 @@ effects rather than a wrapper around the Promise surface, so both faces drive th
 Outside a git repository laziergit still starts: the store serves an empty {@link GitState},
 the poll does nothing, and every write fails with a {@link GitError} saying so.
 
-§1.11 is live too, as of M4: the eight Bundled Extensions are real features, not placeholders.
+§1.11 is live too, as of M4: the seven Bundled Extensions are real features, not placeholders.
 The bundled *scope* is a directory discovered, imported, and shadowed exactly like a user one,
-and the eight inside it register seven Panes, two status line segments, forty-six Commands and
-eight menus — every one of them through this document and nothing else, and not one of them
+and the seven inside it register six Panes, one status line segment, thirty-eight Commands and
+seven menus — every one of them through this document and nothing else, and not one of them
 losing a key to another (§1.7's last-wins resolution reports no conflict on a real boot). The `*.actions` ids are
 menus with items behind them, so `ctx.menus.extend("commits.actions", …)` splices into something
 that exists; the four list extensions export `RowSource` APIs whose decoration providers are
 called for every row on screen; `DiffApi.show` moves the diff pane and `CommitFlowApi.begin`
 opens the editor and resolves with what the user did. Nothing in `extensions/` imports anything
 but `"laziergit"`, `"react"` and `"@opentui/react"` — ADR-0001 holds by construction, which is
-what makes the eight a fair test of this API rather than a demonstration of a private one.
+what makes the seven a fair test of this API rather than a demonstration of a private one.
 
 Building them changed the API in five places, all of them above. `ctx.copy` (§1.3) arrived
-because three of the eight wanted to copy an oid, a path, and a repository root and the only
+because three of them wanted to copy an oid, a path, and a repository root and the only
 alternative was per-platform shelling in every extension that wants it. `DiffTarget` became a
 union and `DiffApi.show` began accepting `null`, because the flat record let a `commit` target
 carry no ref and the diff pane could not be told its list had gone empty. `CommitFlowApi.begin`
@@ -1899,7 +1903,7 @@ The two encodings §5.12 used to name as gaps are also gone, and the git model i
 it: `Head` is a discriminated union, so an unborn repository has no oid to misread and a
 detached one has no upstream to look for, and `UpstreamInfo.gone` says outright that the
 remote deleted the branch instead of reporting it as zero divergence. Both landed early in M4,
-before the eight, where the Bundled Extensions put the first real weight on these types — the
+where the Bundled Extensions put the first real weight on these types — the
 branches Pane has to draw the very distinctions the old shapes flattened.
 
 M4 also added the surfaces the Bundled Extensions needed and could not build for
@@ -1912,7 +1916,7 @@ every other binding without introducing a raw key handler beside the Command uni
 public API rather than core-private for the same reason: a third-party list pane or editor
 pane must be able to build exactly what the bundled ones did.
 
-Reviewing the eight closed the gap this note used to leave open — **nothing public could
+Reviewing them closed the gap this note used to leave open — **nothing public could
 scroll a pane's viewport** — and added three more surfaces for the same reason as the four
 above. `useScrollView` and `ListCursor.scrollRef` (§1.8) are the scroll seam: OpenTUI's
 `<scrollbox>` scrolls only for a renderable holding the terminal's focus, and laziergit gives
@@ -2076,7 +2080,7 @@ User config for it, in `~/.config/laziergit/config.jsonc` (schema-validated, aut
 ```jsonc
 {
   "extensions": { "gh-workflows": { "limit": 30 } },
-  "layout": { "columns": [["status", "files", "branches", "gh-workflows"], ["diff"]] },
+  "layout": { "columns": [["files", "branches", "gh-workflows"], ["diff"]] },
   "keybindings": { "gh-workflows.open-run": "enter" } // user override beats the default "o"
 }
 ```
@@ -2769,7 +2773,7 @@ in with the first Extensions rather than after them.
 **No repository** was the third, and it is the one that shows what the ledger is for. It
 used to be an unborn HEAD carrying `branch: ""` — a name no refname can have, so unambiguous
 in the same way `oid === ""` was, and wrong in the same way. By the end of M4 five of the
-eight Bundled Extensions decoded that empty string at six sites under three different names,
+then-eight Bundled Extensions decoded that empty string at six sites under three different names,
 two of them having built a local union purely to repair it, and `commit-flow` was reading
 `kind === "unborn"` to mean "no commit to amend" — correct only by accident, because the
 state it actually needed to exclude was hiding inside the variant it tested. `Head` now has

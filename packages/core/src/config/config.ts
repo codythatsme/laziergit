@@ -32,10 +32,10 @@ export interface LayoutConfig {
   /**
    * The Pane focused when laziergit starts, or null to take the first cell.
    *
-   * Reading order and working order are not the same question: the status Pane belongs at
-   * the top of the first column and is the last Pane you want the keyboard in, since it has
-   * no rows to walk. Without this the only way to start anywhere else is to press a key
-   * every launch.
+   * Reading order and working order are not the same question. A Layout puts first what
+   * you want to read first, which is not always what you want to act on first — a summary
+   * Pane with no rows to walk is the clearest case, but any column has one. Without this
+   * the only way to start anywhere else is to press a key every launch.
    */
   readonly focus: string | null
 }
