@@ -1,5 +1,13 @@
 import { Effect, Queue, Stream } from "effect"
-import { GitError, literalPathspec, type Disposable, type GitOutput, type GitState, type RawOptions } from "laziergit"
+import {
+  GitError,
+  isUntracked,
+  literalPathspec,
+  type Disposable,
+  type GitOutput,
+  type GitState,
+  type RawOptions,
+} from "laziergit"
 
 import type { GitConfig } from "../config/config"
 import { execGit, execGitAllowingEmpty } from "./exec"
@@ -307,17 +315,10 @@ export class GitService {
           branches,
           remotes: parseRemotes(outputs.config.stdout),
           tags: parseTags(outputs.tags.stdout),
-          status: {
-            staged: status.staged,
-            unstaged: status.unstaged,
-            untracked: status.untracked,
-            conflicted: status.conflicted,
-            isClean:
-              status.staged.length === 0 &&
-              status.unstaged.length === 0 &&
-              status.untracked.length === 0 &&
-              status.conflicted.length === 0,
-          },
+          // `isClean` stays a stored boolean rather than a getter: it is read in eight
+          // places, computed in exactly this one, and a value compares `Object.is`-stably
+          // inside a `useGit` selector where a derived array would not.
+          status: { files: status.files, isClean: status.files.length === 0 },
           commits: parseCommits(log),
           stash: parseStash(outputs.stash.stdout),
         },
@@ -526,7 +527,11 @@ export class GitService {
    */
   discard(paths: readonly string[]): Promise<void> {
     if (paths.length === 0) return Promise.resolve()
-    const untracked = new Set(this.getSnapshot().status.untracked.map((file) => file.path))
+    const untracked = new Set(
+      this.getSnapshot()
+        .status.files.filter(isUntracked)
+        .map((file) => file.path),
+    )
     const toDelete = paths.filter((path) => untracked.has(path))
     const toRestore = paths.filter((path) => !untracked.has(path))
 

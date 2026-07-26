@@ -48,6 +48,10 @@ _Avoid_: plugin interface
 A registration id carrying the owning Extension's name as its prefix (`"gh-workflows.refresh"`), enforced at the type level. The one naming rule for everything an Extension registers.
 _Avoid_: namespace, qualified name
 
+**Path Tree**:
+The files Pane's projection of `WorkingTreeStatus` into a flat-rooted folder hierarchy — one row per changed path, one row per directory above it, and single-child directory chains compressed into one row. Directory rows are not `FileChange` values, so they carry no Row Decoration and no `FilesApi` selection.
+_Avoid_: file tree view, explorer, directory listing
+
 **Row Decoration**:
 Extra visual data (badge, color, suffix) an Extension attaches to rows of another Extension's list Pane, e.g. PR status on branch rows.
 _Avoid_: annotation

@@ -167,31 +167,62 @@ describe("laziergit through a real terminal", () => {
     await inTerminal(
       repo,
       async (session) => {
-        await waitForText(session, "❯ ? row00.txt")
+        await waitForText(session, "❯ ?? row00.txt")
 
         await session.keyboard.press("ArrowDown")
-        await waitForText(session, "❯ ? row01.txt")
+        await waitForText(session, "❯ ?? row01.txt")
         await session.keyboard.press("ArrowUp")
-        await waitForText(session, "❯ ? row00.txt")
+        await waitForText(session, "❯ ?? row00.txt")
 
         await session.keyboard.type("j")
-        await waitForText(session, "❯ ? row01.txt")
+        await waitForText(session, "❯ ?? row01.txt")
         await session.keyboard.type("k")
-        await waitForText(session, "❯ ? row00.txt")
+        await waitForText(session, "❯ ?? row00.txt")
 
         await session.keyboard.type("G")
         const last = await waitForScreen(
           session,
           "the last file and its diff to be visible",
-          (screen) => screen.includes("❯ ? row29.txt") && screen.includes("working tree row29.txt"),
+          (screen) => screen.includes("❯ ?? row29.txt") && screen.includes("working tree row29.txt"),
         )
         expect(last).not.toContain("row00.txt")
 
         await session.keyboard.type("g")
-        await waitForText(session, "❯ ? row00.txt")
+        await waitForText(session, "❯ ?? row00.txt")
       },
       { cols: 120, rows: 24 },
     )
+  }, 20_000)
+
+  /**
+   * The only place `keys: "return"` is proven against a real terminal.
+   *
+   * OpenTUI names the Enter key `return`, and core does not install the keymap's alias
+   * field — so `keys: "enter"` parses, registers, typechecks, and shows up in the cheat
+   * sheet while never firing. That failure is invisible to a unit test that presses the
+   * name it bound; only a real PTY sending a real Enter byte catches it.
+   */
+  it("collapses a folder with Enter, hiding its descendants", async () => {
+    const repo = await createE2eRepo()
+    await repo.write("pkg/a.txt", "a\n")
+    await repo.write("pkg/sub/b.txt", "b\n")
+
+    await inTerminal(repo, async (session) => {
+      await waitForText(session, "❯ ▾  pkg")
+      expect(await session.screen.text()).toContain("a.txt")
+
+      // The descendants go with it, the compressed `sub` chain included.
+      await session.keyboard.press("Enter")
+      const folded = await waitForScreen(
+        session,
+        "the folder to collapse and take its files with it",
+        (screen) => screen.includes("❯ ▸  pkg") && !screen.includes("a.txt"),
+      )
+      expect(folded).not.toContain("b.txt")
+
+      await session.keyboard.press("Enter")
+      await waitForText(session, "❯ ▾  pkg")
+    })
   }, 20_000)
 
   it("stages, commits, amends, and pushes while the editor captures ordinary keys", async () => {
@@ -200,9 +231,9 @@ describe("laziergit through a real terminal", () => {
     await repo.write("tracked.txt", "two\n")
 
     await inTerminal(repo, async (session) => {
-      await waitForText(session, "Unstaged")
+      await waitForText(session, " M tracked.txt")
       await session.keyboard.type(" ")
-      await waitForText(session, "Staged")
+      await waitForText(session, "M  tracked.txt")
 
       await session.keyboard.type("c")
       // The hint bar, which during a capture is the Pane's two remaining keys.
@@ -216,9 +247,9 @@ describe("laziergit through a real terminal", () => {
       expect(await repo.git("log", "-1", "--format=%s")).toBe("q from e2e\n")
 
       await repo.write("tracked.txt", "three\n")
-      await waitForText(session, "Unstaged")
+      await waitForText(session, " M tracked.txt")
       await session.keyboard.type(" ")
-      await waitForText(session, "Staged")
+      await waitForText(session, "M  tracked.txt")
 
       await session.keyboard.type("A")
       await waitForText(session, "amending the last commit")
@@ -279,7 +310,7 @@ describe("laziergit through a real terminal", () => {
     await repo.write("tracked.txt", "stashed\n")
 
     await inTerminal(repo, async (session) => {
-      await waitForText(session, "Unstaged")
+      await waitForText(session, " M tracked.txt")
       await session.keyboard.type("s")
       await waitForText(session, "Stash message")
       await session.keyboard.type("from e2e")

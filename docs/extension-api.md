@@ -176,10 +176,16 @@ declare module "laziergit" {
   /**
    * A key or key sequence in @opentui/keymap grammar:
    *
-   * - single strokes: `"c"`, `"ctrl+r"`, `"escape"`, `"enter"`, `"tab"`. A bare letter
+   * - single strokes: `"c"`, `"ctrl+r"`, `"escape"`, `"return"`, `"tab"`. A bare letter
    *   binds its *lowercase* stroke — the parser lowercases the key name when it matches —
    *   so `"D"` binds plain `d`, **not** a shifted `D`. Write `"shift+d"` for the shifted
    *   stroke. `"D"` and `"d"` are therefore one and the same binding (see the diagnostic note below).
+   *
+   *   The Enter key is `"return"`. `"enter"` is a *different* stroke name — the keymap
+   *   knows both, and core does not install the alias field that would join them — so
+   *   `"enter"` parses, registers, and appears in the cheat sheet while never firing.
+   *   It is the one spelling that fails silently instead of loudly, which is why it is
+   *   named here rather than left to be discovered.
    * - platform-aware modifier: `"mod+s"` — ctrl everywhere, upgraded to cmd on
    *   macOS terminals whose keyboard protocol can report it (kitty keyboard
    *   protocol); elsewhere on macOS it stays ctrl. Reporting cmd and *delivering*
@@ -600,31 +606,78 @@ tagged with the extension name, and routed to the log file / debug pane.
     readonly parents: readonly string[];
   }
 
-  export type ChangeKind =
-    | "added"
-    | "modified"
-    | "deleted"
-    | "renamed"
-    | "copied"
-    | "typechange"
-    | "untracked"
-    | "conflicted";
+  /**
+   * What one side of the index did to a path — porcelain v2's `X` and `Y` letters, named.
+   * `X` is HEAD→index, `Y` is index→working tree; they measure different comparisons, which
+   * is why one path can be `MM` (ADR-0005).
+   */
+  export type ChangeKind = "added" | "modified" | "deleted" | "renamed" | "copied" | "typechange";
 
-  export interface FileChange {
-    /** Path relative to the repo root. */
-    readonly path: string;
-    /** Original path for renames/copies, otherwise null. */
-    readonly previousPath: string | null;
-    readonly kind: ChangeKind;
-  }
+  /** The working-tree side reports one thing the index side cannot: a path git never heard of. */
+  export type WorktreeChange = ChangeKind | "untracked";
+
+  /** What one side of a merge did — porcelain v2's unmerged `XY`, one letter each. */
+  export type ConflictSide = "added" | "deleted" | "modified";
+
+  /**
+   * One path, one entry. A union rather than four loose fields, because an unmerged path has
+   * no index-versus-working-tree pair to report at all.
+   *
+   * Invariant on the `"changed"` arm: at least one of `index` / `worktree` is non-null.
+   */
+  export type FileChange =
+    | {
+        readonly kind: "changed";
+        /** Path relative to the repo root. */
+        readonly path: string;
+        /** Original path for renames/copies the index holds, otherwise null. */
+        readonly previousPath: string | null;
+        /** HEAD → index. `null` when the index matches HEAD. */
+        readonly index: ChangeKind | null;
+        /** Index → working tree. `null` when the working tree matches the index. */
+        readonly worktree: WorktreeChange | null;
+      }
+    | {
+        readonly kind: "conflicted";
+        readonly path: string;
+        readonly previousPath: null;
+        readonly ours: ConflictSide;
+        readonly theirs: ConflictSide;
+      };
 
   export interface WorkingTreeStatus {
-    readonly staged: readonly FileChange[];
-    readonly unstaged: readonly FileChange[];
-    readonly untracked: readonly FileChange[];
-    readonly conflicted: readonly FileChange[];
+    /** One entry per path git reported, ordered by path. */
+    readonly files: readonly FileChange[];
     readonly isClean: boolean;
   }
+
+  /**
+   * The four questions {@link WorkingTreeStatus}'s old four arrays answered, over the one
+   * list that replaced them.
+   *
+   * Predicates rather than arrays or getters: the store publishes `status` by structural
+   * comparison and keeps unchanged parts referentially stable, so a derived array hanging
+   * off the status object would be rebuilt on every snapshot and defeat that identity.
+   *
+   * **Memoise where you filter.** These compose into `useGit` selectors the wrong way round:
+   *
+   * ```ts
+   * // Never — a fresh array every snapshot, so `Object.is` never holds and the Pane spins.
+   * const staged = useGit((state) => state.status.files.filter(isStaged));
+   *
+   * // Instead — select the slice, derive from it.
+   * const files = useGit((state) => state.status.files);
+   * const staged = useMemo(() => files.filter(isStaged), [files]);
+   * ```
+   *
+   * Counts are safe inline, because a number compares by value. There is deliberately no
+   * `isTracked`: `git rm --cached` on a file still on disk is both staged and untracked, so
+   * any single boolean would have to lie about one of them.
+   */
+  export function isStaged(change: FileChange): boolean;
+  export function isUnstaged(change: FileChange): boolean;
+  export function isUntracked(change: FileChange): boolean;
+  export function isConflicted(change: FileChange): boolean;
 
   export interface StashEntry {
     /** Position in the stash list (stash@{index}). */
@@ -1707,12 +1760,16 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
      * replaces the objects beneath it.
      *
      * Make it unique across the rows this pane shows, and note that "unique"
-     * is a claim about the ROW TYPE, not about the screen: a path modified in
-     * both the index and the working tree is one {@link FileChange} value
-     * drawn on two lines, so `files` keys on all three of its fields (kind,
-     * previousPath, path) and renders the two lines from one object. Two
-     * *different* objects sharing a key would evict each other on every pass and
-     * the merged decoration would never settle.
+     * is a claim about the ROW TYPE, not about the screen. Two *different*
+     * objects sharing a key would evict each other on every pass and the merged
+     * decoration would never settle.
+     *
+     * Prefer the row's most stable name, not its state: `branches` keys on the
+     * branch name, `stash` on the entry's index, and `files` on `change.path`
+     * alone — the model gives a path exactly one entry (ADR-0005), so the path
+     * *is* the identity. Folding state into the key would move the slot every
+     * time the row changed, discarding a decoration the provider would only
+     * recompute to the same answer.
      */
     key(row: Row): string;
   }
@@ -2081,7 +2138,7 @@ User config for it, in `~/.config/laziergit/config.jsonc` (schema-validated, aut
 {
   "extensions": { "gh-workflows": { "limit": 30 } },
   "layout": { "columns": [["files", "branches", "gh-workflows"], ["diff"]] },
-  "keybindings": { "gh-workflows.open-run": "enter" } // user override beats the default "o"
+  "keybindings": { "gh-workflows.open-run": "return" } // user override beats the default "o"
 }
 ```
 
@@ -2782,32 +2839,44 @@ the cost curve, not the encoding: the first two were fixed while nothing depende
 and cost nothing; this one waited until six things did, and the repair had to reach into
 five Extensions and a semantic bug none of the types could see.
 
-Two remain, deliberately:
+Both of the two that used to remain here are now closed, by the same change (ADR-0005).
 
-- **Which side of a conflict.** Porcelain v2 spells an unmerged path as `UU`, `AA`, `DU`,
-  `UD`, `AU`, `UA`, or `DD` — both-modified, both-added, deleted-by-us, and so on —
-  and `ChangeKind` has one `"conflicted"` value to put it in, so the store keeps the path and
-  drops which side did what. That is enough for v1's conflict UX (below) and not enough for
-  the lazygit-grade one: "both added" and "modified by us, deleted by them" want different
-  actions offered. The fix is a variant on `FileChange` carrying the pair, and it should land
-  with the conflicts UI rather than ahead of it.
+**Which side of a conflict** and **which side of the index a `FileChange` is on** were one
+gap wearing two hats. Porcelain v2 spells an unmerged path as `UU`, `AA`, `DU`, and so on,
+and `ChangeKind` had one `"conflicted"` value to put it in; separately, a path modified in
+both the index and the working tree (`MM`) produced *two* `FileChange` values in two arrays,
+each carrying one `kind`, with the group heading the row was drawn under as the only record
+of which side it described. Both were the same discarded fact: git's `XY` pair.
 
-- **Which side of the index a `FileChange` is on.** A path modified in both the index and the
-  working tree (`MM`) is one {@link FileChange} value — same kind, path, previousPath — that
-  the `files` pane draws twice, once under Staged and once under Unstaged. The pane knows
-  which is which from the *group* it drew the row under, but {@link FilesApi} is a
-  `RowSource<FileChange>`, so a *decorating* extension sees only the change and cannot tell the
-  staged line from the unstaged one — and the two lines necessarily share one decoration slot
-  (see {@link RowSourceOptions.key}). That is deliberate for v1: a decoration ("PR #42", "90d")
-  is a property of the path, not of which index side it sits on, so nothing bundled wants the
-  distinction. The fix, when something does, is the same shape as the conflict one — a row type
-  that carries the side — and it belongs with the first consumer that needs it, not ahead of it.
+`FileChange` is now one entry per path carrying both columns — `index` and `worktree` on the
+`"changed"` arm, `ours` and `theirs` on the `"conflicted"` one. The files Pane draws the pair
+as two status columns and needs no headings, which is what let it become a folder tree; a
+decorating Extension can now tell the staged side from the unstaged one, and the two lines
+that used to share a decoration slot are one line.
 
-**Conflicts in v1: show and delegate.** The bundled `files` extension surfaces conflicted
-paths as their own group, offers "open in editor" and "stage resolved" from `files.actions`,
+This one waited for its consumer and was cheaper for it — but only just. The conflict half
+was previously written here as something that "should land with the conflicts UI rather than
+ahead of it"; the two-column render turned out to be the consumer, because a row that can
+only print one glyph for a conflict discards which side did what on precisely the rows where
+that is the entire question.
+
+One remains, deliberately:
+
+- **A directory row is not a `FileChange`.** The files Pane draws folder rows, and
+  {@link FilesApi} is a `RowSource<FileChange>` — so `FilesApi.selected()` answers
+  `undefined` while the cursor is on a folder, a `decorateRows` provider is never handed one,
+  and the folder action menu is built ad-hoc rather than registered, so nothing can splice
+  into it. That is deliberate for v1: a decoration ("PR #42", "90d") is a property of a file,
+  and the alternative — widening `files.actions`' payload to a union — would make every
+  third-party splice handle a case it never asked for. The fix, when something needs it, is a
+  row-type union in the public API, and it belongs with its first consumer.
+
+**Conflicts in v1: show and delegate.** The bundled `files` extension draws conflicted paths
+with git's own `UU` / `AA` / `DU` pair wherever they sit in the tree, marks every directory
+above them `!`, offers "open in editor" and "stage resolved" from `files.actions`,
 and otherwise stays out of the way — resolution happens in the user's editor or `git
 mergetool`. It is deliberately less than lazygit, which renders a pick-ours / pick-theirs /
-pick-both hunk picker; that is post-v1 (PLAN.md) and is the work that will want both the
-conflict-kind variant above and the patch-level staging surface §5.11 leaves out. Nothing here
+pick-both hunk picker; that is post-v1 (PLAN.md) and is the work that will want the
+patch-level staging surface §5.11 leaves out. Nothing here
 is privileged: a third-party extension can register a conflicts Pane and splice into
 `files.actions` today, on exactly the API the bundled one uses.

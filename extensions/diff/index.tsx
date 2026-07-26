@@ -2,6 +2,7 @@
 import {
   createCell,
   defineExtension,
+  isUntracked,
   literalPathspec,
   option,
   useCommand,
@@ -379,7 +380,7 @@ export default defineExtension({
 
         // Read at call time, not render time: this runs again on every `git.refreshed`, and
         // a file that was untracked a moment ago may have just been staged.
-        const untracked = new Set(ctx.git.state.status.untracked.map((file) => file.path))
+        const untracked = new Set(ctx.git.state.status.files.filter(isUntracked).map((file) => file.path))
         const fetch = fetchFor(next, ctx.config.context, untracked)
         try {
           // `allowFailure`, because a diff of a ref git does not know is something to

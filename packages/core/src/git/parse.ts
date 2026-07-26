@@ -1,4 +1,16 @@
-import type { Branch, ChangeKind, Commit, FileChange, Head, Remote, StashEntry, Tag, UpstreamInfo } from "laziergit"
+import type {
+  Branch,
+  ChangeKind,
+  Commit,
+  ConflictSide,
+  FileChange,
+  Head,
+  Remote,
+  StashEntry,
+  Tag,
+  UpstreamInfo,
+  WorktreeChange,
+} from "laziergit"
 
 /**
  * Porcelain readers. Every function here is pure: argv in one place, bytes to model in
@@ -53,10 +65,8 @@ export const statusArgs = ["status", "--porcelain=v2", "--branch", "-z", "--untr
 export interface ParsedStatus {
   /** `# branch.oid`, or null on an unborn HEAD, where git reports `(initial)` instead. */
   readonly oid: string | null
-  readonly staged: readonly FileChange[]
-  readonly unstaged: readonly FileChange[]
-  readonly untracked: readonly FileChange[]
-  readonly conflicted: readonly FileChange[]
+  /** One entry per path, ordered by path. */
+  readonly files: readonly FileChange[]
 }
 
 const changeKinds: Readonly<Record<string, ChangeKind>> = Object.freeze({
@@ -73,21 +83,54 @@ function changed(code: string): ChangeKind | null {
 }
 
 /**
- * Parses `--porcelain=v2 -z`.
+ * The unmerged `XY`, which spells which side did what: `UU` both modified, `AA` both added,
+ * `DU` we deleted and they modified, and so on. A total record over the three letters git
+ * can put in either column, so an unmerged record can never fall through to a default.
+ */
+const conflictSides: Readonly<Record<string, ConflictSide>> = Object.freeze({
+  A: "added",
+  D: "deleted",
+  U: "modified",
+})
+
+/** A path's entry under construction, before the arm is known. */
+interface Draft {
+  index: ChangeKind | null
+  worktree: WorktreeChange | null
+  previousPath: string | null
+  conflict: { ours: ConflictSide; theirs: ConflictSide } | null
+}
+
+function draft(): Draft {
+  return { index: null, worktree: null, previousPath: null, conflict: null }
+}
+
+/**
+ * Parses `--porcelain=v2 -z` into one {@link FileChange} per path.
  *
- * The one trap is the `2` (rename/copy) record: under `-z` it consumes **two** NUL
- * fields, the second being the original path, so the read has to advance the cursor
- * itself rather than iterate. `XY` is two independent columns — `X` is HEAD→index and
- * `Y` is index→worktree — so `MM` legitimately produces one staged *and* one unstaged
- * entry for the same path.
+ * The one format trap is the `2` (rename/copy) record: under `-z` it consumes **two** NUL
+ * fields, the second being the original path, so the read has to advance the cursor itself
+ * rather than iterate.
+ *
+ * The modelling decision is the accumulator. `XY` is two independent columns — `X` is
+ * HEAD→index, `Y` is index→working tree — and git may describe one path across more than
+ * one record: `git rm --cached` on a file still on disk emits `1 D. … x` *and* `? x`. Both
+ * halves land on one draft keyed by path, so `MM` is one entry with two sides rather than
+ * the two entries in two lists this used to produce. The merge is total because the sides
+ * cannot contradict each other — each record writes a column the other leaves alone.
  */
 export function parseStatus(stdout: string): ParsedStatus {
   const records = nulRecords(stdout)
-  const staged: FileChange[] = []
-  const unstaged: FileChange[] = []
-  const untracked: FileChange[] = []
-  const conflicted: FileChange[] = []
+  const drafts = new Map<string, Draft>()
   let oid: string | null = null
+
+  const at = (path: string): Draft => {
+    const existing = drafts.get(path)
+    if (existing !== undefined) return existing
+    const created = draft()
+    drafts.set(path, created)
+    return created
+  }
 
   for (let cursor = 0; cursor < records.length; cursor += 1) {
     const record = records[cursor]
@@ -104,7 +147,11 @@ export function parseStatus(stdout: string): ParsedStatus {
 
     const kind = record.slice(0, 2)
     if (kind === "? ") {
-      untracked.push({ path: record.slice(2), previousPath: null, kind: "untracked" })
+      // Only if nothing has claimed the working-tree column yet: a `1 D.` record for the
+      // same path arrives with `Y` = `.`, so the two agree, but a future git that filled
+      // both in should not have its more specific answer overwritten by `?`.
+      const entry = at(record.slice(2))
+      entry.worktree ??= "untracked"
       continue
     }
     // Only emitted under `--ignored`, which we never pass. Consumed defensively so a
@@ -114,10 +161,13 @@ export function parseStatus(stdout: string): ParsedStatus {
     const marker = record.slice(0, 1)
     if (marker === "u") {
       const path = afterTokens(record, 10)
-      // The XY of an unmerged record spells which side did what (`UU`, `AA`, `DU`, ...);
-      // the model has one conflicted kind, so the detail is deliberately dropped here
-      // rather than mangled into a staged/unstaged pair.
-      if (path !== null) conflicted.push({ path, previousPath: null, kind: "conflicted" })
+      if (path === null) continue
+      const ours = conflictSides[record.slice(2, 3)]
+      const theirs = conflictSides[record.slice(3, 4)]
+      // A letter outside `A`/`D`/`U` is not an unmerged record we understand, and inventing
+      // a side would put a wrong claim on the one row where the sides are the whole point.
+      if (ours === undefined || theirs === undefined) continue
+      at(path).conflict = { ours, theirs }
       continue
     }
     if (marker !== "1" && marker !== "2") continue
@@ -135,21 +185,29 @@ export function parseStatus(stdout: string): ParsedStatus {
       previousPath = records[cursor] ?? null
     }
 
-    const stagedKind = changed(index)
-    if (stagedKind) {
-      staged.push({
-        path,
-        previousPath: stagedKind === "renamed" || stagedKind === "copied" ? previousPath : null,
-        kind: stagedKind,
-      })
-    }
-    const unstagedKind = changed(worktree)
-    // Never `previousPath` here: the worktree change is measured against the index,
-    // where the file already lives under its new name.
-    if (unstagedKind) unstaged.push({ path, previousPath: null, kind: unstagedKind })
+    const entry = at(path)
+    entry.index = changed(index)
+    entry.worktree = changed(worktree)
+    // Recorded on the entry rather than on a side, now that a path has only one entry. The
+    // rename is a fact about the index — the working tree is measured against the index,
+    // where the file already lives under its new name — and readers that care ask
+    // `index === "renamed"`.
+    if (previousPath !== null) entry.previousPath = previousPath
   }
 
-  return { oid, staged, unstaged, untracked, conflicted }
+  // Sorted here so every consumer inherits one order rather than each imposing its own.
+  // Code-unit order, which is what a tree of these paths wants: `/` (0x2F) sorts after `.`
+  // (0x2E), so `b.txt` precedes `b/x.txt` and a directory's own rows stay contiguous.
+  const files = [...drafts.entries()]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(
+      ([path, entry]): FileChange =>
+        entry.conflict === null
+          ? { kind: "changed", path, previousPath: entry.previousPath, index: entry.index, worktree: entry.worktree }
+          : { kind: "conflicted", path, previousPath: null, ours: entry.conflict.ours, theirs: entry.conflict.theirs },
+    )
+
+  return { oid, files }
 }
 
 // ---- head -------------------------------------------------------------------------

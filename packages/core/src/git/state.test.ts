@@ -47,23 +47,56 @@ it("keeps unchanged slices — and unchanged rows inside a changed slice — ref
   expect(reconciled.branches[1]).not.toBe(previous.branches[1])
 })
 
-it("keeps the untouched halves of the working tree status stable", () => {
-  const staged = [{ path: "a.txt", previousPath: null, kind: "added" as const }]
-  const previous = stateWith({ status: { ...emptyGitState.status, staged, isClean: false } })
+it("keeps every unchanged file in the working tree status stable", () => {
+  const a = { kind: "changed" as const, path: "a.txt", previousPath: null, index: "added" as const, worktree: null }
+  const previous = stateWith({ status: { files: [a], isClean: false } })
   const reconciled = reconcileGitState(
     previous,
     stateWith({
       status: {
-        ...emptyGitState.status,
-        staged: [{ path: "a.txt", previousPath: null, kind: "added" }],
-        unstaged: [{ path: "b.txt", previousPath: null, kind: "modified" }],
+        files: [
+          { kind: "changed", path: "a.txt", previousPath: null, index: "added", worktree: null },
+          { kind: "changed", path: "b.txt", previousPath: null, index: null, worktree: "modified" },
+        ],
         isClean: false,
       },
     }),
   )
 
   expect(reconciled.status).not.toBe(previous.status)
-  expect(reconciled.status.staged).toBe(previous.status.staged)
+  // Per-entry identity is what a row memoizes on, and it is what the decoration cache keys
+  // its slots by: `a.txt` did not change, so the Pane must be handed the same object back.
+  expect(reconciled.status.files[0]).toBe(previous.status.files[0])
+})
+
+it("keeps a file's identity when only its other side changes", () => {
+  // Staging an edited file used to move a fresh object out of one array and into another,
+  // so both arrays changed and every row after it shifted. One list in path order means the
+  // entry keeps its slot with one field rewritten, and its neighbours never move.
+  const previous = stateWith({
+    status: {
+      files: [
+        { kind: "changed", path: "a.txt", previousPath: null, index: null, worktree: "modified" },
+        { kind: "changed", path: "b.txt", previousPath: null, index: null, worktree: "modified" },
+      ],
+      isClean: false,
+    },
+  })
+  const reconciled = reconcileGitState(
+    previous,
+    stateWith({
+      status: {
+        files: [
+          { kind: "changed", path: "a.txt", previousPath: null, index: "modified", worktree: null },
+          { kind: "changed", path: "b.txt", previousPath: null, index: null, worktree: "modified" },
+        ],
+        isClean: false,
+      },
+    }),
+  )
+
+  expect(reconciled.status.files[0]).not.toBe(previous.status.files[0])
+  expect(reconciled.status.files[1]).toBe(previous.status.files[1])
 })
 
 it("never reuses a reference for a value that actually differs", () => {
