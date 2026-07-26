@@ -1,43 +1,8 @@
 import { PaneRuntimeContext, RuntimeContext } from "@laziergit/runtime-bridge"
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 
-import type { Cell, CommandSpec, Disposable, EventMap, GitState, Theme } from "./types"
-
-/**
- * The host contract these hooks consume. `this: void` throughout because
- * {@link useSyncExternalStore} calls them unbound — which is why every host declares them
- * as bound arrow properties.
- */
-interface InternalRuntime {
-  readonly git: {
-    getSnapshot(this: void): GitState
-    subscribe(this: void, listener: () => void): () => void
-  }
-  readonly events: {
-    subscribe<K extends keyof EventMap & string>(
-      extension: string,
-      event: K,
-      handler: (payload: EventMap[K]) => void | Promise<void>,
-    ): Disposable
-  }
-  readonly commands: {
-    registerComponent(extension: string, paneId: string, spec: Omit<CommandSpec, "pane">): Disposable
-  }
-  readonly keys: {
-    /** Claim raw keyboard input for a Pane; dispose to hand it back. Claims nest. */
-    capture(paneId: string): Disposable
-  }
-  readonly theme: {
-    getSnapshot(this: void): Theme
-    subscribe(this: void, listener: () => void): () => void
-  }
-}
-
-interface PaneRuntime {
-  readonly extension: string
-  /** Absent for status line segments, which are components without a Pane to bind into. */
-  readonly paneId?: string
-}
+import type { HostRuntime, PaneRuntime } from "./host"
+import type { Cell, CommandSpec, EventMap, GitState, Theme } from "./types"
 
 /**
  * The two React contexts carry `unknown` — they live in the bridge package precisely so
@@ -54,7 +19,7 @@ function hasMethods(value: unknown, names: readonly string[]): value is Record<s
   return isRecord(value) && names.every((name) => typeof Reflect.get(value, name) === "function")
 }
 
-function isInternalRuntime(value: unknown): value is InternalRuntime {
+function isHostRuntime(value: unknown): value is HostRuntime {
   if (!isRecord(value)) return false
   return (
     hasMethods(value.git, ["getSnapshot", "subscribe"]) &&
@@ -73,7 +38,7 @@ function isPaneRuntime(value: unknown): value is PaneRuntime {
 
 function useRuntime() {
   const runtime = useContext(RuntimeContext)
-  if (!isInternalRuntime(runtime)) {
+  if (!isHostRuntime(runtime)) {
     throw new Error("laziergit hooks must be called from a component rendered by laziergit")
   }
   return runtime
