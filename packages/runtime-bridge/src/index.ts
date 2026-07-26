@@ -140,29 +140,40 @@ export function validateExtensionSpec(value: unknown): asserts value is Extensio
   }
 }
 
+/**
+ * Deep-freezes the two option kinds carrying an array, so an Extension cannot keep a handle
+ * on its own schema and mutate it after the host has read it.
+ *
+ * Re-narrowed with guards rather than asserted from {@link validateConfigOption}'s result:
+ * that runs in another function, so its proof does not reach here, and an Extension arrives
+ * as untypechecked source (ADR-0003) — the values really are `unknown` at this point, and
+ * parsing them is honest where asserting would only be shorter.
+ */
+function normalizeConfigOption(option: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const normalized = { ...option }
+  const { values, default: fallback } = option
+  if (option.kind === "enum" && Array.isArray(values)) normalized.values = Object.freeze([...values])
+  if (option.kind === "string-array" && Array.isArray(fallback)) normalized.default = Object.freeze([...fallback])
+  return Object.freeze(normalized)
+}
+
 function normalizeConfig(config: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
   return Object.freeze(
     Object.fromEntries(
-      Object.entries(config).map(([key, rawOption]) => {
-        const option = rawOption as Record<string, unknown>
-        const normalized = { ...option }
-        if (option.kind === "enum") normalized.values = Object.freeze([...(option.values as readonly string[])])
-        if (option.kind === "string-array") {
-          normalized.default = Object.freeze([...(option.default as readonly string[])])
-        }
-        return [key, Object.freeze(normalized)]
-      }),
+      Object.entries(config).map(([key, option]) => [key, isRecord(option) ? normalizeConfigOption(option) : option]),
     ),
   )
 }
 
-function normalizeExtensionSpec<TSpec extends object>(spec: TSpec): TSpec {
-  const value = spec as TSpec & ExtensionSpecShape
+function normalizeExtensionSpec<TSpec extends object & ExtensionSpecShape>(spec: TSpec): TSpec {
   const normalized = {
-    ...value,
-    ...(value.config === undefined ? {} : { config: normalizeConfig(value.config) }),
-    ...(value.needs === undefined ? {} : { needs: Object.freeze([...value.needs]) }),
+    ...spec,
+    ...(spec.config === undefined ? {} : { config: normalizeConfig(spec.config) }),
+    ...(spec.needs === undefined ? {} : { needs: Object.freeze([...spec.needs]) }),
   }
+  // The spread rebuilds `spec`'s own properties and overwrites two of them with values of
+  // the same declared types, so this is `TSpec` — but a spread of a generic widens to its
+  // constraint, which is the one thing TypeScript cannot carry through.
   return Object.freeze(normalized) as TSpec
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import type * as Effect from "effect/Effect"
 
 import { createCell, createRowSource, defineExtension, option, toneColor, type Theme, type Tone } from "./index"
+import type { ConfigSchema, ConfigValues } from "./types"
 
 declare module "./types" {
   interface EventMap {
@@ -9,6 +10,55 @@ declare module "./types" {
     "someone-else.tick": { readonly value: number }
   }
 }
+
+describe("config schema", () => {
+  it("correlates kind with default, and carries each variant's own constraints", () => {
+    const schema = {
+      limit: option.number({ default: 10, min: 1, max: 100 }),
+      mode: option.enum(["unified", "split"], { default: "unified" }),
+      names: option.stringArray({ default: [] }),
+      title: option.string({ default: "" }),
+      wrap: option.boolean({ default: true }),
+    } satisfies ConfigSchema
+
+    // The whole point of the union: `kind` and `default` can no longer disagree. The flat
+    // shape accepted this, inferred `string` for the value, and handed back a number.
+    // @ts-expect-error a number option's default must be a number
+    const mismatched = { limit: { kind: "number", default: "none" } } satisfies ConfigSchema
+    void mismatched
+
+    const values: ConfigValues<typeof schema> = {
+      limit: 1,
+      mode: "split",
+      names: ["a"],
+      title: "t",
+      wrap: false,
+    }
+    expect(values.mode).toBe("split")
+
+    // @ts-expect-error an enum value is one of its declared spellings, not any string
+    const offEnum: ConfigValues<typeof schema>["mode"] = "sideways"
+    void offEnum
+
+    // `min`/`max` and `values` are reachable without a shadow type, which is what let the
+    // config reader and the JSON Schema generator each stop declaring one.
+    expect(schema.limit.min).toBe(1)
+    expect(schema.mode.values).toEqual(["unified", "split"])
+  })
+
+  it("refuses a default that its own bounds exclude, at definition time", () => {
+    // Silent otherwise: an out-of-range default is handed back as the fallback for every
+    // user who never sets the option, so nothing downstream would ever surface it.
+    expect(() => option.number({ default: 0, min: 1, max: 10 })).toThrow("below min")
+    expect(() => option.number({ default: 20, min: 1, max: 10 })).toThrow("above max")
+    expect(() => option.number({ default: 5, min: 10, max: 1 })).toThrow("exceeds max")
+    // The enum case is caught twice over: a type error for anyone compiling against these
+    // types, and still a throw for an Extension that reaches the runtime untypechecked,
+    // which every Extension does (ADR-0003).
+    // @ts-expect-error a default outside its declared values is also a compile error
+    expect(() => option.enum(["a", "b"], { default: "c" })).toThrow("not one of its declared values")
+  })
+})
 
 describe("defineExtension", () => {
   it("preserves literal context inference and narrows the Effect escape hatch", () => {

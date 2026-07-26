@@ -97,42 +97,94 @@ export interface ExecOutput {
 
 export type ConfigValue = string | number | boolean | readonly string[]
 
-export interface ConfigOption<T extends ConfigValue = ConfigValue> {
-  readonly kind: "string" | "number" | "boolean" | "enum" | "string-array"
-  readonly default: T
+interface ConfigOptionBase {
   readonly description?: string
 }
 
-export type ConfigSchema = Record<string, ConfigOption>
-export type ConfigValues<S extends ConfigSchema> = {
-  readonly [K in keyof S]: S[K] extends ConfigOption<infer T> ? T : never
+export interface StringConfigOption extends ConfigOptionBase {
+  readonly kind: "string"
+  readonly default: string
 }
 
-type NumberConfigOption = ConfigOption<number> & { readonly min?: number; readonly max?: number }
-type EnumConfigOption<T extends string> = ConfigOption<T> & { readonly values: readonly T[] }
+export interface NumberConfigOption extends ConfigOptionBase {
+  readonly kind: "number"
+  readonly default: number
+  readonly min?: number
+  readonly max?: number
+}
+
+export interface BooleanConfigOption extends ConfigOptionBase {
+  readonly kind: "boolean"
+  readonly default: boolean
+}
+
+export interface EnumConfigOption<V extends string = string> extends ConfigOptionBase {
+  readonly kind: "enum"
+  /** Every accepted spelling. {@link default} is one of them, by construction. */
+  readonly values: readonly V[]
+  readonly default: V
+}
+
+export interface StringArrayConfigOption extends ConfigOptionBase {
+  readonly kind: "string-array"
+  readonly default: readonly string[]
+}
+
+/**
+ * One declared setting, as a union over `kind` rather than a `kind` beside an uncorrelated
+ * `default`.
+ *
+ * The flat shape let `{ kind: "number", default: "none" }` typecheck: `ctx.config.limit`
+ * then inferred `string` while the reader handed back a `number`, which is the exact
+ * unsoundness the schema-to-value inference exists to rule out. It also had nowhere to put
+ * `min`, `max` and `values`, so the two readers that need them — the config reader and the
+ * JSON Schema generator — each re-declared a wider shadow type by hand and widened into it.
+ *
+ * Discriminating on `kind` puts the constraints on the variants that have them, and makes
+ * both shadows and their `?? []` fallbacks unnecessary rather than merely tidy.
+ */
+export type ConfigOption =
+  | StringConfigOption
+  | NumberConfigOption
+  | BooleanConfigOption
+  | EnumConfigOption
+  | StringArrayConfigOption
+
+export type ConfigSchema = Record<string, ConfigOption>
+/** Each setting's value type is its variant's `default` type — no conditional needed. */
+export type ConfigValues<S extends ConfigSchema> = {
+  readonly [K in keyof S]: S[K]["default"]
+}
 
 export const option = {
-  string(opts: { default: string; description?: string }): ConfigOption<string> {
+  string(opts: { default: string; description?: string }): StringConfigOption {
     return Object.freeze({ kind: "string", ...opts })
   },
-  number(opts: { default: number; description?: string; min?: number; max?: number }): ConfigOption<number> {
-    return Object.freeze({ kind: "number", ...opts }) satisfies NumberConfigOption
+  number(opts: { default: number; description?: string; min?: number; max?: number }): NumberConfigOption {
+    // Thrown at definition time, like the enum check below, because the alternative is
+    // silent: a default outside its own bounds is handed straight back as the fallback for
+    // every user who does not set the option, so nothing would ever surface it.
+    const { default: value, min, max } = opts
+    if (min !== undefined && max !== undefined && min > max) {
+      throw new TypeError(`Number option min ${min} exceeds max ${max}`)
+    }
+    if (min !== undefined && value < min) throw new TypeError(`Number option default ${value} is below min ${min}`)
+    if (max !== undefined && value > max) throw new TypeError(`Number option default ${value} is above max ${max}`)
+    return Object.freeze({ kind: "number", ...opts })
   },
-  boolean(opts: { default: boolean; description?: string }): ConfigOption<boolean> {
+  boolean(opts: { default: boolean; description?: string }): BooleanConfigOption {
     return Object.freeze({ kind: "boolean", ...opts })
   },
   enum<const V extends readonly string[]>(
     values: V,
     opts: { default: V[number]; description?: string },
-  ): ConfigOption<V[number]> {
+  ): EnumConfigOption<V[number]> {
     if (!values.includes(opts.default)) {
       throw new TypeError(`Enum default "${opts.default}" is not one of its declared values`)
     }
-    return Object.freeze({ kind: "enum", values: Object.freeze([...values]), ...opts }) satisfies EnumConfigOption<
-      V[number]
-    >
+    return Object.freeze({ kind: "enum", values: Object.freeze([...values]), ...opts })
   },
-  stringArray(opts: { default: readonly string[]; description?: string }): ConfigOption<readonly string[]> {
+  stringArray(opts: { default: readonly string[]; description?: string }): StringArrayConfigOption {
     return Object.freeze({ kind: "string-array", ...opts, default: Object.freeze([...opts.default]) })
   },
 }

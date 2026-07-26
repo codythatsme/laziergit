@@ -1,22 +1,11 @@
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { ConfigOption, ConfigSchema, ConfigValue, Theme } from "laziergit"
+import type { ConfigSchema, ConfigValue, Theme } from "laziergit"
 
 import { errorCode } from "../extension/diagnostics"
 import { defaultTheme } from "../extension/theme"
 import { parseJsonc } from "./jsonc"
-
-/** The constraint fields `option.number` and `option.enum` carry beyond the public {@link ConfigOption}. */
-interface InternalConfigOption extends ConfigOption {
-  readonly min?: number
-  readonly max?: number
-  readonly values?: readonly string[]
-}
-
-function readInternalConfigOption(option: ConfigOption): InternalConfigOption {
-  return option
-}
 
 /** One cell of the Layout: a single Pane id, or a tab group sharing one cell. */
 export type LayoutCell = readonly string[]
@@ -424,8 +413,7 @@ function readOptionValue(
   path: string,
   log: ProblemLog,
 ): ConfigValue | undefined {
-  const internal = readInternalConfigOption(option)
-  switch (internal.kind) {
+  switch (option.kind) {
     case "string":
       if (typeof raw === "string") return raw
       return log.reject(path, "Expected a string")
@@ -434,14 +422,13 @@ function readOptionValue(
       return log.reject(path, "Expected a boolean")
     case "number": {
       if (typeof raw !== "number" || !Number.isFinite(raw)) return log.reject(path, "Expected a number")
-      if (internal.min !== undefined && raw < internal.min) return log.reject(path, `Must be at least ${internal.min}`)
-      if (internal.max !== undefined && raw > internal.max) return log.reject(path, `Must be at most ${internal.max}`)
+      if (option.min !== undefined && raw < option.min) return log.reject(path, `Must be at least ${option.min}`)
+      if (option.max !== undefined && raw > option.max) return log.reject(path, `Must be at most ${option.max}`)
       return raw
     }
     case "enum": {
-      const values = internal.values ?? []
-      if (typeof raw === "string" && values.includes(raw)) return raw
-      return log.reject(path, `Expected one of ${values.map((value) => `"${value}"`).join(", ")}`)
+      if (typeof raw === "string" && option.values.includes(raw)) return raw
+      return log.reject(path, `Expected one of ${option.values.map((value) => `"${value}"`).join(", ")}`)
     }
     case "string-array":
       if (isStringArray(raw)) return Object.freeze([...raw])
