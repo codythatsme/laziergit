@@ -3,6 +3,10 @@ import {
   createRowSource,
   defineExtension,
   describeGitFailure,
+  isConflicted,
+  isStaged,
+  isUnstaged,
+  isUntracked,
   toneColor,
   useCommand,
   useGit,
@@ -113,8 +117,12 @@ export default defineExtension({
     /** The `s` key in the files Pane: compose a message, then stash what is there. */
     async function save(): Promise<void> {
       const status = ctx.git.state.status
-      const tracked = status.staged.length + status.unstaged.length + status.conflicted.length
-      if (tracked === 0 && status.untracked.length === 0) {
+      // One entry per path, so a file staged *and* edited counts once — the old sum over
+      // three arrays counted it twice and could claim there was something to stash from a
+      // pair of arrays describing the same file.
+      const tracked = status.files.filter((file) => isStaged(file) || isUnstaged(file) || isConflicted(file)).length
+      const untrackedCount = status.files.filter(isUntracked).length
+      if (tracked === 0 && untrackedCount === 0) {
         ctx.popups.notify("Nothing to stash — the working tree is clean", "warning")
         return
       }
@@ -125,7 +133,7 @@ export default defineExtension({
       // Untracked files are opt-in because `git stash` leaves them alone by default, and a
       // stash that swept away a file git was never told about is one the user has no reason
       // to think of looking in.
-      const untracked = status.untracked.length
+      const untracked = untrackedCount
       const includeUntracked =
         untracked > 0 &&
         (await ctx.popups.confirm({

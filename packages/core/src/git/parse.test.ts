@@ -38,20 +38,51 @@ it("reads every porcelain v2 record kind, including a path that is both staged a
   )
 
   expect(parsed.oid).toBe("a7838d82f36266ecad362141e496fae1b0338f60")
-  expect(parsed.staged).toEqual([
-    { path: "added.txt", previousPath: null, kind: "added" },
-    { path: "both.txt", previousPath: null, kind: "modified" },
-    { path: "del.txt", previousPath: null, kind: "deleted" },
-    { path: "type.txt", previousPath: null, kind: "typechange" },
+  // One entry per path, in path order, each carrying both of git's columns. `both.txt` is
+  // the case the four-array model could not express: it appears once, saying `MM`.
+  // `ignored.txt` is absent — `!` records are only emitted under --ignored, which we never
+  // pass, and they must never be mistaken for a path belonging to the preceding record.
+  expect(parsed.files).toEqual([
+    { kind: "changed", path: "added.txt", previousPath: null, index: "added", worktree: null },
+    { kind: "changed", path: "base.txt", previousPath: null, index: null, worktree: "modified" },
+    { kind: "changed", path: "both.txt", previousPath: null, index: "modified", worktree: "modified" },
+    { kind: "changed", path: "del.txt", previousPath: null, index: "deleted", worktree: null },
+    { kind: "changed", path: "type.txt", previousPath: null, index: "typechange", worktree: null },
+    { kind: "changed", path: "untracked.txt", previousPath: null, index: null, worktree: "untracked" },
   ])
-  expect(parsed.unstaged).toEqual([
-    { path: "base.txt", previousPath: null, kind: "modified" },
-    { path: "both.txt", previousPath: null, kind: "modified" },
+})
+
+it("merges the `1 D.` and `?` records git emits for one path into a single entry", () => {
+  // `git rm --cached` on a file still on disk: the index is dropping a path the working
+  // tree still holds, so git describes it twice. One entry that is both staged and
+  // untracked is the honest answer — the four-array model made it two files.
+  const parsed = parseStatus(
+    nulTerminated(
+      "# branch.oid a7838d82",
+      "1 D. N... 100644 000000 000000 abaddc0b 0000000000000000000000000000000000000000 tracked.txt",
+      "? tracked.txt",
+    ),
+  )
+
+  expect(parsed.files).toEqual([
+    { kind: "changed", path: "tracked.txt", previousPath: null, index: "deleted", worktree: "untracked" },
   ])
-  expect(parsed.untracked).toEqual([{ path: "untracked.txt", previousPath: null, kind: "untracked" }])
-  // `!` records are only emitted under --ignored, which we never pass; they must never
-  // be mistaken for a path belonging to the preceding record.
-  expect(parsed.conflicted).toEqual([])
+})
+
+it("orders entries by path so a directory's rows stay contiguous", () => {
+  // `.` (0x2E) sorts before `/` (0x2F), so `b.txt` precedes `b/x.txt`. A tree built over
+  // this list depends on it, and the records arrive interleaved by record kind, not path.
+  const parsed = parseStatus(
+    nulTerminated(
+      "# branch.oid a7838d82",
+      "? b/x.txt",
+      "1 .M N... 100644 100644 100644 df967b96 df967b96 a.txt",
+      "? b.txt",
+      "1 .M N... 100644 100644 100644 df967b96 df967b96 b/a.txt",
+    ),
+  )
+
+  expect(parsed.files.map((file) => file.path)).toEqual(["a.txt", "b.txt", "b/a.txt", "b/x.txt"])
 })
 
 it("consumes the second NUL field of a rename record, and keeps a path containing spaces whole", () => {
@@ -64,33 +95,39 @@ it("consumes the second NUL field of a rename record, and keeps a path containin
     ),
   )
 
-  expect(parsed.staged).toEqual([
-    { path: "dir/renamed spacé.txt", previousPath: "dir/héllo wörld.txt", kind: "renamed" },
-  ])
-  // The worktree change is measured against the index, where the file already lives under
-  // its new name — so no previousPath on this side.
-  expect(parsed.unstaged).toEqual([
-    { path: "dir/renamed spacé.txt", previousPath: null, kind: "modified" },
+  expect(parsed.files).toEqual([
     // Proves the cursor advanced past the original path rather than parsing it as a record.
-    { path: "after.txt", previousPath: null, kind: "modified" },
+    { kind: "changed", path: "after.txt", previousPath: null, index: null, worktree: "modified" },
+    // One entry carries the rename and the later edit together. `previousPath` is a fact
+    // about the index — the working tree is measured against the index, where the file
+    // already lives under its new name — so it hangs off the entry, not off a side.
+    {
+      kind: "changed",
+      path: "dir/renamed spacé.txt",
+      previousPath: "dir/héllo wörld.txt",
+      index: "renamed",
+      worktree: "modified",
+    },
   ])
 })
 
-it("reads unmerged records as conflicts and never as a staged/unstaged pair", () => {
+it("reads unmerged records as conflicts, keeping which side did what", () => {
   const parsed = parseStatus(
     nulTerminated(
       "# branch.oid a7838d82",
       "u UU N... 100644 100644 100644 100644 78981922 30305bba a7453f07 conflict.txt",
       "u AA N... 000000 100644 100644 100644 00000000 f719efd4 5626abf0 both-added.txt",
+      "u DU N... 100644 000000 100644 100644 78981922 00000000 a7453f07 we-deleted.txt",
     ),
   )
 
-  expect(parsed.conflicted).toEqual([
-    { path: "conflict.txt", previousPath: null, kind: "conflicted" },
-    { path: "both-added.txt", previousPath: null, kind: "conflicted" },
+  // The unmerged `XY` is the one place a row's whole meaning is which side did what, so it
+  // is carried rather than flattened to a single "conflicted".
+  expect(parsed.files).toEqual([
+    { kind: "conflicted", path: "both-added.txt", previousPath: null, ours: "added", theirs: "added" },
+    { kind: "conflicted", path: "conflict.txt", previousPath: null, ours: "modified", theirs: "modified" },
+    { kind: "conflicted", path: "we-deleted.txt", previousPath: null, ours: "deleted", theirs: "modified" },
   ])
-  expect(parsed.staged).toEqual([])
-  expect(parsed.unstaged).toEqual([])
 })
 
 it("reports an unborn HEAD as no oid at all", () => {
@@ -113,7 +150,7 @@ const mainRow = parseBranches(
   "main",
 )
 
-const noChanges = { staged: [], unstaged: [], untracked: [], conflicted: [] }
+const noChanges = { files: [] }
 
 it("picks HEAD's variant from the oid and the branch together, and reuses the branch row's upstream", () => {
   expect(readHead({ ...noChanges, oid: "a83bc136" }, "main", mainRow)).toEqual({

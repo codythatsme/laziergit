@@ -220,27 +220,78 @@ export interface Commit {
   readonly parents: readonly string[]
 }
 
-export type ChangeKind =
-  | "added"
-  | "modified"
-  | "deleted"
-  | "renamed"
-  | "copied"
-  | "typechange"
-  | "untracked"
-  | "conflicted"
+/**
+ * What one side of the index did to a path — porcelain v2's `X` and `Y` letters, named.
+ *
+ * `X` is HEAD→index and `Y` is index→working tree. They are two independent columns
+ * measuring two different comparisons, which is why one path can be `MM`: modified in the
+ * index *and* modified again since (ADR-0005).
+ */
+export type ChangeKind = "added" | "modified" | "deleted" | "renamed" | "copied" | "typechange"
 
-export interface FileChange {
-  readonly path: string
-  readonly previousPath: string | null
-  readonly kind: ChangeKind
-}
+/**
+ * The working-tree side reports one thing the index side cannot: a path git has never been
+ * told about. `?` is a whole-file state rather than a change measured against something, so
+ * it lives here and not in {@link ChangeKind} — an index cannot hold an untracked file by
+ * definition, and a type that said it could would need a runtime check at every read.
+ */
+export type WorktreeChange = ChangeKind | "untracked"
+
+/** What one side of a merge did to a path — porcelain v2's unmerged `XY`, one letter each. */
+export type ConflictSide = "added" | "deleted" | "modified"
+
+/**
+ * One path, one entry.
+ *
+ * A union rather than a record with four loose optional fields, because the fields are not
+ * independent: an unmerged path has no index-vs-working-tree pair to report at all, and
+ * `{ index: "modified", ours: "added" }` was representable in the flat shape while meaning
+ * nothing. Narrowing on `kind` is what lets a reader ask `change.ours` only where git
+ * actually said something about sides.
+ *
+ * Invariant on the `"changed"` arm: at least one of `index` / `worktree` is non-null. Git
+ * does not report a path that matches HEAD on both sides, so an entry where both are null
+ * describes a file with nothing to say about it.
+ *
+ * The four predicates — {@link isStaged}, {@link isUnstaged}, {@link isUntracked},
+ * {@link isConflicted} — are how you ask the questions the old four arrays answered.
+ */
+export type FileChange =
+  | {
+      readonly kind: "changed"
+      readonly path: string
+      /** The name git moved this path away from, on a rename or copy the index holds. */
+      readonly previousPath: string | null
+      /** HEAD → index. `null` when the index matches HEAD. */
+      readonly index: ChangeKind | null
+      /** Index → working tree. `null` when the working tree matches the index. */
+      readonly worktree: WorktreeChange | null
+    }
+  | {
+      readonly kind: "conflicted"
+      readonly path: string
+      /** Always null: git reports no rename detection for an unmerged path. */
+      readonly previousPath: null
+      /** What our side of the merge did. */
+      readonly ours: ConflictSide
+      /** What their side did. */
+      readonly theirs: ConflictSide
+    }
 
 export interface WorkingTreeStatus {
-  readonly staged: readonly FileChange[]
-  readonly unstaged: readonly FileChange[]
-  readonly untracked: readonly FileChange[]
-  readonly conflicted: readonly FileChange[]
+  /**
+   * One entry per path git reported, ordered by path.
+   *
+   * A single list rather than the four this used to be (staged / unstaged / untracked /
+   * conflicted), because those four could not name a path that belonged to two of them:
+   * an `MM` file appeared twice, as two objects, and which array a row came from was the
+   * only surviving record of which side of the index it described (ADR-0005).
+   *
+   * Filter it with the predicates. Select the list itself in a `useGit` selector and
+   * derive in a `useMemo` — `useGit((s) => s.status.files.filter(isStaged))` builds a
+   * fresh array every snapshot and never settles.
+   */
+  readonly files: readonly FileChange[]
   readonly isClean: boolean
 }
 

@@ -69,8 +69,8 @@ alone is a valid Layout. Omit `layout` entirely and both apply.
 ```jsonc
 {
   "keybindings": {
-    "gh-workflows.open-run": "enter",       // replace the Command's default keys
-    "files.stage": ["s", "space"],          // several keys for one Command
+    "gh-workflows.open-run": "return",      // replace the Command's default keys
+    "files.toggle-stage": ["s", "space"],   // several keys for one Command
     "app.quit": null,                        // unbind it
   },
 }
@@ -81,6 +81,14 @@ The key is a Command id, the value a [key spec](./extension-api.md) (`"c"`, `"ct
 replaces the Command's declared defaults rather than adding to them. When two Commands in
 the same scope claim one key, the later registration wins and the earlier one keeps its
 palette entry without the key; the swap is reported as a diagnostic.
+
+The files Pane's tree Commands, for reference — all rebindable the same way:
+
+| Command | Default | |
+|---|---|---|
+| `files.toggle-collapse` | `return` | Expand or collapse the folder under the cursor. Spell it `return`, never `enter` — the latter is a different, unreachable stroke name that binds cleanly and never fires |
+| `files.collapse-all` / `files.expand-all` | `-` / `=` | Fold or unfold every folder |
+| `files.toggle-view` | `` ` `` | Switch between the tree and a flat list of full paths |
 
 Core's own Commands, all rebindable:
 
@@ -172,6 +180,8 @@ own Pane, and `keybindings` above decides what each one is labelled with.
 ```jsonc
 {
   "extensions": {
+    "files": { "view": "tree", "collapseThreshold": 200 },
+    "diff": { "view": "unified", "context": 3 },
     "gh-workflows": { "limit": 30 },
   },
 }
@@ -181,3 +191,12 @@ One section per Extension name, holding the options that Extension declared with
 `option.*`. Values arrive on `ctx.config` fully typed and defaulted. An unknown option, or
 one of the wrong type or outside its declared range, is reported and replaced by its
 default.
+
+Options the Bundled Extensions declare:
+
+| Option | Default | |
+|---|---|---|
+| `files.view` | `"tree"` | `"tree"` draws a folder hierarchy; `"flat"` draws one list of full paths. A session toggle (`` ` ``) layers over this rather than editing it |
+| `files.collapseThreshold` | `200` | Fold a folder on first draw once it holds this many changed files, so a fresh un-ignored `node_modules/` cannot bury the rest of the tree. Expanding one explicitly outranks the threshold and survives the refresh poll. `0` disables it |
+| `diff.view` | `"unified"` | Initial diff layout |
+| `diff.context` | `3` | Lines of context around each hunk |

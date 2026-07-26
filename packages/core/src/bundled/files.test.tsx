@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test"
-import { symlink, writeFile } from "node:fs/promises"
-import { join, resolve } from "node:path"
+import { mkdir, symlink, writeFile } from "node:fs/promises"
+import { dirname, join, resolve } from "node:path"
 import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
@@ -39,14 +39,14 @@ const diffStub = `
 
 /** A third-party consumer of `FilesApi`, to prove the exported RowSource is the real one. */
 const decoratorStub = `
-  import { defineExtension } from "laziergit"
+  import { defineExtension, isUntracked } from "laziergit"
 
   export default defineExtension({
     name: "labels",
     needs: ["files"],
     activate(ctx) {
       const files = ctx.extensions.get("files")
-      files.decorateRows((change) => (change.kind === "untracked" ? { badge: "new!", tone: "info" } : undefined))
+      files.decorateRows((change) => (isUntracked(change) ? { badge: "new!", tone: "info" } : undefined))
       ctx.commands.register({
         id: "labels.report",
         title: "Report the files selection",
@@ -76,8 +76,11 @@ async function git(harness: Harness, ...args: readonly string[]): Promise<string
   return output.stdout
 }
 
-function write(harness: Harness, path: string, contents: string): Promise<void> {
-  return writeFile(join(harness.directory, path), contents)
+/** Creates parent directories, so a fixture can spell a nested path and get a tree from it. */
+async function write(harness: Harness, path: string, contents: string): Promise<void> {
+  const full = join(harness.directory, path)
+  await mkdir(dirname(full), { recursive: true })
+  await writeFile(full, contents)
 }
 
 /** Paths git currently reports as staged — the assertion most of these tests really make. */
@@ -182,17 +185,116 @@ describe("staging from the files pane", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    expect(frame(harness)).toContain("Unstaged")
+    // Two status columns, `X` then `Y`, exactly as git spells them: the change is in the
+    // working tree, so the letter is in the second column.
+    expect(frame(harness)).toContain("❯  M tracked.txt")
 
     await press(harness, " ")
-    await waitFor(harness, () => frame(harness).includes("Staged"))
+    await waitFor(harness, () => frame(harness).includes("❯ M  tracked.txt"))
     expect(await staged(harness)).toEqual(["tracked.txt"])
-    expect(frame(harness)).not.toContain("Unstaged")
 
-    // The row changed group and the cursor followed it there, so the same key reverses it.
+    // The row's columns flipped and the cursor never moved — a stronger claim than the
+    // headings version could make, and true only because the cursor anchors on the path.
     await press(harness, " ")
-    await waitFor(harness, () => frame(harness).includes("Unstaged"))
+    await waitFor(harness, () => frame(harness).includes("❯  M tracked.txt"))
     expect(await staged(harness)).toEqual([])
+
+    // The headings are gone for good, not merely off screen for this fixture.
+    for (const heading of ["Conflicted", "Staged", "Unstaged", "Untracked"]) {
+      expect(frame(harness)).not.toContain(heading)
+    }
+  })
+
+  it("draws one row per path under its directory, indented", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "src/a.txt", "a\n")
+    await write(harness, "src/nested/b.txt", "b\n")
+    await write(harness, "top.txt", "top\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+
+    const rendered = frame(harness)
+    expect(rendered).toContain("❯ ▾  src")
+    expect(rendered).toContain("    ?? a.txt")
+    expect(rendered).toContain("  ▾  nested")
+    expect(rendered).toContain("      ?? b.txt")
+    expect(rendered).toContain("  ?? top.txt")
+  })
+
+  it("compresses a single-child directory chain into one row", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "a/b/c.txt", "c\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+
+    expect(frame(harness)).toContain("❯ ▾  a/b")
+    expect(frame(harness)).toContain("  ?? c.txt")
+  })
+
+  it("collapses a directory with return and hides its descendants", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "src/a.txt", "a\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    expect(frame(harness)).toContain("?? a.txt")
+
+    await press(harness, "\r")
+    await waitFor(harness, () => frame(harness).includes("❯ ▸  src"))
+    expect(frame(harness)).not.toContain("a.txt")
+
+    await press(harness, "\r")
+    await waitFor(harness, () => frame(harness).includes("?? a.txt"))
+  })
+
+  it("keeps the cursor on the same node when a directory above it collapses", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "src/a.txt", "a\n")
+    await write(harness, "src/nested/b.txt", "b\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    // Down onto `src/nested/b.txt`: src, a.txt, nested, b.txt.
+    await press(harness, "j")
+    await press(harness, "j")
+    await press(harness, "j")
+    await waitFor(harness, () => frame(harness).includes("❯     ?? b.txt"))
+
+    // Collapse-all removes the row the cursor was on; the deepest visible ancestor is where
+    // it honestly belongs, not wherever the old index now points.
+    await press(harness, "-")
+    await waitFor(harness, () => frame(harness).includes("❯ ▸  src"))
+  })
+
+  it("stages a whole directory with space, and unstages it again", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "src/a.txt", "a\n")
+    await write(harness, "src/nested/b.txt", "b\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+
+    await press(harness, " ")
+    await waitFor(harness, async () => (await staged(harness)).length === 2)
+    expect(await staged(harness)).toEqual(["src/a.txt", "src/nested/b.txt"])
+
+    await press(harness, " ")
+    await waitFor(harness, async () => (await staged(harness)).length === 0)
+  })
+
+  it("toggles between the tree and a flat list of full paths", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "src/nested/b.txt", "b\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    expect(frame(harness)).toContain("▾  src/nested")
+
+    await press(harness, "`")
+    await waitFor(harness, () => frame(harness).includes("?? src/nested/b.txt"))
+    expect(frame(harness)).not.toContain("▾")
   })
 
   it("stages everything with a, including untracked files", async () => {
@@ -209,7 +311,8 @@ describe("staging from the files pane", () => {
     await waitFor(harness, async () => (await staged(harness)).length === 2)
 
     expect(await staged(harness)).toEqual(["loose.txt", "tracked.txt"])
-    expect(frame(harness)).not.toContain("Untracked")
+    // Nothing is left on the working-tree side, so no row draws git's untracked pair.
+    expect(frame(harness)).not.toContain("??")
   })
 })
 
@@ -239,7 +342,9 @@ describe("discarding from the files pane", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    expect(frame(harness)).toContain("Staged")
+    // Staged and nothing since: the letter is in the index column, the working-tree column
+    // is blank, and that pair is exactly why `d` has to unstage before it restores.
+    expect(frame(harness)).toContain("❯ M  tracked.txt")
 
     await press(harness, "d")
     // The working tree already matches the index, so `git restore --worktree` on its own
@@ -338,14 +443,15 @@ describe("conflicts, shown and delegated", () => {
     await run(harness.directory, ["merge", "theirs"])
   }
 
-  it("gives conflicted paths a group of their own", async () => {
+  it("draws a conflicted path with git's own pair, wherever it sits in the tree", async () => {
     const harness = await createFilesHarness()
     await conflict(harness)
 
     await renderApp(harness)
 
-    expect(frame(harness)).toContain("Conflicted")
-    expect(frame(harness)).toContain("! shared.txt")
+    // `UU` — both sides modified — rather than a single invented glyph. On a conflicted row
+    // which side did what is the whole content of the row.
+    expect(frame(harness)).toContain("UU shared.txt")
   })
 
   it("hides staging and discarding on a conflicted row, and offers the two delegating items", async () => {
@@ -377,8 +483,8 @@ describe("conflicts, shown and delegated", () => {
     await press(harness, "x")
     await press(harness, "m")
 
-    await waitFor(harness, () => !frame(harness).includes("Conflicted"))
-    expect(frame(harness)).not.toContain("Conflicted")
+    await waitFor(harness, () => !frame(harness).includes("UU"))
+    expect(frame(harness)).not.toContain("UU")
     expect(await staged(harness)).toEqual(["shared.txt"])
   })
 
@@ -427,7 +533,7 @@ describe("what the files pane publishes", () => {
     await press(harness, "j")
 
     // `j` belongs to the files pane, so the cursor never moved and nothing was pushed.
-    expect(frame(harness)).toContain("❯ ? first.txt")
+    expect(frame(harness)).toContain("❯ ?? first.txt")
     expect(frame(harness)).toContain("showing workingTree first.txt")
   })
 
@@ -460,10 +566,30 @@ describe("what the files pane publishes", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    expect(frame(harness)).toContain("? loose.txt new!")
+    expect(frame(harness)).toContain("?? loose.txt new!")
     expect(frame(harness)).not.toContain("tracked.txt new!")
 
+    // Rows are in path order now, not group order, so `loose.txt` is first — it used to sit
+    // under a trailing "Untracked" heading regardless of its name.
     await press(harness, "V")
-    expect(frame(harness)).toContain("selected tracked.txt")
+    expect(frame(harness)).toContain("selected loose.txt")
+  })
+
+  it("publishes no selection while the cursor is on a directory row", async () => {
+    const harness = await createFilesHarness()
+    await writeFile(join(harness.repo, "labels.tsx"), decoratorStub)
+    await write(harness, "src/a.txt", "a\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+
+    // A directory is not a `FileChange`, so `FilesApi.selected()` has nothing honest to
+    // return for one — and a `decorateRows` provider is never handed a folder.
+    await press(harness, "V")
+    expect(frame(harness)).toContain("selected none")
+
+    await press(harness, "j")
+    await press(harness, "V")
+    expect(frame(harness)).toContain("selected src/a.txt")
   })
 })

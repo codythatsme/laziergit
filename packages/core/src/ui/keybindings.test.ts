@@ -49,6 +49,41 @@ it("runs the Command a global key is bound to", async () => {
   test.cleanup()
 })
 
+/**
+ * The Enter key, both directions.
+ *
+ * OpenTUI's parser names it `return` on every path it can arrive by (`key.name = "return"`
+ * for both the bare `\r` and the kitty-protocol form), and `installKeymap` deliberately
+ * does not register the keymap's alias field. `"enter"` is therefore a real, parseable,
+ * *unreachable* stroke name: a Command bound to it registers cleanly, typechecks, and
+ * shows up in the cheat sheet with a key that can never fire.
+ *
+ * Both halves are pinned because only the pair is the bug. The first test alone would
+ * still pass if someone later installed the alias field and made `"enter"` work — and the
+ * second alone would pass against a keymap that had dropped Enter support entirely.
+ */
+it("fires a Command bound to return when Enter arrives", async () => {
+  const test = harness()
+  test.bindings.sync([entry("files.toggle-collapse", ["return"])])
+  await test.flush()
+
+  test.host.press("return")
+  await test.flush()
+  expect(test.ran).toEqual(["files.toggle-collapse"])
+  test.cleanup()
+})
+
+it("never fires a Command bound to enter, which is a different stroke name", async () => {
+  const test = harness()
+  test.bindings.sync([entry("files.toggle-collapse", ["enter"])])
+  await test.flush()
+
+  test.host.press("return")
+  await test.flush()
+  expect(test.ran).toEqual([])
+  test.cleanup()
+})
+
 it("resolves a `mod+` binding a third party writes to ctrl where cmd cannot be reported", async () => {
   const test = harness()
   test.bindings.sync([entry("thirdparty.act", ["mod+j"])])

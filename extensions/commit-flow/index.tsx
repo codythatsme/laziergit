@@ -3,6 +3,10 @@ import {
   createCell,
   defineExtension,
   describeGitFailure,
+  isConflicted,
+  isStaged,
+  isUnstaged,
+  isUntracked,
   useCommand,
   useGit,
   useKeyCapture,
@@ -13,7 +17,7 @@ import {
   type Head,
   type PaneProps,
 } from "laziergit"
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 
 /**
  * Whether HEAD names a commit at all — the precondition for amending.
@@ -314,7 +318,7 @@ export default defineExtension({
       }
       // An amend rewrites a commit that already has content, so it is the one case where an
       // empty index does not mean an empty commit.
-      if (!draft.amend && ctx.git.state.status.staged.length === 0) {
+      if (!draft.amend && !ctx.git.state.status.files.some(isStaged)) {
         ctx.popups.notify("Nothing staged to commit", "warning")
         return
       }
@@ -333,7 +337,12 @@ export default defineExtension({
       const theme = useTheme()
       const current = flow.use()
       const keptDraft = kept.use()
-      const staged = useGit((state) => state.status.staged)
+      // The slice is selected and the filter derived from it, never the other way round:
+      // `useGit((s) => s.status.files.filter(isStaged))` builds a fresh array on every
+      // snapshot, so the `Object.is` check in the store subscription never holds and this
+      // Pane re-renders forever.
+      const files = useGit((state) => state.status.files)
+      const staged = useMemo(() => files.filter(isStaged), [files])
       const editor = useRef<MessageEditor | null>(null)
 
       // Publishes the buffer to the flow, which closes from places this component cannot
@@ -484,7 +493,10 @@ export default defineExtension({
 
     ctx.menus.register({
       id: "commit-flow.actions",
-      title: (status) => (status.staged.length === 0 ? "Commit" : `Commit — ${countLabel(status.staged.length)}`),
+      title: (status) => {
+        const staged = status.files.filter(isStaged).length
+        return staged === 0 ? "Commit" : `Commit — ${countLabel(staged)}`
+      },
       groups: [
         {
           // An explicit id, not a defaulted one: this menu is the premier splice target
@@ -497,13 +509,13 @@ export default defineExtension({
             {
               key: "c",
               label: "Commit",
-              when: (status) => status.staged.length > 0,
+              when: (status) => status.files.some(isStaged),
               run: () => start({}),
             },
             {
               key: "s",
               label: "Commit with signoff",
-              when: (status) => status.staged.length > 0,
+              when: (status) => status.files.some(isStaged),
               run: () => start({ signoff: true }),
             },
             {
@@ -512,7 +524,8 @@ export default defineExtension({
               // Withdrawn entirely while anything is conflicted: `git add --all` would mark
               // those files resolved on the way past, and declaring a conflict resolved is
               // the files Pane's decision to offer, not a side effect of committing (§5.12).
-              when: (status) => status.conflicted.length === 0 && status.unstaged.length + status.untracked.length > 0,
+              when: (status) =>
+                !status.files.some(isConflicted) && status.files.some((file) => isUnstaged(file) || isUntracked(file)),
               run: async () => {
                 try {
                   await ctx.git.stage("all")

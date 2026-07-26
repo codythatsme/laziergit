@@ -1,47 +1,59 @@
 /** @jsxImportSource @opentui/react */
 import {
+  createCell,
   createRowSource,
   defineExtension,
   describeGitFailure,
+  isConflicted,
+  isStaged,
+  isUnstaged,
+  isUntracked,
+  option,
   toneColor,
   useCommand,
   useGit,
   useListCursor,
   useTheme,
   type ChangeKind,
+  type ConflictSide,
+  type DiffTarget,
   type FileChange,
   type FilesApi,
   type Head,
+  type RowDecoration,
   type PaneProps,
   type Theme,
-  type WorkingTreeStatus,
 } from "laziergit"
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useRef } from "react"
+
+import {
+  buildFlatList,
+  buildTree,
+  directoryPaths,
+  fileLabel,
+  filesUnder,
+  isFolded,
+  noFolds,
+  rowIndexFor,
+  visibleRows,
+  type DirectoryNode,
+  type FileNode,
+  type FoldState,
+  type TreeNode,
+  type VisibleRow,
+} from "./tree"
 
 /**
- * The four groups, in the order they are drawn: conflicts first because nothing else can
- * proceed past them, untracked last because it is the noisiest and the least urgent.
+ * One glyph per state a side of the index can be in, as a total record rather than a switch:
+ * a kind added to the model is a compile error here instead of a row that draws a blank
+ * status column.
  *
- * The names are exactly the {@link WorkingTreeStatus} keys holding each group's files, so
- * the flattening below indexes the status with them instead of re-listing four fields —
- * a group the model grew and this Pane forgot is a compile error rather than a blind spot.
+ * There is no matching colour table any more. Colour now comes from the *column* a letter
+ * sits in — green for the index, red for the working tree — which is lazygit's scheme and
+ * the reason the pair reads at a glance: `M ` and ` M` are different colours as well as
+ * different positions.
  */
-const groupOrder = ["conflicted", "staged", "unstaged", "untracked"] as const
-type FileGroup = (typeof groupOrder)[number]
-
-const groupTitles: { readonly [K in FileGroup]: string } = {
-  conflicted: "Conflicted",
-  staged: "Staged",
-  unstaged: "Unstaged",
-  untracked: "Untracked",
-}
-
-/**
- * One glyph and one theme token per {@link ChangeKind}, as total records rather than
- * switches: a kind added to the model is a compile error here instead of a row that draws
- * a blank status column in the default colour.
- */
-const kindGlyphs: { readonly [K in ChangeKind]: string } = {
+const kindGlyphs: { readonly [K in ChangeKind | "untracked"]: string } = {
   added: "A",
   modified: "M",
   deleted: "D",
@@ -49,76 +61,84 @@ const kindGlyphs: { readonly [K in ChangeKind]: string } = {
   copied: "C",
   typechange: "T",
   untracked: "?",
-  conflicted: "!",
 }
 
-const kindTokens: { readonly [K in ChangeKind]: keyof Theme } = {
-  added: "success",
-  modified: "warning",
-  deleted: "danger",
-  renamed: "info",
-  copied: "info",
-  typechange: "warning",
-  untracked: "info",
-  conflicted: "danger",
+/** Git's own unmerged letters, so a conflicted row says which side did what. */
+const conflictGlyphs: { readonly [K in ConflictSide]: string } = {
+  added: "A",
+  deleted: "D",
+  modified: "U",
 }
 
 /**
- * A decoration slot per distinct change.
+ * A row's two status columns: `X` then `Y`, exactly as git spells them.
  *
- * `FilesApi` is a `RowSource<FileChange>`, so a decorating Extension — and therefore this
- * key — sees the change and never the group that drew it. Keying on all three of its
- * fields is what makes that safe: two rows share a slot exactly when they are the same
- * change, which is the `MM` case, a path modified in both index and worktree. Sharing is
- * then the right answer, because a provider handed either object would say the same thing.
- * A git path cannot contain NUL, so the join is unambiguous.
+ * This is what replaced the group headings. A heading could only say one thing about a row,
+ * so an `MM` file had to be drawn twice under two of them; two columns say both things in
+ * one row, and the pair is the same `XY` a user already reads in `git status`.
+ */
+interface StatusCell {
+  readonly index: string
+  readonly worktree: string
+  readonly indexToken: keyof Theme
+  readonly worktreeToken: keyof Theme
+}
+
+function statusCell(change: FileChange): StatusCell {
+  if (change.kind === "conflicted") {
+    return {
+      index: conflictGlyphs[change.ours],
+      worktree: conflictGlyphs[change.theirs],
+      indexToken: "danger",
+      worktreeToken: "danger",
+    }
+  }
+  // Untracked fills both columns, because git does: porcelain spells it `??`, and a lone
+  // `?` in the working-tree column would read as "something happened to the index" — the
+  // one thing that has not happened to a file git has never been told about.
+  if (change.index === null && change.worktree === "untracked") {
+    return { index: "?", worktree: "?", indexToken: "info", worktreeToken: "info" }
+  }
+  return {
+    index: change.index === null ? " " : kindGlyphs[change.index],
+    worktree: change.worktree === null ? " " : kindGlyphs[change.worktree],
+    // Staged content is green and unstaged content is red on the side it lives on, so the
+    // column a letter sits in carries as much meaning as the letter.
+    indexToken: change.index === null ? "text" : "success",
+    worktreeToken: change.worktree === null ? "text" : change.worktree === "untracked" ? "info" : "danger",
+  }
+}
+
+/**
+ * A directory's own two columns: the expand marker, then one character summarising what is
+ * underneath it.
+ *
+ * A character as well as a colour, because a folded directory is the only row whose whole
+ * content is its subtree — and in a no-colour terminal a colour-only summary says nothing
+ * at all. First match wins, worst news first.
+ */
+function directoryCell(node: DirectoryNode, folded: boolean): StatusCell {
+  const marker = folded ? "\u25b8" : "\u25be"
+  const mark = node.conflicted
+    ? { text: "!", token: "danger" as keyof Theme }
+    : node.staged && !node.unstaged && !node.untracked
+      ? { text: "+", token: "success" as keyof Theme }
+      : node.staged
+        ? { text: "~", token: "warning" as keyof Theme }
+        : { text: " ", token: "text" as keyof Theme }
+  return { index: marker, worktree: mark.text, indexToken: "textMuted", worktreeToken: mark.token }
+}
+
+/**
+ * A decoration slot per path.
+ *
+ * The model gives a path exactly one entry (ADR-0005), so the path *is* the identity and
+ * there is nothing else to join into the key. Keying on the state as well would move the
+ * slot every time a row's status changed \u2014 staging a file would evict a decoration its
+ * provider would only recompute to the same answer.
  */
 function changeKey(change: FileChange): string {
-  return `${change.kind}\0${change.previousPath ?? ""}\0${change.path}`
-}
-
-interface FileRow {
-  readonly group: FileGroup
-  readonly change: FileChange
-  /** Position in the flattened, header-free list the cursor walks. */
-  readonly index: number
-}
-
-interface FileSection {
-  readonly group: FileGroup
-  readonly rows: readonly FileRow[]
-}
-
-/**
- * The groups that have files, and every file's position in the single flat list the cursor
- * walks. Headers are derived from the sections and are deliberately not rows: a cursor
- * that could land on "Staged" would have nothing to stage.
- *
- * Rows carry the *first* change object seen for their key, so the two rows of an `MM` path
- * hand `useDecoration` one identical object. Two objects in one cache slot evict each
- * other on every render, and a `useSyncExternalStore` snapshot that never repeats itself
- * never converges.
- */
-function sectionsOf(status: WorkingTreeStatus): readonly FileSection[] {
-  const identities = new Map<string, FileChange>()
-  const sections: FileSection[] = []
-  let index = 0
-
-  for (const group of groupOrder) {
-    const changes = status[group]
-    if (changes.length === 0) continue
-
-    const rows: FileRow[] = []
-    for (const change of changes) {
-      const key = changeKey(change)
-      const identity = identities.get(key) ?? change
-      identities.set(key, identity)
-      rows.push({ group, change: identity, index })
-      index += 1
-    }
-    sections.push({ group, rows })
-  }
-  return sections
+  return change.path
 }
 
 /** Renames read as the move they are; every other kind is just its path. */
@@ -167,18 +187,26 @@ interface DiscardPlan {
   readonly paths: readonly string[]
 }
 
-function discardPlan(change: FileChange, status: WorkingTreeStatus): DiscardPlan {
-  const own = pathsOf(change)
-  if (change.kind === "untracked") return { outcome: "delete", paths: own }
-
-  const owned = new Set(own)
-  const staged = status.staged.find((entry) => pathsOf(entry).some((path) => owned.has(path)))
-  if (staged === undefined) return { outcome: "restore", paths: own }
-
-  // The staged entry's own paths join the plan: unstaging one half of a staged rename would
+/**
+ * No `status` argument any more, and that is the whole point of the model change: the
+ * entry itself says which side of the index holds it, so this reads the row it was handed
+ * instead of searching the staged array for a path that might also be in it. The old
+ * version had to, because the row carried one `kind` and the group it came from was not
+ * available here.
+ *
+ * Null on a conflicted path: resolving one belongs to the user's editor (§5.12), and
+ * "discard" has no meaning for a file with two recorded sides and neither chosen.
+ */
+function discardPlan(change: FileChange): DiscardPlan | null {
+  if (change.kind === "conflicted") return null
+  if (change.index === null) {
+    return change.worktree === "untracked"
+      ? { outcome: "delete", paths: [change.path] }
+      : { outcome: "restore", paths: pathsOf(change) }
+  }
+  // `pathsOf` carries the previous path too: unstaging one half of a staged rename would
   // leave the other half in the index and the file looking half-moved.
-  const paths = [...new Set([...own, ...pathsOf(staged)])]
-  return { outcome: staged.kind === "added" ? "unstageAndDelete" : "unstageAndRestore", paths }
+  return { outcome: change.index === "added" ? "unstageAndDelete" : "unstageAndRestore", paths: pathsOf(change) }
 }
 
 interface Confirmation {
@@ -223,7 +251,6 @@ function discardConfirmation(plan: DiscardPlan, change: FileChange): Confirmatio
   }
 }
 
-const isConflicted = (change: FileChange): boolean => change.kind === "conflicted"
 const isNotConflicted = (change: FileChange): boolean => !isConflicted(change)
 
 /** "1 file" / "3 files", so a confirmation reads as a sentence rather than as `1 file(s)`. */
@@ -233,12 +260,80 @@ function plural(count: number, noun: string): string {
 
 export default defineExtension({
   name: "files",
-  description: "Working-tree, staged, untracked, and conflicted file changes",
+  description: "The working tree as a folder tree, with staged and unstaged state per row",
   needs: ["diff"],
+
+  config: {
+    view: option.enum(["tree", "flat"] as const, {
+      default: "tree",
+      description: "File list layout at startup: a folder tree, or one flat list of paths",
+    }),
+    collapseThreshold: option.number({
+      default: 200,
+      min: 0,
+      max: 100_000,
+      description: "Fold a folder on first draw once it holds this many changed files (0 disables)",
+    }),
+  },
 
   activate(ctx): FilesApi {
     const host = createRowSource<FileChange>({ key: changeKey })
     const diff = ctx.extensions.get("diff")
+
+    /**
+     * Which folders are folded, and which layout is on screen.
+     *
+     * Cells in `activate`, not `useState` in the Pane: the Layout unmounts a Pane it has
+     * tabbed away, and a tree that forgot every fold each time the user glanced at another
+     * tab would be worse than no tree at all. Neither survives a hot reload — the same
+     * lifetime the diff Pane's view cell has, and the same reason: reload rebuilds the
+     * Extension's whole scope.
+     *
+     * `viewMode` is seeded from config and never written back. `ctx.config` is an
+     * activation-constant snapshot, so a session toggle is a layer over the configured
+     * default rather than an edit to it.
+     */
+    const fold = createCell<FoldState>(noFolds)
+    const viewMode = createCell<"tree" | "flat">(ctx.config.view)
+    const threshold = ctx.config.collapseThreshold
+
+    /**
+     * Folds or unfolds one directory, writing to *both* sets.
+     *
+     * A single collapsed set cannot express "keep this open": the fold threshold folds a
+     * big directory on first draw, and without an explicit `expanded` entry the ~2s poll
+     * would re-fold it under the user every time the status object changed.
+     */
+    function setFolded(node: DirectoryNode, folded: boolean): void {
+      const current = fold.get()
+      const collapsed = new Set(current.collapsed)
+      const expanded = new Set(current.expanded)
+      if (folded) {
+        collapsed.add(node.path)
+        expanded.delete(node.path)
+      } else {
+        collapsed.delete(node.path)
+        expanded.add(node.path)
+      }
+      fold.set({ collapsed, expanded })
+    }
+
+    /**
+     * What the diff Pane should show for a row.
+     *
+     * The side used to come from the group heading the row was drawn under. It comes from
+     * the entry now: a change that lives only in the index has nothing in the working tree
+     * to diff, so `staged` is the only reading that shows anything at all. A directory
+     * diffs as a pathspec, which git answers against the index — so a folder of purely
+     * untracked files renders an empty patch, and the diff Pane already says "no changes".
+     */
+    function diffTarget(node: TreeNode): DiffTarget {
+      if (node.kind === "directory") {
+        return { kind: node.staged && !node.unstaged ? "staged" : "workingTree", path: node.path }
+      }
+      const staged = node.change.kind === "changed" && node.change.index !== null && node.change.worktree === null
+      return { kind: staged ? "staged" : "workingTree", path: node.change.path }
+    }
 
     const fail = (action: string, error: unknown): void => {
       ctx.popups.notify(`${action}: ${describeGitFailure(error)}`, "error")
@@ -274,19 +369,58 @@ export default defineExtension({
     }
 
     /**
-     * `space` reads the group, not the kind: one `modified` change appears in both the
-     * staged and the unstaged group, and only the group it was drawn under says which way
-     * this keypress moves it. Staging a conflicted file is how git records a resolution,
-     * which is the whole of v1's conflict write path (§5.12).
+     * `space` on a file: stage it unless there is nothing left to stage, in which case
+     * unstage it.
+     *
+     * The old version read the group the row was drawn under, which no longer exists — and
+     * the entry says it better anyway. A path with anything on the working-tree side is a
+     * path with something to stage, so the same key walks `M` → `M ` → ` M` without ever
+     * needing to know which heading the row came from. Staging a conflicted file is how git
+     * records a resolution, which is the whole of v1's conflict write path (§5.12).
      */
-    async function toggleStage(row: FileRow | undefined): Promise<void> {
-      if (row === undefined) return
-      if (row.group === "staged") await unstage(row.change)
-      else await stage([row.change.path])
+    async function toggleFile(change: FileChange): Promise<void> {
+      if (isUnstaged(change) || isUntracked(change) || isConflicted(change)) await stage([change.path])
+      else await unstage(change)
+    }
+
+    /**
+     * `space` on a directory: the same rule, read over the subtree.
+     *
+     * Staging passes the **directory pathspec** rather than a file list — git recurses, and
+     * a pathspec is one argv no matter how many files are under it. Unstaging additionally
+     * names every descendant's previous path, or a rename *into* this directory from
+     * outside leaves its other half staged and the file looking half-moved.
+     */
+    async function toggleDirectory(node: DirectoryNode): Promise<void> {
+      // Refused rather than staged: `git add` on a directory holding an unmerged file marks
+      // that conflict resolved on the way past, with the markers still in the file. Doing
+      // that as a side effect of a keypress aimed at a folder is not a decision the user
+      // made — the same reasoning §5.12 gives for keeping resolution explicit.
+      if (node.conflicted) {
+        ctx.popups.notify(`${node.path} holds a conflict — resolve it before staging the folder`, "warning")
+        return
+      }
+      if (node.unstaged || node.untracked) {
+        await stage([node.path])
+        return
+      }
+      const previous = filesUnder(node).flatMap((change) => (change.previousPath === null ? [] : [change.previousPath]))
+      try {
+        await ctx.git.unstage([node.path, ...previous])
+      } catch (error) {
+        fail("Unstage", error)
+      }
+    }
+
+    async function toggleRow(node: TreeNode | undefined): Promise<void> {
+      if (node === undefined) return
+      if (node.kind === "file") await toggleFile(node.change)
+      else await toggleDirectory(node)
     }
 
     async function discard(change: FileChange): Promise<void> {
-      const plan = discardPlan(change, ctx.git.state.status)
+      const plan = discardPlan(change)
+      if (plan === null) return
       const confirmed = await ctx.popups.confirm({ ...discardConfirmation(plan, change), danger: true })
       if (!confirmed) return
 
@@ -304,6 +438,50 @@ export default defineExtension({
     }
 
     /**
+     * `d` on a directory, expanded to the files underneath it.
+     *
+     * Deliberately **not** the directory pathspec, unlike staging. `ctx.git.discard`
+     * partitions the paths it is given by exact membership in the untracked set, so a
+     * directory always lands in `git restore --worktree` — which fails outright on a folder
+     * holding only untracked files, and silently skips them when it holds a tracked one.
+     * Expanding to leaves is what makes the confirmation's promise true.
+     */
+    async function discardDirectory(node: DirectoryNode): Promise<void> {
+      const plans = filesUnder(node).flatMap((change) => {
+        const plan = discardPlan(change)
+        return plan === null ? [] : [plan]
+      })
+      if (plans.length === 0) {
+        ctx.popups.notify(`Nothing under ${node.path} can be discarded`)
+        return
+      }
+
+      const deletions = plans.filter((plan) => plan.outcome === "delete" || plan.outcome === "unstageAndDelete").length
+      const confirmed = await ctx.popups.confirm({
+        title: `Discard everything under ${node.path}?`,
+        message:
+          deletions === 0
+            ? `Throw away changes to ${plural(plans.length, "file")}.`
+            : `Throw away changes to ${plural(plans.length, "file")}, deleting ${plural(deletions, "untracked file")}.`,
+        confirmLabel: "discard",
+        danger: true,
+      })
+      if (!confirmed) return
+
+      const unstageFirst = plans
+        .filter((plan) => plan.outcome === "unstageAndRestore" || plan.outcome === "unstageAndDelete")
+        .flatMap((plan) => [...plan.paths])
+      const paths = [...new Set(plans.flatMap((plan) => [...plan.paths]))]
+
+      try {
+        if (unstageFirst.length > 0) await ctx.git.unstage([...new Set(unstageFirst)])
+        await ctx.git.discard(paths)
+      } catch (error) {
+        fail("Discard", error)
+      }
+    }
+
+    /**
      * Working-tree changes only. `ctx.git.discard` restores a tracked file *from the
      * index*, so staged content is exactly what survives; unstaging first would be a
      * bigger and differently destructive operation than the label promises. Conflicted
@@ -311,13 +489,16 @@ export default defineExtension({
      */
     async function discardAll(): Promise<void> {
       const status = ctx.git.state.status
-      const paths = [...status.unstaged, ...status.untracked].map((change) => change.path)
+      // One pass, one entry per path: a file both edited and untracked-in-part cannot be
+      // named twice here, so the count in the confirmation is the number of files.
+      const affected = status.files.filter((change) => isUnstaged(change) || isUntracked(change))
+      const paths = affected.map((change) => change.path)
       if (paths.length === 0) {
         ctx.popups.notify("No working-tree changes to discard")
         return
       }
 
-      const untracked = status.untracked.length
+      const untracked = affected.filter(isUntracked).length
       const confirmed = await ctx.popups.confirm({
         title: "Discard all working-tree changes?",
         message:
@@ -346,17 +527,51 @@ export default defineExtension({
      * `"react"` and `"@opentui/react"` (ADR-0001) — there is no `node:path` here. Git
      * reports paths relative to the root with `/` separators, which is the separator used.
      */
-    async function openFile(change: FileChange): Promise<void> {
+    async function openPath(path: string): Promise<void> {
       try {
-        await ctx.open(`${ctx.git.root}/${change.path}`)
+        await ctx.open(`${ctx.git.root}/${path}`)
       } catch (error) {
         fail("Open", error)
       }
     }
 
-    async function openMenu(row: FileRow | undefined): Promise<void> {
-      if (row === undefined) return
-      await ctx.menus.open("files.actions", row.change)
+    const openFile = (change: FileChange): Promise<void> => openPath(change.path)
+
+    /**
+     * `x` on a file opens the registered `files.actions` menu; on a directory it opens an
+     * ad-hoc one.
+     *
+     * A directory row is not a `FileChange`, and `files.actions` is declared as taking one.
+     * Widening that payload to a union would make every third-party splice into the menu
+     * handle a case it never asked for, so the folder menu is built here instead. The cost
+     * is real and named in §5.12: nothing can splice into it. The fix, when something needs
+     * to, is a row-type union in the public API — and that belongs with its first consumer.
+     */
+    async function openMenu(node: TreeNode | undefined): Promise<void> {
+      if (node === undefined) return
+      if (node.kind === "file") {
+        await ctx.menus.open("files.actions", node.change)
+        return
+      }
+      await ctx.popups.menu({
+        title: `Folder: ${node.path}`,
+        groups: [
+          {
+            id: "folder",
+            title: "This folder",
+            items: [
+              { key: "s", label: "Stage everything here", run: () => stage([node.path]) },
+              {
+                key: "u",
+                label: "Unstage everything here",
+                run: () => toggleDirectory({ ...node, unstaged: false, untracked: false }),
+              },
+              { key: "shift+d", label: "Discard everything here", run: () => discardDirectory(node) },
+              { key: "e", label: "Open folder", run: () => openPath(node.path) },
+            ],
+          },
+        ],
+      })
     }
 
     ctx.menus.register({
@@ -371,8 +586,9 @@ export default defineExtension({
             {
               key: "u",
               label: "Unstage",
-              // An untracked file is not in the index, so there is nothing to take out of it.
-              when: (change) => isNotConflicted(change) && change.kind !== "untracked",
+              // Exactly the rows with something in the index to take out — which now hides
+              // it on a purely-unstaged row too, not just an untracked one.
+              when: isStaged,
               run: unstage,
             },
             { key: "d", label: "Discard changes", when: isNotConflicted, run: discard },
@@ -413,19 +629,32 @@ export default defineExtension({
       ],
     })
 
-    function FileLine({
-      row,
+    /**
+     * The shared shape of every row: marker, indent, two status columns, label, badge.
+     *
+     * Split from the two wrappers below because `useDecoration` is a hook and a directory
+     * has no `FileChange` to look one up by — a single component would have to call it
+     * conditionally. The split is also what keeps `decorateRows`' contract honest: a
+     * provider is only ever handed a file.
+     */
+    function Line({
       id,
+      depth,
+      cell,
+      label,
+      decoration,
       selected,
       focused,
     }: {
-      readonly row: FileRow
       readonly id: string
+      readonly depth: number
+      readonly cell: StatusCell
+      readonly label: string
+      readonly decoration: RowDecoration | undefined
       readonly selected: boolean
       readonly focused: boolean
     }) {
       const theme = useTheme()
-      const decoration = host.useDecoration(row.change)
       const dim = decoration?.dim === true
       const badge = decoration?.badge
 
@@ -434,11 +663,58 @@ export default defineExtension({
           {/* The marker, not the highlight, is what says where the cursor is while another
               Pane holds focus — the state in which the diff on screen is still this Pane's
               selection and the user needs to see which row that was. */}
-          <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
-          <span fg={dim ? theme.textMuted : theme[kindTokens[row.change.kind]]}>{kindGlyphs[row.change.kind]}</span>
-          <span fg={dim ? theme.textMuted : theme.text}>{` ${labelOf(row.change)}`}</span>
+          <span fg={theme.textMuted}>{selected ? "\u276f " : "  "}</span>
+          {/* Indent is spaces inside the one `<text>`, not nested boxes: `scrollChildIntoView`
+              finds a row by id, and a per-depth box tree would put every row at a different
+              place in the layout for no gain. */}
+          <span>{"  ".repeat(depth)}</span>
+          <span fg={dim ? theme.textMuted : theme[cell.indexToken]}>{cell.index}</span>
+          <span fg={dim ? theme.textMuted : theme[cell.worktreeToken]}>{cell.worktree}</span>
+          <span fg={dim ? theme.textMuted : theme.text}>{` ${label}`}</span>
           <span fg={toneColor(theme, decoration?.tone)}>{badge === undefined ? "" : ` ${badge}`}</span>
         </text>
+      )
+    }
+
+    function FileLine(props: {
+      readonly node: FileNode
+      readonly id: string
+      readonly depth: number
+      readonly selected: boolean
+      readonly focused: boolean
+    }) {
+      const decoration = host.useDecoration(props.node.change)
+      return (
+        <Line
+          id={props.id}
+          depth={props.depth}
+          cell={statusCell(props.node.change)}
+          label={fileLabel(props.node)}
+          decoration={decoration}
+          selected={props.selected}
+          focused={props.focused}
+        />
+      )
+    }
+
+    function DirectoryLine(props: {
+      readonly node: DirectoryNode
+      readonly id: string
+      readonly depth: number
+      readonly folded: boolean
+      readonly selected: boolean
+      readonly focused: boolean
+    }) {
+      return (
+        <Line
+          id={props.id}
+          depth={props.depth}
+          cell={directoryCell(props.node, props.folded)}
+          label={props.node.label}
+          decoration={undefined}
+          selected={props.selected}
+          focused={props.focused}
+        />
       )
     }
 
@@ -446,16 +722,47 @@ export default defineExtension({
       const theme = useTheme()
       const status = useGit((state) => state.status)
       const repository = useGit((state) => inRepository(state.head))
+      const view = viewMode.use()
+      const folds = fold.use()
+
       // Memoised on the store slice's own identity: a refresh that changed nothing hands
-      // back the same object, so the rows — and with them every decoration cache hit and
-      // the effects below — survive the poll untouched.
-      const sections = useMemo(() => sectionsOf(status), [status])
-      const rows = useMemo(() => sections.flatMap((section) => section.rows), [sections])
+      // back the same object, so the tree — and with it every decoration cache hit — survives
+      // the poll untouched. Build and flatten are separate memos so expanding a directory
+      // re-walks the tree without rebuilding it.
+      const nodes = useMemo(
+        () => (view === "tree" ? buildTree(status.files) : buildFlatList(status.files)),
+        [status.files, view],
+      )
+      const rows = useMemo(() => visibleRows(nodes, folds, threshold), [nodes, folds, threshold])
       const cursor = useListCursor({ items: rows, idPrefix: "files", noun: "file" })
-      const selected = cursor.selected
+
+      /**
+       * The cursor follows the *node* it was on, not the index.
+       *
+       * `useListCursor` clamps only against the end of the list, which is the right rule for
+       * a flat list that only ever grows and shrinks at the bottom. A tree moves rows out
+       * from under the cursor: collapsing a directory above it deletes several rows at once,
+       * and the index that used to name the selected file silently comes to name a different
+       * one. Anchoring on the path fixes that, and `rowIndexFor`'s deepest-visible-ancestor
+       * fallback decides where to land when the anchored row is the one that just went away.
+       *
+       * Resolved during render rather than in an effect, the same discipline
+       * `useListCursor` uses for its own clamp: the render that draws the collapse already
+       * draws the corrected highlight, so there is no frame where the wrong row is lit.
+       */
+      const anchor = useRef<{ rows: readonly VisibleRow[]; path: string | null }>({ rows, path: null })
+      const anchored =
+        anchor.current.rows !== rows && anchor.current.path !== null ? rowIndexFor(rows, anchor.current.path) : -1
+      const index = anchored === -1 ? cursor.index : anchored
+      const selected = rows[index]
 
       useEffect(() => {
-        host.setSelected(selected?.change)
+        if (index !== cursor.index) cursor.setIndex(index)
+        anchor.current = { rows, path: selected?.node.path ?? null }
+      })
+
+      useEffect(() => {
+        host.setSelected(selected?.node.kind === "file" ? selected.node.change : undefined)
         // Cleared on unmount, not merely replaced on the next move: a Pane the Layout has
         // tabbed away has no selection, and `FilesApi.selected()` must not keep naming the
         // row it had when it went off screen — least of all in the window between unmount
@@ -472,11 +779,7 @@ export default defineExtension({
         if (!focused) return
         // A tree that just went clean has nothing to diff, and saying so is the whole point
         // of `show(null)`: leaving the last file's patch up would claim it is still there.
-        diff.show(
-          selected === undefined
-            ? null
-            : { kind: selected.group === "staged" ? "staged" : "workingTree", path: selected.change.path },
-        )
+        diff.show(selected === undefined ? null : diffTarget(selected.node))
       }, [focused, selected])
 
       // A selection is empty only when the list is, and the empty state below already says so
@@ -487,7 +790,7 @@ export default defineExtension({
         title: "Stage / unstage file",
         hint: "stage",
         keys: "space",
-        run: () => toggleStage(selected),
+        run: () => toggleRow(selected?.node),
       })
       useCommand({
         id: "files.stage-all",
@@ -501,23 +804,69 @@ export default defineExtension({
         title: "Discard changes to file",
         hint: "discard",
         keys: "d",
-        run: () => (selected === undefined ? undefined : discard(selected.change)),
+        run: () => {
+          const node = selected?.node
+          if (node === undefined) return undefined
+          return node.kind === "file" ? discard(node.change) : discardDirectory(node)
+        },
       })
       useCommand({
         id: "files.open",
         title: "Open file in default application",
         keys: "e",
-        run: () => (selected === undefined ? undefined : openFile(selected.change)),
+        run: () => (selected === undefined ? undefined : openPath(selected.node.path)),
       })
-      useCommand({ id: "files.menu", title: "File actions", hint: "menu", keys: "x", run: () => openMenu(selected) })
+      useCommand({
+        id: "files.menu",
+        title: "File actions",
+        hint: "menu",
+        keys: "x",
+        run: () => openMenu(selected?.node),
+      })
+
+      // `return`, not `"enter"`: OpenTUI names the Enter key `return`, and core does not
+      // install the keymap's alias field, so `"enter"` would parse, register, appear in the
+      // cheat sheet, and never fire.
+      useCommand({
+        id: "files.toggle-collapse",
+        title: "Expand / collapse folder",
+        keys: "return",
+        run: () => {
+          const node = selected?.node
+          if (node === undefined || node.kind !== "directory") return
+          setFolded(node, !isFolded(node, folds, threshold))
+        },
+      })
+      useCommand({
+        id: "files.collapse-all",
+        title: "Collapse every folder",
+        keys: "-",
+        run: () => fold.set({ collapsed: new Set(directoryPaths(nodes)), expanded: new Set() }),
+      })
+      useCommand({
+        id: "files.expand-all",
+        title: "Expand every folder",
+        // Expanding has to name every directory too, rather than clearing both sets: an
+        // empty `expanded` would let the fold threshold immediately re-fold the big ones,
+        // and "expand all" that leaves something folded is a lie.
+        keys: "=",
+        run: () => fold.set({ collapsed: new Set(), expanded: new Set(directoryPaths(nodes)) }),
+      })
+      useCommand({
+        id: "files.toggle-view",
+        title: "Switch between the tree and a flat list",
+        keys: "`",
+        run: () => viewMode.set(viewMode.get() === "tree" ? "flat" : "tree"),
+      })
 
       // Outside a repository there is no working tree to be clean, and saying it is clean
       // would report a healthy, fully committed repository where there is none at all.
       if (!repository) return <text fg={theme.textMuted} content="no repository" />
 
       // A clean tree is an answer, not an absence: an empty box would read as a Pane that
-      // failed to load.
-      if (rows.length === 0) return <text fg={theme.textMuted} content="working tree clean" />
+      // failed to load. Measured on the file count rather than the row count, which is the
+      // same number only when nothing is folded.
+      if (status.files.length === 0) return <text fg={theme.textMuted} content="working tree clean" />
 
       return (
         // Not focusable: OpenTUI has a single focus slot, and laziergit's own focus model
@@ -528,20 +877,28 @@ export default defineExtension({
         // height: a list longer than the Pane makes the box taller than the Pane, which
         // paints over the Pane above it instead of scrolling inside its own frame.
         <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
-          {sections.map((section) => (
-            <box key={section.group} flexDirection="column">
-              <text fg={theme.textMuted} content={groupTitles[section.group]} />
-              {section.rows.map((row) => (
-                <FileLine
-                  key={`${row.group}\0${row.change.path}`}
-                  id={cursor.rowId(row.index)}
-                  row={row}
-                  selected={row.index === cursor.index}
-                  focused={focused}
-                />
-              ))}
-            </box>
-          ))}
+          {rows.map((row) =>
+            row.node.kind === "file" ? (
+              <FileLine
+                key={row.node.path}
+                id={cursor.rowId(row.index)}
+                node={row.node}
+                depth={row.depth}
+                selected={row.index === index}
+                focused={focused}
+              />
+            ) : (
+              <DirectoryLine
+                key={row.node.path}
+                id={cursor.rowId(row.index)}
+                node={row.node}
+                depth={row.depth}
+                folded={isFolded(row.node, folds, threshold)}
+                selected={row.index === index}
+                focused={focused}
+              />
+            ),
+          )}
         </scrollbox>
       )
     }

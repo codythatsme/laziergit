@@ -3,6 +3,8 @@ import {
   createRowSource,
   defineExtension,
   describeGitFailure,
+  isStaged,
+  isUnstaged,
   remoteWebUrl,
   toneColor,
   useCommand,
@@ -101,7 +103,9 @@ export default defineExtension({
     function resetLoss(commit: Commit, mode: ResetMode): string {
       const { status, commits } = ctx.git.state
       // Untracked files survive every reset, so counting them here would overstate the loss.
-      const dirty = status.staged.length + status.unstaged.length
+      // One entry per path is also what makes this count right: an `MM` file used to appear
+      // in both arrays and be counted as two changes about to be destroyed.
+      const dirty = status.files.filter((file) => isStaged(file) || isUnstaged(file)).length
       const dropped = Math.max(
         0,
         commits.findIndex((candidate) => candidate.oid === commit.oid),
@@ -112,8 +116,9 @@ export default defineExtension({
       // Mixed rewrites the index but not the files, so this line names a nuisance rather than
       // a loss — and naming it as one is the point: a user who staged a hunk by hand is about
       // to lose that arrangement, and nothing else on this list would have told them.
-      if (mode === "mixed" && status.staged.length > 0) {
-        losses.push(`${plural(status.staged.length, "staged change")} unstaged, though kept in the working tree`)
+      const stagedCount = status.files.filter(isStaged).length
+      if (mode === "mixed" && stagedCount > 0) {
+        losses.push(`${plural(stagedCount, "staged change")} unstaged, though kept in the working tree`)
       }
       if (dropped > 0) losses.push(`${plural(dropped, "commit")} off this branch, left only in the reflog`)
       if (losses.length === 0) return `HEAD is already at ${commit.shortOid}, so nothing is lost.`
