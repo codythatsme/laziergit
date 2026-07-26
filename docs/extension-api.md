@@ -447,22 +447,61 @@ tagged with the extension name, and routed to the log file / debug pane.
   export type ConfigValue = string | number | boolean | readonly string[];
 
   /**
-   * One declared config option. Every option MUST have a default, so extensions
-   * always work with zero configuration and `ctx.config` is total (no undefined
-   * anywhere). Descriptions surface in config.jsonc autocomplete.
+   * One declared config option, as a union over `kind`. Every option MUST have a
+   * default, so extensions always work with zero configuration and `ctx.config` is
+   * total (no undefined anywhere). Descriptions surface in config.jsonc
+   * autocomplete.
+   *
+   * A union rather than a `kind` beside an uncorrelated `default`, because the two
+   * are not independent: the flat shape let `{ kind: "number", default: "none" }`
+   * typecheck, and `ctx.config.limit` then inferred `string` while the reader
+   * handed back a `number` — the exact unsoundness this inference exists to rule
+   * out. It also had nowhere to put `min`, `max` and `values`, so both readers that
+   * need them re-declared a wider shadow type and widened into it by hand.
    */
-  export interface ConfigOption<T extends ConfigValue = ConfigValue> {
-    readonly kind: "string" | "number" | "boolean" | "enum" | "string-array";
-    readonly default: T;
+  export interface StringConfigOption {
+    readonly kind: "string";
+    readonly default: string;
     readonly description?: string;
   }
+  export interface NumberConfigOption {
+    readonly kind: "number";
+    readonly default: number;
+    readonly min?: number;
+    readonly max?: number;
+    readonly description?: string;
+  }
+  export interface BooleanConfigOption {
+    readonly kind: "boolean";
+    readonly default: boolean;
+    readonly description?: string;
+  }
+  export interface EnumConfigOption<V extends string = string> {
+    readonly kind: "enum";
+    /** Every accepted spelling. `default` is one of them, by construction. */
+    readonly values: readonly V[];
+    readonly default: V;
+    readonly description?: string;
+  }
+  export interface StringArrayConfigOption {
+    readonly kind: "string-array";
+    readonly default: readonly string[];
+    readonly description?: string;
+  }
+
+  export type ConfigOption =
+    | StringConfigOption
+    | NumberConfigOption
+    | BooleanConfigOption
+    | EnumConfigOption
+    | StringArrayConfigOption;
 
   /** An extension's config schema: option name → option. */
   export type ConfigSchema = Record<string, ConfigOption>;
 
-  /** Maps a schema to the runtime value type of `ctx.config`. */
+  /** Each setting's value type is its variant's `default` type — no conditional needed. */
   export type ConfigValues<S extends ConfigSchema> = {
-    readonly [K in keyof S]: S[K] extends ConfigOption<infer T> ? T : never;
+    readonly [K in keyof S]: S[K]["default"];
   };
 
   /**
@@ -478,22 +517,24 @@ tagged with the extension name, and routed to the log file / debug pane.
    * ```
    */
   export const option: {
-    string(opts: { default: string; description?: string }): ConfigOption<string>;
+    string(opts: { default: string; description?: string }): StringConfigOption;
+    /** Throws if the default falls outside its own `min`/`max`, or if `min` exceeds `max`. */
     number(opts: {
       default: number;
       description?: string;
       min?: number;
       max?: number;
-    }): ConfigOption<number>;
-    boolean(opts: { default: boolean; description?: string }): ConfigOption<boolean>;
+    }): NumberConfigOption;
+    boolean(opts: { default: boolean; description?: string }): BooleanConfigOption;
+    /** Throws if the default is not one of `values` — which is also a type error. */
     enum<const V extends readonly string[]>(
       values: V,
       opts: { default: V[number]; description?: string },
-    ): ConfigOption<V[number]>;
+    ): EnumConfigOption<V[number]>;
     stringArray(opts: {
       default: readonly string[];
       description?: string;
-    }): ConfigOption<readonly string[]>;
+    }): StringArrayConfigOption;
   };
 ```
 
@@ -2470,11 +2511,16 @@ a slow, failed, or retired subscriber never starves another subscription or fres
 
 ### 5.6 Config schema → typed values
 
-`option.*` builders are tiny runtime objects that (a) carry a phantom value type for
-`ConfigValues<S>` inference and (b) compile to JSON Schema for validation and config.jsonc
-editor autocomplete. Two opinionated constraints keep the types honest: every option **must
-have a default** (so `ctx.config` is total — no `| undefined` to fumble), and v1 values are
-flat scalars / string arrays (objects would force a schema language; revisit post-v1). Merge
+`option.*` builders are tiny runtime objects that (a) return one variant of the `ConfigOption`
+union, whose own `default` type is what `ConfigValues<S>` reads — no phantom parameter, and no
+way for `kind` and `default` to disagree — and (b) compile to JSON Schema for validation and
+config.jsonc editor autocomplete. Constraints live on the variants that have them (`min`/`max`
+on number, `values` on enum), which is what lets the config reader and the schema generator
+narrow on `kind` instead of each declaring a wider shadow type and widening into it. Two
+opinionated constraints keep the types honest: every option **must have a default** (so
+`ctx.config` is total — no `| undefined` to fumble), and v1 values are flat scalars / string
+arrays (objects would force a schema language; revisit post-v1). A default that its own bounds
+exclude throws at definition time rather than silently becoming the fallback nobody sees. Merge
 order is global → repo → validate → freeze; values that fail validation fall back to their
 defaults with a logged diagnostic, so bad config degrades an extension, never blocks it.
 Config is an activation-constant snapshot: editing config hot-reloads the affected extensions,

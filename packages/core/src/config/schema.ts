@@ -12,20 +12,15 @@ export interface SchemaContribution {
 
 type JsonSchema = Record<string, unknown>
 
-interface InternalConfigOption extends ConfigOption {
-  readonly min?: number
-  readonly max?: number
-  readonly values?: readonly string[]
-}
-
 function optionSchema(option: ConfigOption): JsonSchema {
-  const internal: InternalConfigOption = option
   const shared = {
-    ...(internal.description === undefined ? {} : { description: internal.description }),
-    default: internal.default,
+    ...(option.description === undefined ? {} : { description: option.description }),
+    default: option.default,
   }
 
-  switch (internal.kind) {
+  // Narrowing on `kind` is what reaches `min`/`max`/`values` — they live on the variants
+  // that have them, so there is no absent-constraint case left to invent a fallback for.
+  switch (option.kind) {
     case "string":
       return { type: "string", ...shared }
     case "boolean":
@@ -33,12 +28,12 @@ function optionSchema(option: ConfigOption): JsonSchema {
     case "number":
       return {
         type: "number",
-        ...(internal.min === undefined ? {} : { minimum: internal.min }),
-        ...(internal.max === undefined ? {} : { maximum: internal.max }),
+        ...(option.min === undefined ? {} : { minimum: option.min }),
+        ...(option.max === undefined ? {} : { maximum: option.max }),
         ...shared,
       }
     case "enum":
-      return { type: "string", enum: [...(internal.values ?? [])], ...shared }
+      return { type: "string", enum: [...option.values], ...shared }
     case "string-array":
       return { type: "array", items: { type: "string" }, ...shared }
   }
