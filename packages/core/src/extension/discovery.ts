@@ -15,6 +15,13 @@ export const extensionScopePrecedence = ["bundled", "global", "repo"] as const
 
 export type ExtensionSourceScope = (typeof extensionScopePrecedence)[number]
 
+/**
+ * The scopes whose directories belong to the user rather than to the installation. laziergit
+ * creates them and publishes authoring support into them; doing either inside the bundled
+ * directory would be writing into its own install tree.
+ */
+export const userWritableExtensionScopes = ["global", "repo"] as const satisfies readonly ExtensionSourceScope[]
+
 /** Position in {@link extensionScopePrecedence}; higher shadows lower. */
 export function extensionScopeRank(scope: ExtensionSourceScope): number {
   return extensionScopePrecedence.indexOf(scope)

@@ -38,6 +38,7 @@ import {
   extensionScopePrecedence,
   extensionScopeRank,
   extensionTreeFingerprint,
+  userWritableExtensionScopes,
   type ExtensionCandidate,
   type ExtensionDirectories,
   type ExtensionDiscoveryFailure,
@@ -52,6 +53,7 @@ import { ImportCopyCache, type ImportCopyLease } from "./import-copy-cache"
 import { createNotifier } from "./notifier"
 import { PaneHost } from "./pane-host"
 import { ThemeStore } from "./theme"
+import { publishTypeEnvironment } from "./type-environment"
 
 export type ExtensionLoadState = "loading" | "active" | "failed" | "shadowed"
 
@@ -307,10 +309,16 @@ export class ExtensionKernel {
     // The two directories a user drops Extensions into, made so they are always there to drop
     // into. The bundled directory is deliberately absent: it ships inside the installation, so
     // creating one would only invent an empty directory in someone's install tree.
-    await Promise.all([
-      mkdir(this.#directories.global, { recursive: true }),
-      mkdir(this.#directories.repo, { recursive: true }),
-    ])
+    const userDirectories = userWritableExtensionScopes.map((scope) => this.#directories[scope])
+    await Promise.all(userDirectories.map((directory) => mkdir(directory, { recursive: true })))
+    if (this.#stopped) return
+
+    // Before the first fingerprint, so the files this writes are part of the tree the reload
+    // starts from rather than an edit the next poll mistakes for the author's.
+    await publishTypeEnvironment({
+      directories: userDirectories,
+      diagnose: ({ path, error }) => this.#diagnose({ phase: "config", message: `${path}: ${error.message}`, error }),
+    })
     if (this.#stopped) return
 
     await this.#importCopies.sweepStale()
