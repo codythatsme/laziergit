@@ -6,7 +6,7 @@ import {
   registerNeovimDisambiguation,
 } from "@opentui/keymap/addons"
 
-import type { CommandEntry } from "../extension/command-host"
+import { keyStroke, type CommandEntry } from "../extension/command-host"
 import { normalizeError, type Diagnostics } from "../extension/diagnostics"
 
 /**
@@ -106,6 +106,26 @@ export function installKeymap<TTarget extends object, TEvent extends KeymapEvent
  */
 type LayerScope = { readonly kind: "global" } | { readonly kind: "pane" | "capture"; readonly paneId: string }
 
+/**
+ * One key that would fire if it were pressed right now, and what it would do.
+ *
+ * Derived from the same three pieces of state the layer matchers read, in the same object,
+ * so the hint bar cannot claim a key the keymap would route elsewhere. That is the whole
+ * reason this lives here rather than in a display-side host: "which layers are live" is one
+ * question with one answer, and a second implementation of it would drift the first time a
+ * band was added.
+ */
+export interface LiveBinding {
+  readonly id: string
+  /** As its author spelled it — the first of the Command's keys no higher band has claimed. */
+  readonly key: string
+  readonly title: string
+  /** {@link CommandSpec.hint}: the short label, or undefined for a Command that stays off the bar. */
+  readonly hint: string | undefined
+}
+
+const noBindings: readonly LiveBinding[] = Object.freeze([])
+
 function scopeOf(entry: CommandEntry): LayerScope {
   if (entry.pane === undefined) return { kind: "global" }
   return { kind: entry.capture ? "capture" : "pane", paneId: entry.pane }
@@ -132,6 +152,8 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   readonly #execute: (id: string) => void
   readonly #layers: (() => void)[] = []
   readonly #matcherListeners = new Set<() => void>()
+  readonly #liveListeners = new Set<() => void>()
+  #live: readonly LiveBinding[] = noBindings
   #entries: readonly CommandEntry[] = []
   #focusedPaneId: string | null = null
   #capturingPane: string | null = null
@@ -145,9 +167,21 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
     this.#execute = execute
   }
 
+  /**
+   * The keys that would fire right now, in registration order. Read by the hint bar; a
+   * {@link ExternalStore}, so the bound arrow properties are load-bearing.
+   */
+  getSnapshot = (): readonly LiveBinding[] => this.#live
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.#liveListeners.add(listener)
+    return () => this.#liveListeners.delete(listener)
+  }
+
   /** Rebuilds layers from the catalog. Bursts of registrations coalesce into one rebuild. */
   sync(entries: readonly CommandEntry[]): void {
     this.#entries = entries
+    this.#publishLive()
     if (this.#stopped || this.#rebuildScheduled) return
     this.#rebuildScheduled = true
     queueMicrotask(() => {
@@ -195,8 +229,69 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
 
   stop(): void {
     this.#stopped = true
+    this.#live = noBindings
     this.#clear()
     this.#matcherListeners.clear()
+    this.#liveListeners.clear()
+  }
+
+  /**
+   * Which layers are live, highest band first — the one answer both consumers read.
+   *
+   * The layer matchers ask "is *this* scope live"; the hint bar asks "which scopes are live,
+   * and in what order". They are the same question, and writing it twice is how a bar comes
+   * to advertise a key the keymap routes elsewhere — so it is written once, here, and the
+   * matcher below is a membership test against it.
+   *
+   * A capture suppresses everything else, which is the point of the band: while a Pane owns
+   * the keys, its capture Commands are the only ones that answer. Otherwise the focused
+   * Pane's layer sits above the global one, exactly as their priorities say.
+   */
+  #liveScopes(): readonly LayerScope[] {
+    if (this.#modalOpen) return []
+    const capturing = this.capturingPaneId
+    if (capturing !== null) return [{ kind: "capture", paneId: capturing }]
+    const focused = this.#focusedPaneId
+    const global: LayerScope = { kind: "global" }
+    return focused === null ? [global] : [{ kind: "pane", paneId: focused }, global]
+  }
+
+  /**
+   * The live bindings, resolved against those bands in the order the keymap consults them.
+   *
+   * A stroke the focused Pane claims shadows the global Command that also claims it — the
+   * stash Pane's `p` (pop) over the global `p` (pull) — because that is what the priority
+   * bands do at dispatch, and a bar that said "pull" while `p` popped a stash would be
+   * worse than no bar. Within a band the catalog has already resolved conflicts, so the
+   * only shadowing left to apply is between them.
+   */
+  #resolveLive(): readonly LiveBinding[] {
+    const scopes = this.#liveScopes()
+    if (scopes.length === 0) return noBindings
+
+    const claimed = new Set<string>()
+    const live: LiveBinding[] = []
+    for (const scope of scopes) {
+      for (const entry of this.#entries) {
+        if (scopeKey(scopeOf(entry)) !== scopeKey(scope)) continue
+        const key = entry.keys.find((candidate) => !claimed.has(keyStroke(candidate)))
+        if (key === undefined) continue
+        claimed.add(keyStroke(key))
+        live.push({ id: entry.id, key, title: entry.title, hint: entry.hint })
+      }
+    }
+    return Object.freeze(live)
+  }
+
+  #publishLive(): void {
+    this.#live = this.#stopped ? noBindings : this.#resolveLive()
+    for (const listener of Array.from(this.#liveListeners)) {
+      try {
+        listener()
+      } catch {
+        // A hint-bar observer cannot change which Pane owns the keyboard.
+      }
+    }
   }
 
   #rebuild(): void {
@@ -238,15 +333,11 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   }
 
   #matcher(scope: LayerScope): ReactiveMatcher {
+    const key = scopeKey(scope)
     return {
       get: () => {
-        if (this.#modalOpen) return false
-        const capturing = this.capturingPaneId
-        // A capture layer answers only to its own Pane's capture; every other layer is
-        // suppressed for as long as any capture is in force.
-        if (scope.kind === "capture") return capturing === scope.paneId
-        if (capturing !== null) return false
-        return scope.kind === "global" || this.#focusedPaneId === scope.paneId
+        // Membership, not a second copy of the rule — see {@link liveScopes}.
+        return this.#liveScopes().some((live) => scopeKey(live) === key)
       },
       subscribe: (onChange) => {
         this.#matcherListeners.add(onChange)
@@ -264,6 +355,7 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   }
 
   #invalidate(): void {
+    this.#publishLive()
     for (const listener of Array.from(this.#matcherListeners)) {
       try {
         listener()

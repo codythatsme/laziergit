@@ -176,13 +176,22 @@ declare module "laziergit" {
   /**
    * A key or key sequence in @opentui/keymap grammar:
    *
-   * - single strokes: `"c"`, `"ctrl+r"`, `"escape"`, `"enter"`, `"tab"`. A bare letter
+   * - single strokes: `"c"`, `"ctrl+r"`, `"escape"`, `"return"`, `"tab"`. A bare letter
    *   binds its *lowercase* stroke — the parser lowercases the key name when it matches —
    *   so `"D"` binds plain `d`, **not** a shifted `D`. Write `"shift+d"` for the shifted
    *   stroke. `"D"` and `"d"` are therefore one and the same binding (see the diagnostic note below).
-   * - platform-aware modifier: `"mod+p"` — ctrl everywhere, upgraded to cmd on
+   *
+   *   The Enter key is `"return"`. `"enter"` is a *different* stroke name — the keymap
+   *   knows both, and core does not install the alias field that would join them — so
+   *   `"enter"` parses, registers, and appears in the cheat sheet while never firing.
+   *   It is the one spelling that fails silently instead of loudly, which is why it is
+   *   named here rather than left to be discovered.
+   * - platform-aware modifier: `"mod+s"` — ctrl everywhere, upgraded to cmd on
    *   macOS terminals whose keyboard protocol can report it (kitty keyboard
-   *   protocol); elsewhere on macOS it stays ctrl
+   *   protocol); elsewhere on macOS it stays ctrl. Reporting cmd and *delivering*
+   *   it are different things — a terminal is free to keep a cmd stroke for
+   *   itself, and several do — so no core or bundled default is spelled with
+   *   `mod+` alone (ADR-0004). Yours may be; just pair it with a plain stroke.
    * - multi-key sequences, concatenated: `"gg"`, `"dd"`, `"go"` — but named keys win over
    *   concatenation: a spelling that begins with a named key (`"gt"`, `"up"`, `"f5"`)
    *   parses as that single named stroke, not a sequence
@@ -638,31 +647,78 @@ tagged with the extension name, and routed to the log file / debug pane.
     readonly parents: readonly string[];
   }
 
-  export type ChangeKind =
-    | "added"
-    | "modified"
-    | "deleted"
-    | "renamed"
-    | "copied"
-    | "typechange"
-    | "untracked"
-    | "conflicted";
+  /**
+   * What one side of the index did to a path — porcelain v2's `X` and `Y` letters, named.
+   * `X` is HEAD→index, `Y` is index→working tree; they measure different comparisons, which
+   * is why one path can be `MM` (ADR-0005).
+   */
+  export type ChangeKind = "added" | "modified" | "deleted" | "renamed" | "copied" | "typechange";
 
-  export interface FileChange {
-    /** Path relative to the repo root. */
-    readonly path: string;
-    /** Original path for renames/copies, otherwise null. */
-    readonly previousPath: string | null;
-    readonly kind: ChangeKind;
-  }
+  /** The working-tree side reports one thing the index side cannot: a path git never heard of. */
+  export type WorktreeChange = ChangeKind | "untracked";
+
+  /** What one side of a merge did — porcelain v2's unmerged `XY`, one letter each. */
+  export type ConflictSide = "added" | "deleted" | "modified";
+
+  /**
+   * One path, one entry. A union rather than four loose fields, because an unmerged path has
+   * no index-versus-working-tree pair to report at all.
+   *
+   * Invariant on the `"changed"` arm: at least one of `index` / `worktree` is non-null.
+   */
+  export type FileChange =
+    | {
+        readonly kind: "changed";
+        /** Path relative to the repo root. */
+        readonly path: string;
+        /** Original path for renames/copies the index holds, otherwise null. */
+        readonly previousPath: string | null;
+        /** HEAD → index. `null` when the index matches HEAD. */
+        readonly index: ChangeKind | null;
+        /** Index → working tree. `null` when the working tree matches the index. */
+        readonly worktree: WorktreeChange | null;
+      }
+    | {
+        readonly kind: "conflicted";
+        readonly path: string;
+        readonly previousPath: null;
+        readonly ours: ConflictSide;
+        readonly theirs: ConflictSide;
+      };
 
   export interface WorkingTreeStatus {
-    readonly staged: readonly FileChange[];
-    readonly unstaged: readonly FileChange[];
-    readonly untracked: readonly FileChange[];
-    readonly conflicted: readonly FileChange[];
+    /** One entry per path git reported, ordered by path. */
+    readonly files: readonly FileChange[];
     readonly isClean: boolean;
   }
+
+  /**
+   * The four questions {@link WorkingTreeStatus}'s old four arrays answered, over the one
+   * list that replaced them.
+   *
+   * Predicates rather than arrays or getters: the store publishes `status` by structural
+   * comparison and keeps unchanged parts referentially stable, so a derived array hanging
+   * off the status object would be rebuilt on every snapshot and defeat that identity.
+   *
+   * **Memoise where you filter.** These compose into `useGit` selectors the wrong way round:
+   *
+   * ```ts
+   * // Never — a fresh array every snapshot, so `Object.is` never holds and the Pane spins.
+   * const staged = useGit((state) => state.status.files.filter(isStaged));
+   *
+   * // Instead — select the slice, derive from it.
+   * const files = useGit((state) => state.status.files);
+   * const staged = useMemo(() => files.filter(isStaged), [files]);
+   * ```
+   *
+   * Counts are safe inline, because a number compares by value. There is deliberately no
+   * `isTracked`: `git rm --cached` on a file still on disk is both staged and untracked, so
+   * any single boolean would have to lie about one of them.
+   */
+  export function isStaged(change: FileChange): boolean;
+  export function isUnstaged(change: FileChange): boolean;
+  export function isUntracked(change: FileChange): boolean;
+  export function isConflicted(change: FileChange): boolean;
 
   export interface StashEntry {
     /** Position in the stash list (stash@{index}). */
@@ -990,14 +1046,32 @@ tagged with the extension name, and routed to the log file / debug pane.
 
 ```ts
   /**
-   * A Command is the single unit behind keybindings, the command palette, and
-   * the cheat sheet ("?"). Registering one thing gives you all three.
+   * A Command is the single unit behind keybindings, the command palette, the
+   * cheat sheet ("?"), and the hint bar along the bottom of the screen.
+   * Registering one thing gives you all four.
    */
   export interface CommandSpec<TName extends string = string> {
     /** Unique id, compile-checked to start with your extension name ("gh-workflows.refresh"). */
     id: ScopedId<TName>;
     /** Human label — palette row and cheat-sheet text. */
     title: string;
+    /**
+     * Short label for the **hint bar** — "checkout", not "Check out branch".
+     * Its *presence* is the opt-in: a command without one is still bound, still
+     * in the palette, still in the cheat sheet, and simply stays off the bar.
+     *
+     * The bar shows what you can press *here*: the focused pane's commands in
+     * registration order, then any global commands whose key that pane has not
+     * claimed (so the stash pane's `p` reads "pop" while the global `p` still
+     * means pull everywhere else), and during a {@link useKeyCapture} it
+     * collapses to that pane's `capture` commands — the same bands the keymap
+     * dispatches through, so the bar cannot name a key that would do something
+     * else. It clips rather than wrapping, so put what matters first.
+     *
+     * Leave it off for anything that is on every screen in every mode: `tab`,
+     * the palette and `q` are core's, and core does not hint them either.
+     */
+    hint?: string;
     /** Default binding(s). Users override per-command in config. Omit for palette-only. */
     keys?: KeySpec | readonly KeySpec[];
     /**
@@ -1015,6 +1089,7 @@ tagged with the extension name, and routed to the log file / debug pane.
     pane?: string;
     /** Hide from the palette (still bindable & in the cheat sheet). For j/k-style motions. */
     hidden?: boolean;
+
     /**
      * Bind `keys` while {@link pane} is capturing raw keyboard input
      * ({@link useKeyCapture}) *instead of* while it is merely focused — the way
@@ -1033,7 +1108,7 @@ tagged with the extension name, and routed to the log file / debug pane.
   }
 
   export interface CommandRegistry<TName extends string = string> {
-    /** Register a command (keybinding + palette entry + cheat-sheet row in one). */
+    /** Register a command (keybinding + palette entry + cheat-sheet row + hint in one). */
     register(spec: CommandSpec<TName>): Disposable;
 
     /**
@@ -1425,6 +1500,16 @@ autocompletes every prop; this table only orients. The ones the examples lean on
 Anything past this table — truncation, alignment, borders — is a prop on these same
 intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
 
+**One row is one line.** `<text>` defaults to `wrapMode: "word"`, so a row wider than its
+column reflows into two or three lines and a list stops being a list — one long branch name
+pushes every row below it down, and the cursor no longer lands where the eye does. Every
+bundled row therefore passes `wrapMode="none"`, which clips at the column edge, and so should
+yours. There is no width to truncate against — a pane cannot measure its own column, only its
+{@link ScrollView.viewportRows} — so clipping is the whole of the mechanism, and it clips from
+the **right**: order a row most-important-first and it degrades by losing the part the reader
+can most afford. What a clipped row cannot say belongs in the detail view, which is what
+`DiffApi.show` and its `branch` target are for (§1.11).
+
 ### 1.9 Menus — data, so anyone can splice
 
 ```ts
@@ -1580,6 +1665,12 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
    * {@link createCell}: `set` from activate, `use()` in the component — or own
    * the polling entirely inside the component, as ci-status does (§4.2).
    * Render null to hide the segment. Keep it to one row of text.
+   *
+   * The bottom row is shared: core writes the hint bar for the focused pane
+   * along its left ({@link CommandSpec.hint}), and segments follow. `"right"`
+   * is therefore where a segment has room — it is where the bundled `sync`
+   * segment puts the branch and its divergence — and a left-aligned segment
+   * competes with the hints for the same space.
    */
   export interface StatusSegmentSpec<TName extends string = string> {
     /** Users order/hide segments by this id in config. Compile-checked prefix. */
@@ -1710,12 +1801,16 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
      * replaces the objects beneath it.
      *
      * Make it unique across the rows this pane shows, and note that "unique"
-     * is a claim about the ROW TYPE, not about the screen: a path modified in
-     * both the index and the working tree is one {@link FileChange} value
-     * drawn on two lines, so `files` keys on all three of its fields (kind,
-     * previousPath, path) and renders the two lines from one object. Two
-     * *different* objects sharing a key would evict each other on every pass and
-     * the merged decoration would never settle.
+     * is a claim about the ROW TYPE, not about the screen. Two *different*
+     * objects sharing a key would evict each other on every pass and the merged
+     * decoration would never settle.
+     *
+     * Prefer the row's most stable name, not its state: `branches` keys on the
+     * branch name, `stash` on the entry's index, and `files` on `change.path`
+     * alone — the model gives a path exactly one entry (ADR-0005), so the path
+     * *is* the identity. Folding state into the key would move the slot every
+     * time the row changed, discarding a decoration the provider would only
+     * recompute to the same answer.
      */
     key(row: Row): string;
   }
@@ -1736,13 +1831,14 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
     useDecoration(row: Row): RowDecoration | undefined;
   }
 
-  // The eight Bundled Extensions are `status`, `files`, `branches`, `commits`,
-  // `stash`, `diff`, `commit-flow`, and `sync` (push/pull/fetch). Every one of
-  // the eight declares an `.actions` menu id below — the universal splice seam.
-  // The four list extensions additionally export RowSource APIs; `diff` and
-  // `commit-flow` export the small APIs beneath. `status` and `sync` export no
-  // API: they have no rows and nothing to consume — their seam IS their menu,
-  // and an ExtensionApis entry exists only where there is an API worth calling.
+  // The seven Bundled Extensions are `files`, `branches`, `commits`, `stash`,
+  // `diff`, `commit-flow`, and `sync` (push/pull/fetch, and the repository
+  // itself). Every one of the seven declares an `.actions` menu id below — the
+  // universal splice seam. The four list extensions additionally export
+  // RowSource APIs; `diff` and `commit-flow` export the small APIs beneath.
+  // `sync` exports no API: it has no rows and nothing to consume — its seam IS
+  // its menu, and an ExtensionApis entry exists only where there is an API
+  // worth calling.
 
   export type BranchesApi = RowSource<Branch>;
   export type FilesApi = RowSource<FileChange>;
@@ -1755,10 +1851,17 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
    * `ref`, because `{ kind: "commit", ref: null }` was representable and
    * meant nothing: the diff pane carried a runtime branch for a state no
    * caller could sensibly build. `path` narrows any of them to one file.
+   *
+   * `branch` and `commit` fetch identically — a branch name is a ref like any
+   * other — and differ only in the context the pane prints above the patch.
+   * That difference is the whole point of the third kind: list rows are one
+   * line each and clip (§1.8), so the name that ran off the right edge has to
+   * be readable somewhere, and `{ kind: "commit", ref: tip }` can only ever
+   * name the commit.
    */
   export type DiffTarget =
     | { readonly kind: "workingTree" | "staged"; readonly path: string | null }
-    | { readonly kind: "commit" | "stash"; readonly ref: string; readonly path: string | null };
+    | { readonly kind: "commit" | "stash" | "branch"; readonly ref: string; readonly path: string | null };
 
   /** Exported API of the bundled diff extension. */
   export interface DiffApi {
@@ -1804,12 +1907,15 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
     "files.actions": FileChange;
     "commits.actions": Commit;
     "stash.actions": StashEntry;
-    /** Repo-level actions, opened from the status pane. */
-    "status.actions": GitState;
     /** The commit transient — the premier Magit-precedent splice target. */
     "commit-flow.actions": WorkingTreeStatus;
-    /** Push/pull/fetch actions. */
-    "sync.actions": Head;
+    /**
+     * Push/pull/fetch, plus the repository-level actions (open in browser,
+     * copy root). The whole state rather than just `Head`, because "open *this
+     * repository*" needs the remotes and a narrower target is what kept those
+     * actions in a pane of their own for as long as there was one.
+     */
+    "sync.actions": GitState;
     /** Actions on whatever the diff pane is showing. */
     "diff.actions": DiffTarget;
   }
@@ -1866,20 +1972,20 @@ effects rather than a wrapper around the Promise surface, so both faces drive th
 Outside a git repository laziergit still starts: the store serves an empty {@link GitState},
 the poll does nothing, and every write fails with a {@link GitError} saying so.
 
-§1.11 is live too, as of M4: the eight Bundled Extensions are real features, not placeholders.
+§1.11 is live too, as of M4: the seven Bundled Extensions are real features, not placeholders.
 The bundled *scope* is a directory discovered, imported, and shadowed exactly like a user one,
-and the eight inside it register seven Panes, two status line segments, forty-six Commands and
-eight menus — every one of them through this document and nothing else, and not one of them
+and the seven inside it register six Panes, one status line segment, thirty-eight Commands and
+seven menus — every one of them through this document and nothing else, and not one of them
 losing a key to another (§1.7's last-wins resolution reports no conflict on a real boot). The `*.actions` ids are
 menus with items behind them, so `ctx.menus.extend("commits.actions", …)` splices into something
 that exists; the four list extensions export `RowSource` APIs whose decoration providers are
 called for every row on screen; `DiffApi.show` moves the diff pane and `CommitFlowApi.begin`
 opens the editor and resolves with what the user did. Nothing in `extensions/` imports anything
 but `"laziergit"`, `"react"` and `"@opentui/react"` — ADR-0001 holds by construction, which is
-what makes the eight a fair test of this API rather than a demonstration of a private one.
+what makes the seven a fair test of this API rather than a demonstration of a private one.
 
 Building them changed the API in five places, all of them above. `ctx.copy` (§1.3) arrived
-because three of the eight wanted to copy an oid, a path, and a repository root and the only
+because three of them wanted to copy an oid, a path, and a repository root and the only
 alternative was per-platform shelling in every extension that wants it. `DiffTarget` became a
 union and `DiffApi.show` began accepting `null`, because the flat record let a `commit` target
 carry no ref and the diff pane could not be told its list had gone empty. `CommitFlowApi.begin`
@@ -1895,7 +2001,7 @@ The two encodings §5.12 used to name as gaps are also gone, and the git model i
 it: `Head` is a discriminated union, so an unborn repository has no oid to misread and a
 detached one has no upstream to look for, and `UpstreamInfo.gone` says outright that the
 remote deleted the branch instead of reporting it as zero divergence. Both landed early in M4,
-before the eight, where the Bundled Extensions put the first real weight on these types — the
+where the Bundled Extensions put the first real weight on these types — the
 branches Pane has to draw the very distinctions the old shapes flattened.
 
 M4 also added the surfaces the Bundled Extensions needed and could not build for
@@ -1908,7 +2014,7 @@ every other binding without introducing a raw key handler beside the Command uni
 public API rather than core-private for the same reason: a third-party list pane or editor
 pane must be able to build exactly what the bundled ones did.
 
-Reviewing the eight closed the gap this note used to leave open — **nothing public could
+Reviewing them closed the gap this note used to leave open — **nothing public could
 scroll a pane's viewport** — and added three more surfaces for the same reason as the four
 above. `useScrollView` and `ListCursor.scrollRef` (§1.8) are the scroll seam: OpenTUI's
 `<scrollbox>` scrolls only for a renderable holding the terminal's focus, and laziergit gives
@@ -2072,8 +2178,8 @@ User config for it, in `~/.config/laziergit/config.jsonc` (schema-validated, aut
 ```jsonc
 {
   "extensions": { "gh-workflows": { "limit": 30 } },
-  "layout": { "columns": [["status", "files", "branches", "gh-workflows"], ["diff"]] },
-  "keybindings": { "gh-workflows.open-run": "enter" } // user override beats the default "o"
+  "layout": { "columns": [["files", "branches", "gh-workflows"], ["diff"]] },
+  "keybindings": { "gh-workflows.open-run": "return" } // user override beats the default "o"
 }
 ```
 
@@ -2194,6 +2300,10 @@ These are the other examples written before the types were fixed (plus `open-rem
 Each is complete and runnable as shown.
 
 ### 4.1 branch-age — row decorations only
+
+The bundled rows print no age of their own — one line per row leaves no column for it, and
+"how old" is a question most sessions never ask (§1.8). That makes this the demonstration
+that a decoration adds back exactly what core left out, for the people who do ask.
 
 ```ts
 import { defineExtension } from "laziergit";
@@ -2580,9 +2690,17 @@ most keys to explain.
 
 The cheat sheet follows from the same principle: it answers "what can I press", so while a
 pane captures it collapses to that pane's capture commands and nothing else — listing `q` as
-"Quit" while `q` types the letter q would be a lie. Otherwise capture commands sit in their
-own section per pane, after that pane's ordinary keys, which is where you read them: before
-opening the editor, since `?` is inert once you are inside it.
+"Quit" while `q` types the letter q would be a lie. Otherwise it is the **focused pane's**
+sheet: that pane's ordinary keys, then its capture commands (which is where you read them —
+before opening the editor, since `?` is inert once you are inside it), then the globals last.
+Other panes are not listed at all. A sheet that enumerated every live pane answered a
+question nobody asked — most of it was keys that do nothing until you tab elsewhere — and the
+globals trail rather than lead because they are the same on every screen, but the pane-jump
+keys are global commands and this is the only place they are written down.
+
+Unlike the palette, the sheet keeps `hidden` commands: `j`/`k`/`g` are exactly what someone
+opening it wants confirmed, and the compact answer for everything else is now the hint bar
+(§1.7), which leaves the sheet free to be the complete one.
 
 ### 5.9 Error containment
 
@@ -2749,13 +2867,16 @@ consumer could hand back to git; `Head` is now a union whose `unborn` variant si
 oid, and which also drops the upstream a detached HEAD never had. A **gone upstream** used
 to collapse to `{ ahead: 0, behind: 0 }`, identical to a perfectly in-sync branch, which is
 the one thing a branches Pane most wants to tell apart; `UpstreamInfo.gone` now says it.
+(The branches Pane spends the flag on *colour* rather than a word — one-line rows have no
+column to spare for text that is usually absent — but that is a rendering choice the flag
+made available; without it there is nothing to render.)
 Both were cheaper to change while nothing depended on the old shapes, which is why they went
 in with the first Extensions rather than after them.
 
 **No repository** was the third, and it is the one that shows what the ledger is for. It
 used to be an unborn HEAD carrying `branch: ""` — a name no refname can have, so unambiguous
 in the same way `oid === ""` was, and wrong in the same way. By the end of M4 five of the
-eight Bundled Extensions decoded that empty string at six sites under three different names,
+then-eight Bundled Extensions decoded that empty string at six sites under three different names,
 two of them having built a local union purely to repair it, and `commit-flow` was reading
 `kind === "unborn"` to mean "no commit to amend" — correct only by accident, because the
 state it actually needed to exclude was hiding inside the variant it tested. `Head` now has
@@ -2764,32 +2885,44 @@ the cost curve, not the encoding: the first two were fixed while nothing depende
 and cost nothing; this one waited until six things did, and the repair had to reach into
 five Extensions and a semantic bug none of the types could see.
 
-Two remain, deliberately:
+Both of the two that used to remain here are now closed, by the same change (ADR-0005).
 
-- **Which side of a conflict.** Porcelain v2 spells an unmerged path as `UU`, `AA`, `DU`,
-  `UD`, `AU`, `UA`, or `DD` — both-modified, both-added, deleted-by-us, and so on —
-  and `ChangeKind` has one `"conflicted"` value to put it in, so the store keeps the path and
-  drops which side did what. That is enough for v1's conflict UX (below) and not enough for
-  the lazygit-grade one: "both added" and "modified by us, deleted by them" want different
-  actions offered. The fix is a variant on `FileChange` carrying the pair, and it should land
-  with the conflicts UI rather than ahead of it.
+**Which side of a conflict** and **which side of the index a `FileChange` is on** were one
+gap wearing two hats. Porcelain v2 spells an unmerged path as `UU`, `AA`, `DU`, and so on,
+and `ChangeKind` had one `"conflicted"` value to put it in; separately, a path modified in
+both the index and the working tree (`MM`) produced *two* `FileChange` values in two arrays,
+each carrying one `kind`, with the group heading the row was drawn under as the only record
+of which side it described. Both were the same discarded fact: git's `XY` pair.
 
-- **Which side of the index a `FileChange` is on.** A path modified in both the index and the
-  working tree (`MM`) is one {@link FileChange} value — same kind, path, previousPath — that
-  the `files` pane draws twice, once under Staged and once under Unstaged. The pane knows
-  which is which from the *group* it drew the row under, but {@link FilesApi} is a
-  `RowSource<FileChange>`, so a *decorating* extension sees only the change and cannot tell the
-  staged line from the unstaged one — and the two lines necessarily share one decoration slot
-  (see {@link RowSourceOptions.key}). That is deliberate for v1: a decoration ("PR #42", "90d")
-  is a property of the path, not of which index side it sits on, so nothing bundled wants the
-  distinction. The fix, when something does, is the same shape as the conflict one — a row type
-  that carries the side — and it belongs with the first consumer that needs it, not ahead of it.
+`FileChange` is now one entry per path carrying both columns — `index` and `worktree` on the
+`"changed"` arm, `ours` and `theirs` on the `"conflicted"` one. The files Pane draws the pair
+as two status columns and needs no headings, which is what let it become a folder tree; a
+decorating Extension can now tell the staged side from the unstaged one, and the two lines
+that used to share a decoration slot are one line.
 
-**Conflicts in v1: show and delegate.** The bundled `files` extension surfaces conflicted
-paths as their own group, offers "open in editor" and "stage resolved" from `files.actions`,
+This one waited for its consumer and was cheaper for it — but only just. The conflict half
+was previously written here as something that "should land with the conflicts UI rather than
+ahead of it"; the two-column render turned out to be the consumer, because a row that can
+only print one glyph for a conflict discards which side did what on precisely the rows where
+that is the entire question.
+
+One remains, deliberately:
+
+- **A directory row is not a `FileChange`.** The files Pane draws folder rows, and
+  {@link FilesApi} is a `RowSource<FileChange>` — so `FilesApi.selected()` answers
+  `undefined` while the cursor is on a folder, a `decorateRows` provider is never handed one,
+  and the folder action menu is built ad-hoc rather than registered, so nothing can splice
+  into it. That is deliberate for v1: a decoration ("PR #42", "90d") is a property of a file,
+  and the alternative — widening `files.actions`' payload to a union — would make every
+  third-party splice handle a case it never asked for. The fix, when something needs it, is a
+  row-type union in the public API, and it belongs with its first consumer.
+
+**Conflicts in v1: show and delegate.** The bundled `files` extension draws conflicted paths
+with git's own `UU` / `AA` / `DU` pair wherever they sit in the tree, marks every directory
+above them `!`, offers "open in editor" and "stage resolved" from `files.actions`,
 and otherwise stays out of the way — resolution happens in the user's editor or `git
 mergetool`. It is deliberately less than lazygit, which renders a pick-ours / pick-theirs /
-pick-both hunk picker; that is post-v1 (PLAN.md) and is the work that will want both the
-conflict-kind variant above and the patch-level staging surface §5.11 leaves out. Nothing here
+pick-both hunk picker; that is post-v1 (PLAN.md) and is the work that will want the
+patch-level staging surface §5.11 leaves out. Nothing here
 is privileged: a third-party extension can register a conflicts Pane and splice into
 `files.actions` today, on exactly the API the bundled one uses.

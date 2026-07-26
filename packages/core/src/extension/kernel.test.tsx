@@ -764,6 +764,27 @@ describe("Application shell", () => {
     expect(testGlobals().__laziergitThemeMounts).toBe(1)
   })
 
+  it("spells no core default with `mod+`, which a terminal is free to keep for itself", async () => {
+    const harness = await createHarness()
+
+    // ADR-0004, as a standing guard rather than a one-time fix: `mod+` resolves to cmd
+    // wherever the keyboard protocol can *report* it, which says nothing about whether the
+    // terminal will *deliver* it — and the binding that opens the palette is exactly the one
+    // a terminal is likeliest to have claimed.
+    const modBound = harness.kernel.commands
+      .getSnapshot()
+      // Every key, not any: a `mod+` spelling paired with a plain one is the sanctioned
+      // form. An unbound Command has nothing to lose, which `every` would call compliant.
+      .filter((entry) => entry.keys.length > 0 && entry.keys.every((key) => /(^|[+,\s])mod\s*\+/i.test(key)))
+      .map((entry) => `${entry.id}: ${entry.keys.join(" / ")}`)
+
+    expect(modBound).toEqual([])
+    expect(harness.kernel.commands.getSnapshot().find((entry) => entry.id === "app.palette")?.keys).toEqual([
+      "ctrl+p",
+      ":",
+    ])
+  })
+
   it("contains a thrown Pane without crashing the app", async () => {
     const harness = await createHarness()
     const errorMessages: string[] = []
@@ -783,6 +804,7 @@ describe("Application shell", () => {
             activate(ctx) {
               function ToyPane() { throw new Error("toy render exploded") }
               ctx.panes.register({ id: "toy", title: "Toy", component: ToyPane })
+              ctx.commands.register({ id: "toy.act", title: "Act", hint: "act", keys: "z", pane: "toy", run: () => undefined })
             },
           })
         `,
@@ -791,7 +813,9 @@ describe("Application shell", () => {
       await renderApp(harness)
       expect(harness.setup.captureCharFrame()).toContain("Pane crashed")
       expect(harness.setup.captureCharFrame()).toContain("toy render exploded")
-      expect(harness.setup.captureCharFrame()).toContain("mod+p palette")
+      // The rest of the shell is still drawing: the Pane's own hints are on the bottom row
+      // even though the Pane above them threw.
+      expect(harness.setup.captureCharFrame()).toContain("z act")
       expect(errorMessages.some((message) => message.includes("not wrapped in act"))).toBe(false)
     } finally {
       errorSpy.mockRestore()

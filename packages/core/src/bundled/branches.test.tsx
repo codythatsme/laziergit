@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test"
+import { RGBA } from "@opentui/core"
 import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { act } from "react"
@@ -103,7 +104,7 @@ async function press(harness: Harness, action: () => void): Promise<void> {
  *
  * Startup focus is the Layout's first cell — not whichever Extension activated first — so
  * a test that needs the branches Pane *unfocused* writes a Layout that puts the diff Pane
- * in front of it. The branches case still presses `3`: it is the key a user reaches for,
+ * in front of it. The branches case still presses `2`: it is the key a user reaches for,
  * and one of the things under test.
  *
  * `"tabbed"` puts both Panes in one cell, where `]` hides — and therefore unmounts — the one
@@ -122,7 +123,7 @@ async function start(harness: Harness, focus: "branches" | "diff" | "tabbed" = "
     writeFile(harness.configFiles.repo, `{ "layout": { "columns": ${columns} } }`),
   ])
   await renderApp(harness)
-  if (focus === "branches") await press(harness, () => harness.setup.mockInput.pressKey("3"))
+  if (focus === "branches") await press(harness, () => harness.setup.mockInput.pressKey("2"))
 }
 
 /** Waits for work a keypress started — a git write, then the refresh and render behind it. */
@@ -348,8 +349,15 @@ describe("the branch menu", () => {
     expect(frame(harness)).toContain("Push, setting upstream")
 
     await press(harness, () => harness.setup.mockInput.pressKey("p"))
-    // The row goes from "no upstream" to in sync, which is the whole visible outcome.
-    await waitUntil(harness, async () => frame(harness).includes("✓"), "the row to report an upstream")
+    // A row says nothing about an upstream that is in sync — that is the point of the
+    // column — so the outcome is read from the repository rather than from the frame. What
+    // the *user* sees is the detail view's context line, which the diff stub here does not
+    // draw; the diff Extension's own tests cover that.
+    await waitUntil(
+      harness,
+      async () => (await git(harness, "config", "--get", "branch.main.remote")) === "origin",
+      "the branch to report an upstream",
+    )
     expect(await git(harness, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/main")).toBe(
       "origin/main",
     )
@@ -366,8 +374,16 @@ describe("the branch menu", () => {
     await git(harness, "checkout", "--quiet", "main")
 
     await start(harness)
+    // The stub prints the DiffTarget it was handed, so this pins the kind the Pane pushes —
+    // `branch`, whose whole purpose is to let the detail view name what a clipped row cut off.
+    expect(frame(harness)).toContain("diff branch main")
+
     await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    expect(frame(harness)).toContain("no upstream")
+    await waitUntil(
+      harness,
+      async () => frame(harness).includes("diff branch topic"),
+      "the diff to follow the cursor onto topic",
+    )
 
     await press(harness, () => harness.setup.mockInput.pressKey("x"))
     await press(harness, () => harness.setup.mockInput.pressKey("u"))
@@ -380,5 +396,78 @@ describe("the branch menu", () => {
       async () => (await git(harness, "config", "--get", "branch.topic.merge")) === "refs/heads/topic",
       "the upstream to be configured",
     )
+  }, 30_000)
+})
+
+describe("what a row says about its upstream", () => {
+  it("prints only the counts that are not zero, and nothing at all when in sync", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await addOrigin(harness)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
+    await commit(harness, "two\n", "local work")
+
+    await start(harness)
+
+    // Ahead by one, behind by none: the row says `↑1` and stops there. A column that spelled
+    // out every zero would spend its width reporting that nothing had happened.
+    await waitUntil(harness, async () => frame(harness).includes("* main"), "the branch row")
+    const ahead = frame(harness)
+    expect(ahead).toContain("↑1")
+    expect(ahead).not.toContain("↓")
+
+    await git(harness, "push", "--quiet")
+    await waitUntil(harness, async () => !frame(harness).includes("↑1"), "the push to land in the row")
+    // In sync now, so the whole column goes away rather than becoming a tick.
+    const synced = frame(harness)
+    expect(synced).toContain("* main")
+    expect(synced).not.toContain("↑")
+    expect(synced).not.toContain("✓")
+  }, 30_000)
+
+  it("draws a branch whose upstream was deleted in the danger colour", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await addOrigin(harness)
+    await git(harness, "checkout", "--quiet", "-b", "abandoned")
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", "abandoned")
+    await git(harness, "push", "--quiet", "--delete", "origin", "abandoned")
+    await git(harness, "fetch", "--quiet", "--prune")
+
+    await start(harness)
+    await waitUntil(harness, async () => frame(harness).includes("abandoned"), "the branch row")
+
+    // `gone` is reported by git as `↑0 ↓0` — byte-identical to a branch that is perfectly in
+    // sync (§5.12) — so with the words dropped from the row, colour is the whole signal, and
+    // the char frame cannot see it. Spans can.
+    const nameSpan = (needle: string) =>
+      harness.setup
+        .captureSpans()
+        .lines.flatMap((line) => line.spans)
+        .find((span) => span.text.includes(needle))
+
+    const danger = RGBA.fromHex(harness.kernel.theme.getSnapshot().danger)
+    expect(nameSpan("abandoned")?.fg?.equals(danger)).toBe(true)
+    // And the contrast, or the assertion above would pass in a theme that painted everything
+    // red: `main` is here too, tracking nothing, and its name is ordinary text.
+    expect(nameSpan("main")?.fg?.equals(danger)).toBe(false)
+  }, 30_000)
+
+  it("keeps a branch name too long for its column on one line", async () => {
+    const harness = await createHarness({ git: true, width: 60 })
+    await seed(harness)
+    const long = "feature/PROJ-1234-a-name-that-cannot-fit-in-a-narrow-column"
+    await git(harness, "branch", long)
+
+    await start(harness)
+    await waitUntil(harness, async () => frame(harness).includes("feature/PROJ"), "the long branch row")
+
+    // Clipped, not wrapped: the tail of the name is simply absent, and no row below it moved
+    // down to make room. Wrapping is what turns a list into something the cursor lies about.
+    const lines = frame(harness).split("\n")
+    const index = lines.findIndex((line) => line.includes("feature/PROJ"))
+    expect(index).toBeGreaterThan(-1)
+    expect(frame(harness)).not.toContain("narrow-column")
+    expect(lines[index + 1]).not.toContain("cannot-fit")
   }, 30_000)
 })

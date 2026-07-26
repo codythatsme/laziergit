@@ -3,6 +3,8 @@ import {
   createRowSource,
   defineExtension,
   describeGitFailure,
+  isStaged,
+  isUnstaged,
   remoteWebUrl,
   toneColor,
   useCommand,
@@ -15,30 +17,6 @@ import {
   type PaneProps,
 } from "laziergit"
 import { useEffect } from "react"
-
-const minute = 60_000
-const hour = 60 * minute
-const day = 24 * hour
-const week = 7 * day
-/** Calendar months and years vary; a log row wants a stable ruler more than an exact one. */
-const month = 30 * day
-const year = 365 * day
-
-/**
- * One unit, no "ago" — a log row has room for two or three columns and the age is the
- * least of them. A commit dated in the future (clock skew, or a rebase that kept an author
- * date) is clamped rather than rendered as "-3m", which reads as a bug in laziergit.
- */
-function relativeAge(authoredAt: number, now: number): string {
-  const elapsed = Math.max(0, now - authoredAt)
-  if (elapsed < minute) return "now"
-  if (elapsed < hour) return `${Math.floor(elapsed / minute)}m`
-  if (elapsed < day) return `${Math.floor(elapsed / hour)}h`
-  if (elapsed < week) return `${Math.floor(elapsed / day)}d`
-  if (elapsed < month) return `${Math.floor(elapsed / week)}w`
-  if (elapsed < year) return `${Math.floor(elapsed / month)}mo`
-  return `${Math.floor(elapsed / year)}y`
-}
 
 /** Git's own definition of a merge, and the only one the store carries. */
 function isMerge(commit: Commit): boolean {
@@ -125,7 +103,9 @@ export default defineExtension({
     function resetLoss(commit: Commit, mode: ResetMode): string {
       const { status, commits } = ctx.git.state
       // Untracked files survive every reset, so counting them here would overstate the loss.
-      const dirty = status.staged.length + status.unstaged.length
+      // One entry per path is also what makes this count right: an `MM` file used to appear
+      // in both arrays and be counted as two changes about to be destroyed.
+      const dirty = status.files.filter((file) => isStaged(file) || isUnstaged(file)).length
       const dropped = Math.max(
         0,
         commits.findIndex((candidate) => candidate.oid === commit.oid),
@@ -136,8 +116,9 @@ export default defineExtension({
       // Mixed rewrites the index but not the files, so this line names a nuisance rather than
       // a loss — and naming it as one is the point: a user who staged a hunk by hand is about
       // to lose that arrangement, and nothing else on this list would have told them.
-      if (mode === "mixed" && status.staged.length > 0) {
-        losses.push(`${plural(status.staged.length, "staged change")} unstaged, though kept in the working tree`)
+      const stagedCount = status.files.filter(isStaged).length
+      if (mode === "mixed" && stagedCount > 0) {
+        losses.push(`${plural(stagedCount, "staged change")} unstaged, though kept in the working tree`)
       }
       if (dropped > 0) losses.push(`${plural(dropped, "commit")} off this branch, left only in the reflog`)
       if (losses.length === 0) return `HEAD is already at ${commit.shortOid}, so nothing is lost.`
@@ -260,13 +241,11 @@ export default defineExtension({
     function CommitRow({
       commit,
       id,
-      now,
       selected,
       focused,
     }: {
       readonly commit: Commit
       readonly id: string
-      readonly now: number
       readonly selected: boolean
       readonly focused: boolean
     }) {
@@ -276,7 +255,7 @@ export default defineExtension({
       const badge = decoration?.badge
 
       return (
-        <text id={id} bg={selected && focused ? theme.selection : undefined}>
+        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
           {/* The marker, not the highlight, is what says where the cursor is while another
               Pane holds focus — the state in which the diff on screen is still this Pane's
               selection and the user needs to see which row that was. */}
@@ -286,7 +265,9 @@ export default defineExtension({
               every merge row's subject one place right. */}
           <span fg={dim ? theme.textMuted : theme.info}>{isMerge(commit) ? " ⑂ " : "   "}</span>
           <span fg={dim ? theme.textMuted : theme.text}>{commit.subject}</span>
-          <span fg={theme.textMuted}>{`  ${commit.author.name}  ${relativeAge(commit.authoredAt, now)}`}</span>
+          {/* Last, because the row clips from the right: the subject is what the reader came
+              for and the author is what they can lose. */}
+          <span fg={theme.textMuted}>{`  ${commit.author.name}`}</span>
           {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
         </text>
       )
@@ -298,8 +279,6 @@ export default defineExtension({
       const empty = useGit((state) => emptyReason(state.head))
       const cursor = useListCursor({ items: commits, idPrefix: "commits", noun: "commit" })
       const selected = cursor.selected
-      // One clock for the whole render, so two rows a millisecond apart never disagree.
-      const now = Date.now()
 
       useEffect(() => {
         rows.setSelected(selected)
@@ -322,6 +301,7 @@ export default defineExtension({
       useCommand({
         id: "commits.menu",
         title: "Commit actions",
+        hint: "menu",
         keys: "x",
         run: async () => {
           if (selected === undefined) return
@@ -332,8 +312,8 @@ export default defineExtension({
       if (commits.length === 0) {
         // Neither an error nor a slow load — but which of the three it is decides whether the
         // user is being told to make a commit or told that there is nowhere to make one. The
-        // no-repository wording is the status Pane's, word for word, because the two sit in
-        // the same column and disagreeing about it would read as one of them being wrong.
+        // no-repository wording is the branches Pane's, word for word: the two sit in the
+        // same column, and disagreeing about it would read as one of them being wrong.
         const message =
           empty === "noRepository"
             ? "no repository"
@@ -362,14 +342,17 @@ export default defineExtension({
                 key={commit.oid}
                 id={cursor.rowId(index)}
                 commit={commit}
-                now={now}
                 selected={index === cursor.index}
                 focused={focused}
               />
             ))}
           </scrollbox>
           {truncated && cursor.index === commits.length - 1 ? (
-            <text fg={theme.textMuted} content={`${commits.length} shown; raise git.commitLimit for more`} />
+            <text
+              wrapMode="none"
+              fg={theme.textMuted}
+              content={`${commits.length} shown; raise git.commitLimit for more`}
+            />
           ) : null}
         </box>
       )
@@ -385,7 +368,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "commits.focus",
       title: "Focus commits",
-      keys: "4",
+      keys: "3",
       run: () => pane.focus(),
     })
 

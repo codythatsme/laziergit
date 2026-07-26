@@ -61,7 +61,7 @@ or whitespace — costs nothing: only the values are compared.
 {
   "layout": {
     "columns": [
-      ["status", "files", ["branches", "commits"]],
+      ["files", ["branches", "commits"], "stash"],
       { "weight": 2, "cells": ["diff"] },
     ],
     "focus": "files",
@@ -71,7 +71,7 @@ or whitespace — costs nothing: only the values are compared.
 
 - A **column** is either an array of cells, or `{ "weight": <number>, "cells": [...] }`.
   `weight` is that column's share of the screen width relative to the others (default `1`).
-- A **cell** is a Pane id (`"status"`), or an array of Pane ids that share the cell as tabs
+- A **cell** is a Pane id (`"files"`), or an array of Pane ids that share the cell as tabs
   (`["branches", "commits"]` — one visible at a time, `[`/`]` cycles them).
 - Cells stack top to bottom and share their column's height, in equal shares.
 - `focus` is the Pane the keyboard starts in. Omit it and laziergit opens on the first cell
@@ -89,25 +89,33 @@ alone is a valid Layout. Omit `layout` entirely and both apply.
 ```jsonc
 {
   "keybindings": {
-    "gh-workflows.open-run": "enter",       // replace the Command's default keys
-    "files.stage": ["s", "space"],          // several keys for one Command
+    "gh-workflows.open-run": "return",      // replace the Command's default keys
+    "files.toggle-stage": ["s", "space"],   // several keys for one Command
     "app.quit": null,                        // unbind it
   },
 }
 ```
 
 The key is a Command id, the value a [key spec](./extension-api.md) (`"c"`, `"ctrl+r"`,
-`"gg"`, `"mod+p"`, `"<leader>p"`), an array of them, or `null` to unbind. A config binding
+`"gg"`, `"ctrl+p"`, `"<leader>p"`), an array of them, or `null` to unbind. A config binding
 replaces the Command's declared defaults rather than adding to them. When two Commands in
 the same scope claim one key, the later registration wins and the earlier one keeps its
 palette entry without the key; the swap is reported as a diagnostic.
+
+The files Pane's tree Commands, for reference — all rebindable the same way:
+
+| Command | Default | |
+|---|---|---|
+| `files.toggle-collapse` | `return` | Expand or collapse the folder under the cursor. Spell it `return`, never `enter` — the latter is a different, unreachable stroke name that binds cleanly and never fires |
+| `files.collapse-all` / `files.expand-all` | `-` / `=` | Fold or unfold every folder |
+| `files.toggle-view` | `` ` `` | Switch between the tree and a flat list of full paths |
 
 Core's own Commands, all rebindable:
 
 | Command | Default | |
 |---|---|---|
-| `app.palette` | `mod+p` | Command palette |
-| `app.cheatsheet` | `?` | Every key that is live right now |
+| `app.palette` | `ctrl+p`, `:` | Command palette. Not `mod+p`: a macOS terminal that can report cmd is also free to keep it, and several do ([ADR-0004](./adr/0004-terminal-safe-default-keys.md)) |
+| `app.cheatsheet` | `?` | Every key live in the focused Pane, then the globals |
 | `app.focus.next` / `app.focus.previous` | `tab` / `shift+tab` | Move between Panes |
 | `app.tab.next` / `app.tab.previous` | `]` / `[` | Cycle tabs inside the focused cell |
 | `app.reload` | — | Reload every Extension |
@@ -169,7 +177,7 @@ reschedules the next check.
 ```jsonc
 {
   "statusline": {
-    "left": ["status", "ci-status"],
+    "left": ["ci-status"],
     "right": ["github-prs"],
     "hidden": ["noisy-extension"],
   },
@@ -180,11 +188,20 @@ Ids listed in `left`/`right` come first, in the order written, overriding the se
 `align`. Every other segment falls back to its declared `align` and `priority`. `hidden`
 removes a segment entirely. Ids nothing registered are ignored.
 
+The status line shares the bottom row with the **hint bar** — the keys the focused Pane can
+act on right now, which core writes along the left and which changes as you tab. Segments
+follow it, so `"right"` is where one has room; pinning a segment `left` puts it beside the
+hints and both clip when the terminal is narrow. Nothing in config turns the hint bar off:
+what appears there is whichever live Commands carry a `hint`, so an Extension decides for its
+own Pane, and `keybindings` above decides what each one is labelled with.
+
 ## `extensions` — per-Extension options
 
 ```jsonc
 {
   "extensions": {
+    "files": { "view": "tree", "collapseThreshold": 200 },
+    "diff": { "view": "unified", "context": 3 },
     "gh-workflows": { "limit": 30 },
   },
 }
@@ -194,3 +211,12 @@ One section per Extension name, holding the options that Extension declared with
 `option.*`. Values arrive on `ctx.config` fully typed and defaulted. An unknown option, or
 one of the wrong type or outside its declared range, is reported and replaced by its
 default.
+
+Options the Bundled Extensions declare:
+
+| Option | Default | |
+|---|---|---|
+| `files.view` | `"tree"` | `"tree"` draws a folder hierarchy; `"flat"` draws one list of full paths. A session toggle (`` ` ``) layers over this rather than editing it |
+| `files.collapseThreshold` | `200` | Fold a folder on first draw once it holds this many changed files, so a fresh un-ignored `node_modules/` cannot bury the rest of the tree. Expanding one explicitly outranks the threshold and survives the refresh poll. `0` disables it |
+| `diff.view` | `"unified"` | Initial diff layout |
+| `diff.context` | `3` | Lines of context around each hunk |

@@ -3,6 +3,7 @@ export { createRowSource, toneColor, type RowSourceHost, type RowSourceOptions }
 export { describeGitFailure } from "./failure"
 export { literalPathspec } from "./pathspec"
 export { remoteWebUrl } from "./remote"
+export { isConflicted, isStaged, isUnstaged, isUntracked } from "./status"
 export {
   createCell,
   useCommand,
