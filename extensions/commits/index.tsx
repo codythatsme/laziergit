@@ -276,7 +276,7 @@ export default defineExtension({
       const badge = decoration?.badge
 
       return (
-        <text id={id} bg={selected && focused ? theme.selection : undefined}>
+        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
           {/* The marker, not the highlight, is what says where the cursor is while another
               Pane holds focus — the state in which the diff on screen is still this Pane's
               selection and the user needs to see which row that was. */}
@@ -370,7 +370,11 @@ export default defineExtension({
             ))}
           </scrollbox>
           {truncated && cursor.index === commits.length - 1 ? (
-            <text fg={theme.textMuted} content={`${commits.length} shown; raise git.commitLimit for more`} />
+            <text
+              wrapMode="none"
+              fg={theme.textMuted}
+              content={`${commits.length} shown; raise git.commitLimit for more`}
+            />
           ) : null}
         </box>
       )

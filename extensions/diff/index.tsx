@@ -496,7 +496,10 @@ export default defineExtension({
 
       return (
         <box flexDirection="column" flexGrow={1} flexBasis={0}>
-          <text fg={theme.textMuted}>
+          {/* One line, clipped, always on screen: what this Pane is pointed at. The detail
+              below it scrolls away; this must not, or a reader ten screens into a patch
+              would have nothing telling them whose patch it is. */}
+          <text wrapMode="none" fg={theme.textMuted}>
             <span fg={theme.accent}>{scopeOf(current)}</span>
             {current.path === null ? "" : ` ${current.path}`}
             {` [${layout}]`}
