@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { act } from "react"
@@ -419,6 +419,58 @@ describe("the status line segment", () => {
     // "everything is pushed" for a branch whose remote no longer exists.
     await waitForFrame(harness, "gone")
     expect(frame(harness)).toContain("main")
+  })
+
+  it("animates a loader beside the branch while a push runs, instead of replacing it", async () => {
+    const harness = await startRepo()
+    await addOrigin(harness)
+    await commitIn(harness.directory, "ahead.txt", "one\n")
+    // A hook is what makes the busy state observable at all — the same lever the git service's
+    // own tests use. Without it a local push is over before the loader is worth revealing.
+    await writeFile(join(harness.directory, ".git/hooks/pre-push"), "#!/bin/sh\nsleep 2\n")
+    await chmod(join(harness.directory, ".git/hooks/pre-push"), 0o755)
+    await renderApp(harness)
+    await waitForFrame(harness, "↑1")
+
+    await press(harness, "P")
+    await waitForFrame(harness, "pushing")
+
+    const frames: string[] = []
+    const signatures = new Set<string>()
+    while (frames.length < 12 && frame(harness).includes("pushing")) {
+      const line = frame(harness)
+        .split("\n")
+        .find((row) => row.includes("pushing"))
+      if (line === undefined) break
+      frames.push(line)
+      // What the branch and the counts must never do: move. Recorded as the column the branch
+      // starts at plus the printed width of the whole row, so a frame that measured wider —
+      // an ambiguous-width glyph, a frame that lost a cell — shows up as a second signature.
+      // Code points, deliberately: braille is one code point and one cell, so counting them is
+      // counting columns, which is the property under test.
+      signatures.add(`${line.indexOf("main")}:${Array.from(line).length}`)
+      await act(async () => {
+        await Bun.sleep(70)
+      })
+      await settle(harness)
+    }
+
+    // The branch and its divergence stay on screen for the whole operation. Replacing them was
+    // the actual complaint: a push cost you the one place the branch is unconditionally
+    // written, at the moment you most want to know which branch is moving.
+    for (const line of frames) {
+      expect(line).toContain("main")
+      expect(line).toContain("↑1")
+    }
+    // Motion, not a static glyph: distinct frames of the wave over the same run.
+    const glyphs = new Set(frames.flatMap((line) => Array.from(line).filter((char) => char >= "⠀" && char <= "⣿")))
+    expect(glyphs.size).toBeGreaterThan(3)
+    expect(signatures.size).toBe(1)
+
+    await waitForToast(harness, "Pushed main to origin/main")
+    // And it goes away again, leaving the segment exactly as it was.
+    await waitFor(harness, () => !frame(harness).includes("pushing"), "the loader to withdraw")
+    expect(harness.kernel.diagnostics.getSnapshot()).toEqual([])
   })
 
   it("survives a fetch, which used to collapse it for the rest of the session", async () => {

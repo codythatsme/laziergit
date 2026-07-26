@@ -1,4 +1,4 @@
-import type { CommandSpec, Disposable, EventMap, GitState, Theme } from "./types"
+import type { CommandSpec, Disposable, EventMap, GitActivity, GitState, Theme } from "./types"
 
 /**
  * The contract between laziergit's host and the React hooks in this package — what a Pane's
@@ -20,6 +20,14 @@ import type { CommandSpec, Disposable, EventMap, GitState, Theme } from "./types
 export interface HostRuntime {
   readonly git: {
     getSnapshot(this: void): GitState
+    subscribe(this: void, listener: () => void): () => void
+  }
+  /**
+   * Its own store rather than a member of `git` above: the two turn over on completely
+   * different schedules, and a `useGit` selector must not re-run because a `git add` started.
+   */
+  readonly activity: {
+    getSnapshot(this: void): readonly GitActivity[]
     subscribe(this: void, listener: () => void): () => void
   }
   readonly events: {

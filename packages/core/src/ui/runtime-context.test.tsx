@@ -45,6 +45,7 @@ function fakeRuntime(registrations: unknown[][]) {
   const store = { getSnapshot: () => undefined, subscribe: () => () => undefined }
   return {
     git: store,
+    activity: store,
     theme: store,
     events: { subscribe: () => ({ dispose: () => undefined }) },
     keys: { capture: () => ({ dispose: () => undefined }) },

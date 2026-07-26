@@ -247,6 +247,7 @@ export class ExtensionKernel {
     })
     this.runtime = {
       git: this.git,
+      activity: this.git.activity,
       events: {
         subscribe: (extension, event, handler) => this.events.subscribe(extension, event, handler),
       },

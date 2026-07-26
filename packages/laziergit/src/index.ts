@@ -9,6 +9,7 @@ export {
   useCommand,
   useEvent,
   useGit,
+  useGitActivity,
   useKeyCapture,
   useListCursor,
   useScrollView,
