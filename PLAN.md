@@ -35,7 +35,8 @@ Vocabulary lives in [CONTEXT.md](./CONTEXT.md). Irreversible decisions live in [
 │  │                    support), lifecycle, hot reload,      │  │
 │  │                    per-extension Scope → auto-disposal   │  │
 │  │ UI framework       config-driven Layout, Pane slots,     │  │
-│  │                    focus, popups, statusline, palette    │  │
+│  │                    focus, popups, statusline, hint bar,  │  │
+│  │                    palette, cheat sheet                  │  │
 │  │ Input              @opentui/keymap → Command dispatch    │  │
 │  │ Git service        argv builder → system git, porcelain  │  │
 │  │                    parsing, reactive GitState store,     │  │
@@ -46,8 +47,8 @@ Vocabulary lives in [CONTEXT.md](./CONTEXT.md). Irreversible decisions live in [
 │                              │ Extension Context (ctx)         │
 │                              │ Promise-first public API        │
 │  ┌───────────────────────────┴──────────────────────────────┐  │
-│  │ Bundled Extensions: status · files · branches · commits  │  │
-│  │ · stash · diff · commit-flow · sync                      │  │
+│  │ Bundled Extensions: files · branches · commits · stash   │  │
+│  │ · diff · commit-flow · sync                              │  │
 │  │ User Extensions: ~/.config/laziergit/extensions/*,       │  │
 │  │ <repo>/.laziergit/extensions/*                           │  │
 │  └──────────────────────────────────────────────────────────┘  │
@@ -73,7 +74,7 @@ packages/
   core/             # the host: bootstrap, extension kernel, UI framework,
                     # git service, config; bin entry (`laziergit`)
 extensions/         # Bundled Extensions, one package each, public API only:
-  status/  files/  branches/  commits/  stash/  diff/  commit-flow/  sync/
+  files/  branches/  commits/  stash/  diff/  commit-flow/  sync/
 docs/
   extension-api.md  # the API specification (crown jewel)
   config.md         # the user-facing config.jsonc reference
@@ -99,7 +100,7 @@ Specified in [docs/extension-api.md](./docs/extension-api.md) — produced by a 
 
 ## v1 scope
 
-**Bundled**: status, files (**file-level** staging; conflicts shown and delegated to the user's editor or `git mergetool`), branches, commits (log), stash, diff, commit-flow, sync (push/pull/fetch) — the everyday loop identified from lazygit's operation inventory.
+**Bundled**: files (**file-level** staging; conflicts shown and delegated to the user's editor or `git mergetool`), branches, commits (log), stash, diff, commit-flow, sync (push/pull/fetch) — the everyday loop identified from lazygit's operation inventory.
 
 **Explicitly post-v1** (they become extensions later, which is the point of the architecture): **hunk/line staging** (`ctx.git.raw(["apply", "--cached"], { stdin })` is the sanctioned escape hatch until a helper earns its place), **lazygit-grade conflict resolution** (pick-ours / pick-theirs / pick-both; wants the conflict-kind variant and the patch surface described in [extension-api.md §5.12](./docs/extension-api.md)), **credential prompting** for auth-requiring remotes (v1 fails fast rather than hanging — see [extension-api.md §5.11](./docs/extension-api.md)), interactive rebase (requires the self-as-`GIT_SEQUENCE_EDITOR` daemon trick — documented in `docs/research/lazygit-surface.md`), cherry-pick, bisect, worktrees, submodules, reflog, custom patch editing; **layout refinements** (a Pane's `placement` hint sets column and order but not column weight or cell height, so hint-placed columns split evenly and cell heights are equal; default startup focus lands on the first cell rather than the first Pane with rows — all config-overridable, [extension-api.md §5.11](./docs/extension-api.md)); **richer row identity** (the FilesApi staged-vs-unstaged and conflict-side gaps in [extension-api.md §5.12](./docs/extension-api.md)); **multi-file diff rendering** (OpenTUI's `<diff>` renders one file, so the diff pane splits per file — [extension-api.md §5.11](./docs/extension-api.md)); **untracked-directory collapsing** (the git service reads `--untracked-files=all`, so the files pane lists every file inside an un-ignored directory rather than collapsing it to one row the way `git status` and lazygit do — bearable for a stray file, a scaling cliff for a fresh un-ignored `node_modules/`; wants lazygit's collapsible file tree, whose directory rows also need staging and diff to understand a path that is a directory); npm-published extension distribution; programmatic theming; `bun build --compile` single-binary releases.
 

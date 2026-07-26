@@ -214,7 +214,7 @@ describe("stash actions", () => {
     await stash(harness, "wip two")
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("5"))
+    await press(harness, () => harness.setup.mockInput.pressKey("4"))
     await press(harness, () => harness.setup.mockInput.pressKey(" "))
 
     await settleUntil(harness, "the apply to reach the working tree", async () =>
@@ -233,7 +233,7 @@ describe("stash actions", () => {
     await writeFile(join(harness.directory, "seed.txt"), "local edit\n")
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("5"))
+    await press(harness, () => harness.setup.mockInput.pressKey("4"))
     await press(harness, () => harness.setup.mockInput.pressKey(" "))
 
     // Git's first line, verbatim and attributed — a toast is one line, so the paths it goes
@@ -248,7 +248,7 @@ describe("stash actions", () => {
     await stash(harness, "wip two")
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("5"))
+    await press(harness, () => harness.setup.mockInput.pressKey("4"))
     await press(harness, () => harness.setup.mockInput.pressKey("p"))
 
     expect(await frameShowing(harness, "stash@{0} wip one")).not.toContain("pull ran")
@@ -266,7 +266,7 @@ describe("stash actions", () => {
     await stash(harness, "wip two")
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("5"))
+    await press(harness, () => harness.setup.mockInput.pressKey("4"))
     await press(harness, () => harness.setup.mockInput.pressKey("d"))
 
     const asked = frame(harness)
@@ -292,7 +292,7 @@ describe("stash actions", () => {
     // Drop the top entry, wip two, which renumbers `wip one` from 1 to 0, then drop what is
     // now selected: acting on the index wip one was *drawn* with would take a `stash@{1}`
     // that no longer exists.
-    await press(harness, () => harness.setup.mockInput.pressKey("5"))
+    await press(harness, () => harness.setup.mockInput.pressKey("4"))
     await press(harness, () => harness.setup.mockInput.pressKey("d"))
     await press(harness, () => harness.setup.mockInput.pressKey("y"))
     // `wip two` was already on screen before the drop, so waiting on it proves nothing; wait
@@ -314,7 +314,7 @@ describe("stash actions", () => {
     // is a person's timescale, not a test's.
     await start(harness, `{ "git": { "refreshIntervalMs": 250 } }`)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("5"))
+    await press(harness, () => harness.setup.mockInput.pressKey("4"))
     await press(harness, () => harness.setup.mockInput.pressKey("j"))
     await press(harness, () => harness.setup.mockInput.pressKey("d"))
     expect(frame(harness)).toContain("Drop stash@{1}?")
@@ -350,7 +350,7 @@ describe("stash menu", () => {
     await stash(harness, "wip two")
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("5"))
+    await press(harness, () => harness.setup.mockInput.pressKey("4"))
     await press(harness, () => harness.setup.mockInput.pressKey("x"))
 
     const menu = frame(harness)
@@ -379,7 +379,7 @@ describe("stash menu", () => {
     await stash(harness, "wip two")
     await start(harness, `{ "git": { "refreshIntervalMs": 250 } }`)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("5"))
+    await press(harness, () => harness.setup.mockInput.pressKey("4"))
     await press(harness, () => harness.setup.mockInput.pressKey("j"))
     await press(harness, () => harness.setup.mockInput.pressKey("x"))
     await press(harness, () => harness.setup.mockInput.pressKey("b"))
@@ -416,7 +416,7 @@ describe("stash menu", () => {
     await stash(harness, "wip one")
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("5"))
+    await press(harness, () => harness.setup.mockInput.pressKey("4"))
     await press(harness, () => harness.setup.mockInput.pressKey("x"))
     await press(harness, () => harness.setup.mockInput.pressKey("b"))
     await press(harness, () => void harness.setup.mockInput.typeText("-f"))

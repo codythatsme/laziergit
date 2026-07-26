@@ -8,7 +8,7 @@ import { addOrigin, createTestRepo, registerRepoCleanup, type TestRepo } from ".
 registerRepoCleanup()
 
 const entrypoint = resolve(import.meta.dir, "..", "..", "packages", "core", "src", "main.tsx")
-const paneTitles = ["Status", "Files", "Branches", "Commits", "Stash", "[Diff] Commit"] as const
+const paneTitles = ["Files", "Branches", "Commits", "Stash", "[Diff] Commit"] as const
 
 type Layout = "all-panes" | "working-panes"
 
@@ -17,7 +17,7 @@ function config(layout: Layout): string {
     layout === "all-panes"
       ? ""
       : `"columns": [
-          { "cells": [["files", "status", "branches", "commits", "stash"]] },
+          { "cells": [["files", "branches", "commits", "stash"]] },
           { "cells": [["diff", "commit-flow"]] }
         ],`
   return `{ "layout": { ${columns} "focus": "files" }, "git": { "refreshIntervalMs": 250 } }`
@@ -288,7 +288,7 @@ describe("laziergit through a real terminal", () => {
 
       expect(await repo.git("status", "--porcelain")).toBe("")
 
-      await session.keyboard.type("5")
+      await session.keyboard.type("4")
       await waitForText(session, "stash@{0} from e2e on main")
       await session.keyboard.type("p")
       await waitForText(session, "no stashes")

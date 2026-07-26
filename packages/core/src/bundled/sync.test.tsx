@@ -130,12 +130,16 @@ describe("sync.push", () => {
     await commitIn(harness.directory, "ahead.txt", "one\n")
     await renderApp(harness)
 
+    // One commit ahead, and the segment says so before anything is pushed.
+    await waitForFrame(harness, "↑1")
+
     await press(harness, "P")
     await waitForToast(harness, "Pushed main to origin/main")
 
     expect(await git(origin, "rev-parse", "main")).toEqual(await git(harness.directory, "rev-parse", "main"))
-    // The store refreshed with the push, so the segment is already telling the truth.
-    expect(frame(harness)).toContain("↑0 ↓0")
+    // The store refreshed with the push, so the segment is already telling the truth — and
+    // an in-sync branch has nothing to report, so it reports nothing rather than `↑0 ↓0`.
+    expect(frame(harness)).not.toContain("↑")
   })
 
   it("confirms before creating an upstream, and tracks it afterwards", async () => {
@@ -285,7 +289,7 @@ describe("sync.push", () => {
     // Reached deliberately from the menu, because the rejection path above refuses to
     // suggest it: the lease is the last line of defence, and it holds.
     await press(harness, "S")
-    await waitForFrame(harness, "Sync main")
+    await waitForFrame(harness, "Fetch all remotes")
     await press(harness, "o")
     await waitForFrame(harness, "Force-push main to origin/main?")
     await press(harness, "y")
@@ -343,7 +347,9 @@ describe("sync.pull and sync.fetch", () => {
     await waitForToast(harness, "Fetched — ↑0 ↓1")
 
     expect(await git(harness.directory, "rev-parse", "main")).toBe(before)
-    expect(frame(harness)).toContain("↑0 ↓1")
+    // The segment's own composition — branch, then only the non-zero counts. The toast above
+    // says "↑0 ↓1", so asserting that string alone would no longer pin the segment at all.
+    expect(frame(harness)).toContain("main ↓1")
   })
 
   it("shows git's message when there is no upstream to pull from", async () => {
@@ -366,9 +372,67 @@ describe("the sync.actions menu", () => {
     await renderApp(harness)
 
     await press(harness, "S")
-    await waitForFrame(harness, "Sync main")
+    await waitForFrame(harness, "Fetch all remotes")
     await press(harness, "f")
 
     await waitForToast(harness, "Fetched — ↑0 ↓1")
+  })
+})
+
+/**
+ * The status line is where HEAD lives now that there is no status Pane, so these are the
+ * responsibilities `sync` inherited rather than anything about pushing.
+ */
+describe("the status line segment", () => {
+  it("names the branch, and the divergence only when there is one", async () => {
+    const harness = await startRepo()
+    await addOrigin(harness)
+    await renderApp(harness)
+
+    await waitForFrame(harness, "main")
+    // In sync, so the branch stands alone: an in-sync `↑0 ↓0` is a standing column of
+    // nothing having happened.
+    expect(frame(harness)).not.toContain("↑")
+
+    await commitIn(harness.directory, "ahead.txt", "one\n")
+    await waitForFrame(harness, "main ↑1")
+  })
+
+  it("says where a detached HEAD is, since no row can mark it", async () => {
+    const harness = await startRepo()
+    await commitIn(harness.directory, "second.txt", "two\n")
+    const oid = (await git(harness.directory, "rev-parse", "HEAD")).trim()
+    await git(harness.directory, "checkout", "--quiet", "--detach", "HEAD")
+    await renderApp(harness)
+
+    await waitForFrame(harness, `detached at ${oid.slice(0, 7)}`)
+  })
+
+  it("says outright that the remote deleted the branch", async () => {
+    const harness = await startRepo()
+    const origin = await addOrigin(harness)
+    await git(origin, "update-ref", "-d", "refs/heads/main")
+    await git(harness.directory, "fetch", "--quiet", "--prune")
+    await renderApp(harness)
+
+    // `gone` is `↑0 ↓0` in git's own data, so a segment that read the numbers would report
+    // "everything is pushed" for a branch whose remote no longer exists.
+    await waitForFrame(harness, "gone")
+    expect(frame(harness)).toContain("main")
+  })
+
+  it("survives a fetch, which used to collapse it for the rest of the session", async () => {
+    const harness = await startRepo()
+    await addOrigin(harness)
+    await renderApp(harness)
+    await waitForFrame(harness, "main")
+
+    // The spinner state used to render a `content` prop where every other state rendered
+    // children; React reuses the one renderable across both, and OpenTUI's text buffer came
+    // back with no chunks — the slot's error boundary then hid this segment permanently.
+    await press(harness, "f")
+    await waitForToast(harness, "Fetched")
+    await waitForFrame(harness, "main")
+    expect(harness.kernel.diagnostics.getSnapshot()).toEqual([])
   })
 })

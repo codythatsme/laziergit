@@ -41,7 +41,7 @@ or whitespace — costs nothing: only the values are compared.
 {
   "layout": {
     "columns": [
-      ["status", "files", ["branches", "commits"]],
+      ["files", ["branches", "commits"], "stash"],
       { "weight": 2, "cells": ["diff"] },
     ],
     "focus": "files",
@@ -51,7 +51,7 @@ or whitespace — costs nothing: only the values are compared.
 
 - A **column** is either an array of cells, or `{ "weight": <number>, "cells": [...] }`.
   `weight` is that column's share of the screen width relative to the others (default `1`).
-- A **cell** is a Pane id (`"status"`), or an array of Pane ids that share the cell as tabs
+- A **cell** is a Pane id (`"files"`), or an array of Pane ids that share the cell as tabs
   (`["branches", "commits"]` — one visible at a time, `[`/`]` cycles them).
 - Cells stack top to bottom and share their column's height, in equal shares.
 - `focus` is the Pane the keyboard starts in. Omit it and laziergit opens on the first cell
@@ -149,7 +149,7 @@ reschedules the next check.
 ```jsonc
 {
   "statusline": {
-    "left": ["status", "ci-status"],
+    "left": ["ci-status"],
     "right": ["github-prs"],
     "hidden": ["noisy-extension"],
   },

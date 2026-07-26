@@ -170,7 +170,7 @@ async function waitFor(harness: Harness, condition: () => boolean | Promise<bool
  * below reading the same whether or not the default ever changes.
  */
 async function focusFiles(harness: Harness): Promise<void> {
-  await press(harness, "2")
+  await press(harness, "1")
 }
 
 describe("staging from the files pane", () => {

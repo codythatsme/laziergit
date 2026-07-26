@@ -426,9 +426,8 @@ export interface MenuMap {
   "files.actions": FileChange
   "commits.actions": Commit
   "stash.actions": StashEntry
-  "status.actions": GitState
   "commit-flow.actions": WorkingTreeStatus
-  "sync.actions": Head
+  "sync.actions": GitState
   "diff.actions": DiffTarget
 }
 

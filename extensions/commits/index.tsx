@@ -307,8 +307,8 @@ export default defineExtension({
       if (commits.length === 0) {
         // Neither an error nor a slow load — but which of the three it is decides whether the
         // user is being told to make a commit or told that there is nowhere to make one. The
-        // no-repository wording is the status Pane's, word for word, because the two sit in
-        // the same column and disagreeing about it would read as one of them being wrong.
+        // no-repository wording is the branches Pane's, word for word: the two sit in the
+        // same column, and disagreeing about it would read as one of them being wrong.
         const message =
           empty === "noRepository"
             ? "no repository"
@@ -363,7 +363,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "commits.focus",
       title: "Focus commits",
-      keys: "4",
+      keys: "3",
       run: () => pane.focus(),
     })
 

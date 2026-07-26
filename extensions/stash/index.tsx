@@ -279,7 +279,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "stash.focus",
       title: "Focus stash",
-      keys: "5",
+      keys: "4",
       run: () => pane.focus(),
     })
 
