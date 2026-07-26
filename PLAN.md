@@ -14,6 +14,7 @@ Vocabulary lives in [CONTEXT.md](./CONTEXT.md). Irreversible decisions live in [
 | Runtime | Bun only | [ADR-0003](./docs/adr/0003-bun-only-react-on-opentui.md) |
 | TUI | `@opentui/react` (React 19), staying React despite opencode using Solid | ADR-0003 |
 | Effect | v4 beta, core-internal only; public API is Promise-first with `ctx.effect` escape hatch | [ADR-0002](./docs/adr/0002-promise-first-public-api-effect-internal.md) |
+| Default keys | `mod+` stays in the grammar, but no core or bundled default depends on it | [ADR-0004](./docs/adr/0004-terminal-safe-default-keys.md) |
 | Extension anatomy | `defineExtension({...})` default export; lone `.ts(x)` file or package dir | [extension-api.md](./docs/extension-api.md) |
 | Extension locations | bundled `extensions/` + `~/.config/laziergit/extensions/` + `<repo>/.laziergit/extensions/` (that precedence), hot reload | extension-api.md |
 | Layout | Config-owned (`config.jsonc` places pane ids); extensions ship overridable hints | this doc |

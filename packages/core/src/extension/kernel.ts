@@ -421,7 +421,10 @@ export class ExtensionKernel {
       this.commands.register(coreOwner, spec)
     }
 
-    register({ id: "app.palette", title: "Command palette", keys: "mod+p", run: () => this.openPalette() })
+    // Terminal-safe by construction, never `mod+` (ADR-0004): a Mac terminal that can report
+    // cmd at all is also free to keep it, and Warp keeps cmd+p for its own palette — so the
+    // one binding that opens laziergit's would be the one the terminal ate.
+    register({ id: "app.palette", title: "Command palette", keys: ["ctrl+p", ":"], run: () => this.openPalette() })
     register({ id: "app.cheatsheet", title: "Keybindings", keys: "?", run: () => this.openCheatSheet() })
     register({ id: "app.focus.next", title: "Focus next pane", keys: "tab", run: () => this.layout.focusStep(1) })
     register({

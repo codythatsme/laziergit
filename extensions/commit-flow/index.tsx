@@ -367,7 +367,12 @@ export default defineExtension({
       useCommand({
         id: "commit-flow.submit",
         title: "Commit the message",
-        keys: "mod+s",
+        hint: "commit",
+        // `ctrl+s` first, and first deliberately: it is what the hint bar prints, and it is
+        // the one of the two a terminal cannot take away (ADR-0004). `mod+s` stays beside it
+        // for the terminals that do deliver cmd, where it is the stroke a Mac user reaches
+        // for. Raw mode clears IXON, so ctrl+s is not flow control here.
+        keys: ["ctrl+s", "mod+s"],
         capture: true,
         run: () => (current.kind === "editing" ? commit(current.draft, editor.current?.plainText ?? "") : undefined),
       })

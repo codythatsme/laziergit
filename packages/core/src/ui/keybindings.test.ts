@@ -38,7 +38,7 @@ function harness() {
 
 it("runs the Command a global key is bound to", async () => {
   const test = harness()
-  test.bindings.sync([entry("app.palette", ["mod+p"])])
+  test.bindings.sync([entry("app.palette", ["ctrl+p"])])
   await test.flush()
 
   test.host.press("p", { ctrl: true })
@@ -46,6 +46,17 @@ it("runs the Command a global key is bound to", async () => {
 
   await test.flush()
   expect(test.ran).toEqual(["app.palette"])
+  test.cleanup()
+})
+
+it("resolves a `mod+` binding a third party writes to ctrl where cmd cannot be reported", async () => {
+  const test = harness()
+  test.bindings.sync([entry("thirdparty.act", ["mod+j"])])
+  await test.flush()
+
+  test.host.press("j", { ctrl: true })
+  await test.flush()
+  expect(test.ran).toEqual(["thirdparty.act"])
   test.cleanup()
 })
 
