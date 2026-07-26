@@ -270,7 +270,9 @@ export default defineExtension({
       const repository = useGit((state) => hasRepository(state.head))
       const cursor = useListCursor({ items: branches, idPrefix: "branches", noun: "branch" })
       const selected = cursor.selected
-      const selectedOid = selected?.oid
+      // Keyed on the name, not the oid: the name is a branch's identity, and a commit landing
+      // on the selected branch must not re-issue a target that has not conceptually moved.
+      const selectedName = selected?.name
 
       useEffect(() => {
         rows.setSelected(selected)
@@ -282,11 +284,14 @@ export default defineExtension({
 
       useEffect(() => {
         // Only while focused: the diff pane belongs to whichever list the user is driving,
-        // and a background pane must not steal it. Keyed on the oid rather than the row, so
-        // a refresh that rebuilt an unchanged branch does not re-issue the same target.
-        if (!focused || selectedOid === undefined) return
-        diff.show({ kind: "commit", ref: selectedOid, path: null })
-      }, [focused, selectedOid])
+        // and a background pane must not steal it. A commit landing on the selected branch
+        // still redraws the patch — the diff Pane refetches on `git.refreshed` — without
+        // this effect re-issuing a target that has not conceptually moved.
+        if (!focused || selectedName === undefined) return
+        // `branch`, not `commit`: the patch is the same either way — a branch name resolves
+        // to its tip — but only this kind lets the diff Pane print the name the row clipped.
+        diff.show({ kind: "branch", ref: selectedName, path: null })
+      }, [focused, selectedName])
 
       // A selection is empty only when the list is, and the empty state below already says so
       // — a toast would repeat it, so every key with nothing to act on is a silent no-op. The
