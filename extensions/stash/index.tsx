@@ -14,36 +14,6 @@ import {
 } from "laziergit"
 import { useEffect } from "react"
 
-const minute = 60_000
-const hour = 60 * minute
-const day = 24 * hour
-const week = 7 * day
-/** Calendar months and years vary; a list row wants a stable ruler more than an exact one. */
-const month = 30 * day
-/** Git's own relative dates round a year to 365 days; matching it keeps the two agreeing. */
-const year = 365 * day
-
-/**
- * An entry's age in the width a list row can spare: one unit, no "ago". Anything under a
- * minute is "now" rather than "0m", because a stash taken seconds ago reading as zero
- * looks like a missing value.
- *
- * The same ladder as the commits and branches Panes, deliberately: ADR-0001 gives these
- * three no package to share it through, so the copies are kept identical by hand instead —
- * they sit in adjacent Panes, and one saying `13w` where another says `3mo` for the same
- * elapsed time is laziergit contradicting itself on one screen.
- */
-function relativeAge(createdAt: number, now: number): string {
-  const elapsed = Math.max(0, now - createdAt)
-  if (elapsed < minute) return "now"
-  if (elapsed < hour) return `${Math.floor(elapsed / minute)}m`
-  if (elapsed < day) return `${Math.floor(elapsed / hour)}h`
-  if (elapsed < week) return `${Math.floor(elapsed / day)}d`
-  if (elapsed < month) return `${Math.floor(elapsed / week)}w`
-  if (elapsed < year) return `${Math.floor(elapsed / month)}mo`
-  return `${Math.floor(elapsed / year)}y`
-}
-
 /** The only name git gives an entry, and the operand every stash verb takes. */
 function stashRef(entry: StashEntry): string {
   return `stash@{${entry.index}}`
@@ -178,13 +148,11 @@ export default defineExtension({
     function StashRow({
       entry,
       id,
-      now,
       selected,
       focused,
     }: {
       readonly entry: StashEntry
       readonly id: string
-      readonly now: number
       readonly selected: boolean
       readonly focused: boolean
     }) {
@@ -202,7 +170,6 @@ export default defineExtension({
           <span fg={dim ? theme.textMuted : theme.text}>{` ${entry.message}`}</span>
           {/* Absent for a stash taken on a detached HEAD, where git recorded no branch. */}
           {entry.branch === null ? null : <span fg={theme.textMuted}>{` on ${entry.branch}`}</span>}
-          <span fg={theme.textMuted}>{` ${relativeAge(entry.createdAt, now)}`}</span>
           {decoration?.badge === undefined ? null : (
             <span fg={toneColor(theme, decoration.tone)}>{` ${decoration.badge}`}</span>
           )}
@@ -215,8 +182,6 @@ export default defineExtension({
       const entries = useGit((state) => state.stash)
       const cursor = useListCursor({ items: entries, idPrefix: "stash", noun: "stash" })
       const selected = cursor.selected
-      // One clock read per frame, so every row in it agrees on what "now" is.
-      const now = Date.now()
 
       useEffect(() => {
         rows.setSelected(selected)
@@ -296,7 +261,6 @@ export default defineExtension({
               key={stashRef(entry)}
               id={cursor.rowId(index)}
               entry={entry}
-              now={now}
               selected={index === cursor.index}
               focused={focused}
             />

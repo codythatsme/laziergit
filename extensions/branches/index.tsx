@@ -13,35 +13,40 @@ import {
   type BranchesApi,
   type Head,
   type PaneProps,
-  type Tone,
+  type Theme,
   type UpstreamInfo,
 } from "laziergit"
 import { useEffect } from "react"
 
-/** What a row says about its upstream: the text, and the tone that keeps the cases apart. */
-interface UpstreamLabel {
-  readonly text: string
-  readonly tone: Tone
-}
-
 /**
- * The four states a branch can be in relative to its upstream, each of which has to *look*
- * different.
+ * The divergence, as arrows, or `""` where there is nothing to say.
  *
- * `gone` is why this is not merely a divergence formatter: git reports it instead of a
- * divergence, so a branch whose remote ref was deleted carries `ahead === 0, behind === 0`
- * — byte-identical to a perfectly in-sync branch, and the opposite situation. Only the flag
- * separates them, so only the flag can decide what the row says.
+ * Three of the four upstream states say nothing worth a column: no upstream at all, and an
+ * upstream that matches, are both "carry on" — and a row that spelled either out spent its
+ * width telling the reader that nothing had happened. Only real counts print, and only the
+ * ones above zero, so what is on screen is always something to act on.
  */
-function upstreamLabel(upstream: UpstreamInfo | null): UpstreamLabel {
-  if (upstream === null) return { text: "no upstream", tone: "muted" }
-  if (upstream.gone) return { text: "gone", tone: "warning" }
+function divergence(upstream: UpstreamInfo | null): string {
+  if (upstream === null || upstream.gone) return ""
   const parts: string[] = []
   if (upstream.ahead > 0) parts.push(`↑${upstream.ahead}`)
   if (upstream.behind > 0) parts.push(`↓${upstream.behind}`)
-  // A tick rather than nothing at all: in a column of branches blank reads as missing data,
-  // and "I checked, you match" is the answer the user came for.
-  return parts.length === 0 ? { text: "✓", tone: "muted" } : { text: parts.join(" "), tone: "info" }
+  return parts.join(" ")
+}
+
+/**
+ * The colour a branch's own name is drawn in.
+ *
+ * `gone` is the one upstream state that cannot be left to the divergence column: git reports
+ * it *instead of* a divergence, so a branch whose remote ref was deleted carries
+ * `ahead === 0, behind === 0` — byte-identical to a perfectly in-sync branch, and the
+ * opposite situation (§5.12). With the words dropped from the row, the name itself is what
+ * carries it, which is also where lazygit puts it.
+ */
+function nameColor(branch: Branch, theme: Theme, dim: boolean): string {
+  if (dim) return theme.textMuted
+  if (branch.upstream?.gone === true) return theme.danger
+  return theme.text
 }
 
 /**
@@ -51,35 +56,6 @@ function upstreamLabel(upstream: UpstreamInfo | null): UpstreamLabel {
  */
 function hasRepository(head: Head): boolean {
   return head.kind !== "noRepository"
-}
-
-const minute = 60_000
-const hour = 60 * minute
-const day = 24 * hour
-const week = 7 * day
-/** Calendar months and years vary; a list row wants a stable ruler more than an exact one. */
-const month = 30 * day
-const year = 365 * day
-
-/**
- * Age in one narrow column: the largest unit that fits, never two of them. `elapsed` is
- * floored at zero because an author date can legitimately sit in the future — a commit from
- * a machine with a fast clock — and "-3d" is not an age.
- *
- * The same ladder as the commits and stash Panes, deliberately: ADR-0001 gives these three
- * no package to share it through, so the copies are kept identical by hand instead. They
- * sit in adjacent Panes and a branch reading `13w` beside its own commit reading `3mo`
- * would be laziergit contradicting itself on one screen.
- */
-function relativeAge(authoredAt: number, now: number): string {
-  const elapsed = Math.max(0, now - authoredAt)
-  if (elapsed < minute) return "now"
-  if (elapsed < hour) return `${Math.floor(elapsed / minute)}m`
-  if (elapsed < day) return `${Math.floor(elapsed / hour)}h`
-  if (elapsed < week) return `${Math.floor(elapsed / day)}d`
-  if (elapsed < month) return `${Math.floor(elapsed / week)}w`
-  if (elapsed < year) return `${Math.floor(elapsed / month)}mo`
-  return `${Math.floor(elapsed / year)}y`
 }
 
 /**
@@ -245,7 +221,7 @@ export default defineExtension({
     }) {
       const theme = useTheme()
       const decoration = rows.useDecoration(branch)
-      const upstream = upstreamLabel(branch.upstream)
+      const ahead = divergence(branch.upstream)
       const dim = decoration?.dim === true
       const badge = decoration?.badge
 
@@ -256,9 +232,8 @@ export default defineExtension({
               selection and the user needs to see which row that was. */}
           <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
           <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "*" : " "}</span>
-          <span fg={dim ? theme.textMuted : theme.text}>{` ${branch.name}  `}</span>
-          <span fg={dim ? theme.textMuted : toneColor(theme, upstream.tone)}>{upstream.text}</span>
-          <span fg={theme.textMuted}>{`  ${relativeAge(branch.lastCommit.authoredAt, Date.now())}`}</span>
+          <span fg={nameColor(branch, theme, dim)}>{` ${branch.name}`}</span>
+          {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}
           {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
         </text>
       )

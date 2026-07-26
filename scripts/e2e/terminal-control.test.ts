@@ -148,10 +148,13 @@ describe("laziergit through a real terminal", () => {
       const screen = await session.screen.text()
 
       for (const title of paneTitles) expect(screen).toContain(title)
-      expect(screen).toMatch(/\* main\s+✓/)
+      // A row in sync says nothing about its upstream, so the marker is the whole of it.
+      expect(screen).toContain("* main")
       expect(screen).toContain("working tree clean")
       expect(screen).toContain("no stashes")
-      expect(screen).toContain("↑0 ↓0")
+      // The status line names where HEAD is; the divergence beside it is suppressed while
+      // there is none to report.
+      expect(screen).not.toContain("↑")
     })
   }, 20_000)
 

@@ -2199,6 +2199,10 @@ Each is complete and runnable as shown.
 
 ### 4.1 branch-age — row decorations only
 
+The bundled rows print no age of their own — one line per row leaves no column for it, and
+"how old" is a question most sessions never ask (§1.8). That makes this the demonstration
+that a decoration adds back exactly what core left out, for the people who do ask.
+
 ```ts
 import { defineExtension } from "laziergit";
 
@@ -2756,6 +2760,9 @@ consumer could hand back to git; `Head` is now a union whose `unborn` variant si
 oid, and which also drops the upstream a detached HEAD never had. A **gone upstream** used
 to collapse to `{ ahead: 0, behind: 0 }`, identical to a perfectly in-sync branch, which is
 the one thing a branches Pane most wants to tell apart; `UpstreamInfo.gone` now says it.
+(The branches Pane spends the flag on *colour* rather than a word — one-line rows have no
+column to spare for text that is usually absent — but that is a rendering choice the flag
+made available; without it there is nothing to render.)
 Both were cheaper to change while nothing depended on the old shapes, which is why they went
 in with the first Extensions rather than after them.
 
