@@ -1,17 +1,18 @@
 /** @jsxImportSource @opentui/react */
 import {
-  createCell,
   defineExtension,
   describeGitFailure,
   GitError,
   remoteWebUrl,
   useGit,
+  useGitActivity,
   useTheme,
   type Head,
   type Theme,
   type UpstreamInfo,
 } from "laziergit"
-import type { ReactNode } from "react"
+
+import { useSpinner } from "./spinner"
 
 /**
  * The last segment of the repository root, without `node:path` — an Extension may import
@@ -96,14 +97,29 @@ function drift(upstream: UpstreamInfo): string {
   return parts.join(" ")
 }
 
-/** The divergence half of the status line segment, as zero or one span. */
-function upstreamSpans(upstream: UpstreamInfo | null, theme: Theme): readonly ReactNode[] {
+/**
+ * One token of the status line segment, in reading order.
+ *
+ * Data rather than markup, so the separator between tokens is applied in exactly one place. It
+ * used to ride on each optional part as a leading space, which was only correct while the
+ * branch was unconditionally first — and it stopped being: a loader now sits between the branch
+ * and the divergence, and on a detached HEAD there is no branch at all. Two parts each certain
+ * they were second is a stray leading column, which on a right-aligned segment shifts the line.
+ */
+interface Token {
+  readonly key: string
+  readonly text: string
+  readonly color: string
+}
+
+/** The divergence half of the status line segment, as zero or one token. */
+function upstreamTokens(upstream: UpstreamInfo | null, theme: Theme): readonly Token[] {
   if (upstream === null) return []
   if (upstream.gone) {
-    return [<span key="sync" fg={theme.danger}>{` ${upstream.remote}/${upstream.branch} gone`}</span>]
+    return [{ key: "sync", text: `${upstream.remote}/${upstream.branch} gone`, color: theme.danger }]
   }
   const counts = drift(upstream)
-  return counts === "" ? [] : [<span key="sync" fg={theme.info}>{` ${counts}`}</span>]
+  return counts === "" ? [] : [{ key: "sync", text: counts, color: theme.info }]
 }
 
 /** How the upstream is spelled everywhere the user reads it. */
@@ -153,16 +169,19 @@ export default defineExtension({
     const repoName = directoryName(root)
 
     /**
-     * The operation in flight, and the whole of sync's progress reporting.
+     * The operation in flight — a mutual-exclusion latch, and nothing more.
      *
-     * `notify` is a transient toast and a fetch of a large repository outlives it, so
-     * toasts here report outcomes only. "Working" belongs to the one surface that lasts as
-     * long as the work does: the status line segment below — §5.11's "a pane that owns long
-     * work renders its own state", read for an Extension whose only pixels are a segment.
-     * Nothing clears this on a reload landing mid-push, because the segment reading it is
-     * torn down in the same breath.
+     * It no longer reports progress: core tracks every write at the one choke point they all
+     * pass through, and the segment below reads *that*, which is how it can also show a commit
+     * held open by a hook and a push started from the branches menu — work this Extension never
+     * sees. What is left here is the thing core cannot do, because it is a policy rather than a
+     * fact: refusing to start a second push while the first is still moving the repository.
+     *
+     * A plain binding rather than a Cell now that no component reads it. Nothing clears it on a
+     * reload landing mid-push — the parked `finally` never runs (§5.3) — which stays harmless
+     * for the same reason as before: `activate` runs again and builds a fresh one.
      */
-    const running = createCell<string | null>(null)
+    let running: string | null = null
 
     /** What one git operation did, so a caller never has to guess from a thrown value. */
     type Outcome =
@@ -172,15 +191,14 @@ export default defineExtension({
       | { readonly kind: "busy" }
 
     async function run(label: string, work: () => Promise<void>): Promise<Outcome> {
-      const current = running.get()
-      if (current !== null) {
+      if (running !== null) {
         // Two pushes racing would interleave their confirms, and the second would decide
         // what to do about a repository the first is still moving.
-        ctx.popups.notify(`Still ${current} — try again when it finishes`, "warning")
+        ctx.popups.notify(`Still ${running} — try again when it finishes`, "warning")
         return { kind: "busy" }
       }
 
-      running.set(label)
+      running = label
       try {
         await work()
         return { kind: "done" }
@@ -190,7 +208,7 @@ export default defineExtension({
         if (!(error instanceof GitError)) throw error
         return { kind: "failed", error }
       } finally {
-        running.set(null)
+        running = null
       }
     }
 
@@ -347,38 +365,59 @@ export default defineExtension({
      */
     function SyncSegment() {
       const theme = useTheme()
-      const busy = running.use()
       const head = useGit((state) => state.head)
+      // Core's, not this Extension's: every write is announced at the choke point they all
+      // pass through, so this one segment covers the commit that commit-flow is holding open
+      // and the push buried in the branches menu — work sync never sees, and which until now
+      // was visible nowhere at all. `.at(-1)`: the most recently started, when two overlap.
+      const busy = useGitActivity().at(-1) ?? null
+      const wave = useSpinner(busy !== null)
 
-      // Every branch below returns `<span>` children of one `<text>`, never a `content`
-      // prop. React reuses the same renderable across a re-render, and switching that one
-      // instance between the two forms leaves OpenTUI's text buffer with no chunks — it
-      // throws `text.chunks` on the next paint, and the slot's error boundary then collapses
-      // this segment for the rest of the session. Which is exactly what a fetch did: the
-      // spinner below is the only state that used `content`.
-      const spans =
-        // The progress indicator outranks everything else: it is the only place a running
-        // fetch is visible, and the numbers it covers are about to change anyway.
-        busy !== null
-          ? [<span key="busy" fg={theme.warning}>{`⟳ ${busy}`}</span>]
-          : head.kind === "noRepository"
-            ? []
-            : head.kind === "detached"
-              ? [<span key="head" fg={theme.warning}>{`detached at ${head.oid.slice(0, 7)}`}</span>]
-              : [
-                  <span key="head" fg={theme.accent}>
-                    {head.branch}
-                  </span>,
-                  // `gone` and in-sync are both `↑0 ↓0` (§1.5), so drawing them alike is the
-                  // exact mistake `UpstreamInfo.gone` exists to prevent. Everything else that
-                  // is merely "nothing to report" — no upstream, no commits yet, in sync —
-                  // prints nothing, so what is on the line is always something that happened.
-                  ...upstreamSpans(head.kind === "onBranch" ? head.upstream : null, theme),
-                ]
+      const tokens: Token[] = []
+      if (head.kind === "detached") {
+        tokens.push({ key: "head", text: `detached at ${head.oid.slice(0, 7)}`, color: theme.warning })
+      } else if (head.kind !== "noRepository") {
+        tokens.push({ key: "head", text: head.branch, color: theme.accent })
+      }
+
+      // Beside the branch rather than over it. The old indicator replaced the whole segment,
+      // so a push cost you the one place the branch is unconditionally written — at the exact
+      // moment you want to be sure which branch is moving. The counts stay too: they are about
+      // to change, but a stale `↑2` is worth more than a gap, and it is what the toast that
+      // lands afterwards will be read against.
+      if (busy !== null && wave !== null) {
+        tokens.push({ key: "wave", text: wave, color: theme.accent })
+        tokens.push({ key: "busy", text: busy.label, color: theme.textMuted })
+      }
+
+      // `gone` and in-sync are both `↑0 ↓0` (§1.5), so drawing them alike is the exact mistake
+      // `UpstreamInfo.gone` exists to prevent. Everything else that is merely "nothing to
+      // report" — no upstream, no commits yet, in sync — prints nothing, so what is on the line
+      // is always something that happened.
+      tokens.push(...upstreamTokens(head.kind === "onBranch" ? head.upstream : null, theme))
 
       // Nothing to say takes no width rather than an empty box beside everyone else's data.
-      if (spans.length === 0) return null
-      return <text wrapMode="none">{spans}</text>
+      if (tokens.length === 0) return null
+
+      // `<span>` children of one `<text>`, never a `content` prop — in every state, including
+      // while busy. React reuses the same renderable across a re-render, and switching that one
+      // instance between the two forms leaves OpenTUI's text buffer with no chunks: it throws
+      // on `text.chunks` at the next paint, and the slot's error boundary then collapses this
+      // segment for the rest of the session. That is exactly what a fetch used to do, back when
+      // the busy state was the one branch here that rendered `content`.
+      //
+      // The token *count* is also stable for the whole of an operation — only the wave's text
+      // changes between frames — so a tick is one text update on one node, not a renderable
+      // added and removed ten times a second.
+      return (
+        <text wrapMode="none">
+          {tokens.map((token, index) => (
+            <span key={token.key} fg={token.color}>
+              {index === 0 ? token.text : ` ${token.text}`}
+            </span>
+          ))}
+        </text>
+      )
     }
 
     ctx.statusline.register({ id: "sync", component: SyncSegment, align: "right" })

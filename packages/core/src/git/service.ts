@@ -10,6 +10,7 @@ import {
 } from "laziergit"
 
 import type { GitConfig } from "../config/config"
+import { GitActivityStore, labelFor } from "./activity"
 import { execGit, execGitAllowingEmpty } from "./exec"
 import {
   branchArgs,
@@ -156,6 +157,12 @@ function fingerprintOf(status: string, refs: string, stash: string, config: stri
  */
 export class GitService {
   readonly store: GitStore
+  /**
+   * What git is doing right now. Written here, at the one choke point every write already
+   * passes through, so no Extension has to remember to report its own progress — and none
+   * can forget. Reads are deliberately absent: the diff Pane runs one on every cursor move.
+   */
+  readonly activity: GitActivityStore
   readonly #repoRoot: string
   readonly #report: (message: string, error?: unknown) => void
   readonly #inflight = new Set<Promise<unknown>>()
@@ -174,6 +181,7 @@ export class GitService {
     this.#config = options.config
     this.#report = options.report
     this.store = new GitStore((error) => options.report("store listener", error))
+    this.activity = new GitActivityStore((error) => options.report("activity listener", error))
   }
 
   /** Absolute repository root. Constant for the session, and the cwd every child inherits. */
@@ -421,6 +429,23 @@ export class GitService {
   }
 
   /**
+   * {@link #run}, plus an entry in {@link activity} for as long as the work lasts.
+   *
+   * Wrapped around the promise rather than folded into the effect so it ends on every exit —
+   * git refusing, the repository being absent, a defect — and so it survives `#refreshed`
+   * running the follow-up read *inside* the effect: the operation stays announced until the
+   * store has caught up, because until then the screen still shows the old repository.
+   */
+  #announced<A>(args: readonly string[], effect: Effect.Effect<A, GitError>): Promise<A> {
+    const subcommand = subcommandOf(args)
+    // Argv with no subcommand is nothing to name. `isMutating` already assumes the worst
+    // about it and refreshes; there is just no honest word to put on the status line.
+    if (subcommand === null) return this.#run(effect)
+    const end = this.activity.begin(labelFor(args, subcommand.name))
+    return this.#run(effect).finally(end)
+  }
+
+  /**
    * Runs `build` against the repository root, or fails with a {@link GitError} naming the
    * reason. A typed failure rather than a thrown defect: to an Extension "there is no
    * repository here" is the same kind of answer as "git said no", and both belong in the
@@ -468,12 +493,17 @@ export class GitService {
   }
 
   raw(args: readonly string[], options: RawOptions = {}): Promise<GitOutput> {
-    return this.#run(this.rawEffect(args, options))
+    const effect = this.rawEffect(args, options)
+    // The same test that decides whether to refresh decides whether to announce, and for the
+    // same reason: a read is something the app does while you look at it, a write is something
+    // you asked for and are now waiting on.
+    return isMutating(args) ? this.#announced(args, effect) : this.#run(effect)
   }
 
   /** A porcelain write. Every helper encodes its own safe flag handling and nothing else. */
   #write(args: readonly string[]): Promise<void> {
-    return this.#run(
+    return this.#announced(
+      args,
       this.#refreshed(
         this.#withRepository(args, (root) => Effect.map(execGit(root, args, { write: true }), () => undefined)),
       ),
@@ -535,7 +565,8 @@ export class GitService {
     const toDelete = paths.filter((path) => untracked.has(path))
     const toRestore = paths.filter((path) => !untracked.has(path))
 
-    return this.#run(
+    return this.#announced(
+      ["restore"],
       this.#refreshed(
         this.#withRepository(["restore"], (root) => {
           const restored =
@@ -647,12 +678,16 @@ export class GitService {
     this.#stopped = true
     this.#disarmPoll()
     await Promise.allSettled([this.#opened, this.#refreshing, ...this.#inflight])
+    // After the wait, not before: until the writes settle they really are in flight, and
+    // anything still rendering should keep saying so.
+    this.activity.clear()
   }
 
   /** Clears the poll timer synchronously, before shutdown starts draining. */
   stop(): void {
     this.#stopped = true
     this.#disarmPoll()
+    this.activity.clear()
   }
 }
 

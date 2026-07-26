@@ -2,7 +2,7 @@ import { PaneRuntimeContext, RuntimeContext } from "@laziergit/runtime-bridge"
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 
 import type { HostRuntime, PaneRuntime } from "./host"
-import type { Cell, CommandSpec, EventMap, GitState, Theme } from "./types"
+import type { Cell, CommandSpec, EventMap, GitActivity, GitState, Theme } from "./types"
 
 /**
  * The two React contexts carry `unknown` — they live in the bridge package precisely so
@@ -23,6 +23,7 @@ function isHostRuntime(value: unknown): value is HostRuntime {
   if (!isRecord(value)) return false
   return (
     hasMethods(value.git, ["getSnapshot", "subscribe"]) &&
+    hasMethods(value.activity, ["getSnapshot", "subscribe"]) &&
     hasMethods(value.events, ["subscribe"]) &&
     hasMethods(value.commands, ["registerComponent"]) &&
     hasMethods(value.keys, ["capture"]) &&
@@ -99,6 +100,32 @@ export function useGit<T>(selector: (state: GitState) => T, isEqual: (a: T, b: T
     committed.current = { value }
   }, [value])
   return value
+}
+
+/**
+ * The git writes in flight right now, oldest first — so `.at(-1)` is the one that started most
+ * recently, which is what a one-line surface should name when two overlap.
+ *
+ * Every write goes through core, so this sees all of them wherever they were invoked from: a
+ * `push` from the sync Command, the one buried in the branches menu, a `commit` held up by a
+ * pre-commit hook, a `raw(["merge", …])` an Extension built itself. Nothing has to opt in, and
+ * an Extension cannot leave its own work unreported.
+ *
+ * Reads never appear, and neither does the background poll. An operation that settles inside
+ * ~120ms never appears either, which is what makes this safe to render directly — no debounce
+ * of your own, no spinner blinking once per staged hunk.
+ *
+ * ```tsx
+ * const [busy] = useGitActivity().slice(-1);
+ * return busy ? <text>{`${spinner} ${busy.label}`}</text> : null;
+ * ```
+ */
+export function useGitActivity(): readonly GitActivity[] {
+  const runtime = useRuntime()
+  // Passed through unwrapped: the store returns the same frozen array between publishes, so
+  // React sees a stable identity and a fresh closure per render would only churn the
+  // subscription — the same reason `useTheme` hands over bound methods.
+  return useSyncExternalStore(runtime.activity.subscribe, runtime.activity.getSnapshot, runtime.activity.getSnapshot)
 }
 
 export function useEvent<K extends keyof EventMap & string>(

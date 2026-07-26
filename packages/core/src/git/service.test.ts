@@ -566,6 +566,55 @@ it("keeps the a/ and b/ patch prefixes whatever the repository's own diff config
   expect(output.stdout).toContain("+++ b/seed.txt")
 })
 
+// ---- activity -------------------------------------------------------------------------
+
+/**
+ * The reason activity is tracked here rather than by whoever called: every route to git passes
+ * through this class, so a commit held open by a hook is reported whether it came from
+ * `commit-flow`, from the branches menu, or from an Extension nobody has written yet. No
+ * Extension opts in, and none can forget.
+ */
+it("announces a write while it runs, whichever caller started it", async () => {
+  const repo = await createSeededRepo()
+  // Slow enough to outlive the 120ms reveal delay and still be observable afterwards.
+  await repo.write(".git/hooks/pre-commit", "#!/bin/sh\nsleep 1\n")
+  await chmod(join(repo.path, ".git/hooks/pre-commit"), 0o755)
+  const service = await open(repo.path)
+  await repo.write("late.txt", "late\n")
+  await service.stage(["late.txt"])
+
+  const write = service.commit("held open by a hook")
+  await waitFor(() => service.activity.getSnapshot().length > 0, "the commit to be announced")
+  expect(service.activity.getSnapshot().map((entry) => entry.label)).toEqual(["committing"])
+
+  await write
+  // Withdrawn only once the follow-up refresh has landed: until the store catches up, the
+  // screen is still showing the repository as it was before the commit.
+  expect(service.activity.getSnapshot()).toEqual([])
+  expect(state(service).commits.at(0)?.subject).toBe("held open by a hook")
+})
+
+it("says nothing about a read, which the diff pane runs on every cursor move", async () => {
+  const repo = await createSeededRepo()
+  await repo.write("seed.txt", "edited\n")
+  const service = await open(repo.path)
+
+  let published = 0
+  service.activity.subscribe(() => {
+    published += 1
+  })
+
+  // Long enough that a tracked read would have been revealed several times over.
+  for (let index = 0; index < 20; index += 1) {
+    await service.raw(["diff", "--no-ext-diff", "-U3"])
+  }
+  await Bun.sleep(200)
+
+  expect(service.activity.getSnapshot()).toEqual([])
+  // The background poll runs reads too, and must be equally silent.
+  expect(published).toBe(0)
+})
+
 // ---- outside a repository -------------------------------------------------------------
 
 it("serves an empty snapshot outside a repository and fails writes with a clear reason", async () => {

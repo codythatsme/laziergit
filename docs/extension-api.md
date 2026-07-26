@@ -23,7 +23,7 @@ same shape, shipped inside the distribution rather than these directories.)
 |---|---|
 | Entry point | `defineExtension()` — one function, six fields |
 | `ctx` | eleven members — `config` · `git` · `events` · `commands` · `panes` · `menus` · `popups` · `statusline` · `extensions` · `effect` · `signal` — plus four methods: `exec()`, `open()`, `copy()`, `onDispose()` |
-| React hooks | `useGit`, `useEvent`, `useCommand`, `useTheme`, and the pane-building `useListCursor`, `useScrollView`, `useKeyCapture` — 7 hooks (plus `createCell` for activate → component data) |
+| React hooks | `useGit`, `useGitActivity`, `useEvent`, `useCommand`, `useTheme`, and the pane-building `useListCursor`, `useScrollView`, `useKeyCapture` — 8 hooks (plus `createCell` for activate → component data) |
 | Pure helpers | `option` (config), `toneColor` + `createRowSource` (row decorations), `literalPathspec` (pathspec safety), `describeGitFailure` (what to show when git says no) — plain functions, no runtime |
 | Augmentable registries | `ExtensionApis`, `EventMap`, `MenuMap` — 3 interfaces, one pattern |
 | Everything else | plain data types |
@@ -1205,6 +1205,40 @@ tagged with the extension name, and routed to the log file / debug pane.
     selector: (state: GitState) => T,
     isEqual?: (a: T, b: T) => boolean,
   ): T;
+
+  /**
+   * The git writes in flight right now, oldest first — so `.at(-1)` is the one
+   * that started most recently, which is what a one-line surface should name
+   * when two overlap.
+   *
+   * Every write goes through core, so this sees all of them wherever they were
+   * invoked from — including other extensions' work and `raw` argv you built
+   * yourself. Nothing opts in; nothing can forget.
+   *
+   * Reads never appear (the diff pane runs one per cursor move), the background
+   * poll never appears, and an operation that settles inside ~120ms never
+   * appears either — so this is safe to render directly, with no debounce of
+   * your own and no spinner blinking once per staged hunk.
+   *
+   * Its own store rather than a slice of {@link GitState}: that is the
+   * repository as last read, republished by a refresh and feeding every
+   * selector and `git.<slice>.changed` event. Folding activity in would fire
+   * that whole fan-out for a fact no pane asked about.
+   *
+   * ```tsx
+   * const [busy] = useGitActivity().slice(-1);
+   * return busy ? <text>{`${spinner} ${busy.label}`}</text> : null;
+   * ```
+   */
+  export function useGitActivity(): readonly GitActivity[];
+
+  /** One git write core is running right now. */
+  export interface GitActivity {
+    /** Unique for as long as the operation runs. */
+    readonly id: number;
+    /** A gerund: `"pushing"`, `"amending"`, `"fetching (prune)"`. */
+    readonly label: string;
+  }
 
   /**
    * Subscribe to an event while mounted. The latest `handler` is always called —
@@ -2805,7 +2839,20 @@ renderer still handles ctrl+C independently of the kernel, so the process itself
   measuring where it actually drew the row, so headers, multi-line rows and an eventual
   collapsible tree cost a pane nothing. Two coordinate systems that have to agree is a model
   to keep in step; asking layout is not.
-- **Toast/progress/spinner APIs beyond `notify`** — a pane that owns long work renders its own state.
+- **Toast/progress/spinner APIs beyond `notify`** — a pane that owns long work renders its own
+  state. **Partly reversed in M5**, and the reasoning was wrong in a specific way worth
+  recording. "The pane that owns the work renders it" assumes the pane that *starts* the work is
+  the one with somewhere to draw it, and across the bundled set it usually is not: `commit-flow`
+  owns a commit a pre-commit hook can hold for thirty seconds while its editor sits there looking
+  hung, and the push at `branches/index.tsx:185` is a network round trip with no surface of its
+  own at all. Every extension having to opt in produced exactly what you would expect — `sync`
+  did, nobody else did, and the status line went blank on a push instead. What was actually
+  missing was not a rendering API but the *fact*: core runs every write, so core is the only
+  thing that can know about all of them. {@link useGitActivity} exposes that fact and nothing
+  else. The bullet still holds for the part it was really defending: core owns no progress
+  *surface* — no `ctx.progress.start()` handle, no spinning toast, no imperative
+  `statusline.setBusy`. Who draws, and what it looks like, stays with the extension; the sync
+  segment's loader is its own component and its own frame table.
 - **A `disabled` state on menu items** — `when` hides; a visible-but-inert item is presentation
   subtlety v1 skips (hiding unsuitable entries is Magit's default too).
 - **A `signal` on `ExecOptions`** — scope supervision already kills the child and parks the

@@ -189,6 +189,21 @@ export const option = {
   },
 }
 
+/**
+ * One git operation core is running right now — see {@link useGitActivity}.
+ *
+ * Deliberately not a slice of {@link GitState}: that is the repository as last read, and this
+ * is what is happening to it. Only writes appear (a push, a commit, a stage), and only once
+ * they have been running long enough to be worth drawing — a stage that settles in 8ms never
+ * shows up at all, so a surface can render this without flickering on every keystroke.
+ */
+export interface GitActivity {
+  /** Unique for as long as the operation runs. */
+  readonly id: number
+  /** What git is doing, as a gerund: `"pushing"`, `"amending"`, `"fetching (prune)"`. */
+  readonly label: string
+}
+
 export interface GitState {
   readonly head: Head
   readonly branches: readonly Branch[]
