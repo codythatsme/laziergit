@@ -8,7 +8,8 @@ import { registerLeader } from "@opentui/keymap/addons"
 import { createOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { createReactSlotRegistry } from "@opentui/react"
 import { assertExtensionDefinition } from "@laziergit/runtime-bridge"
-import type { CommandSpec, Disposable, EventMap, Extension, GitState, Theme } from "laziergit"
+import type { HostRuntime } from "laziergit/host"
+import type { CommandSpec, Disposable, EventMap, Extension, GitState } from "laziergit"
 
 import {
   defaultConfigFiles,
@@ -98,31 +99,6 @@ export interface ExtensionKernelOptions {
   readonly clipboardWriters?: readonly ClipboardWriterSpec[]
 }
 
-interface InternalRuntime {
-  /** Structurally the shape `useGit` consumes; kept in lockstep with packages/laziergit/src/react.ts. */
-  readonly git: {
-    getSnapshot(this: void): GitState
-    subscribe(this: void, listener: () => void): () => void
-  }
-  readonly events: {
-    subscribe<K extends keyof EventMap & string>(
-      extension: string,
-      event: K,
-      handler: (payload: EventMap[K]) => void | Promise<void>,
-    ): Disposable
-  }
-  readonly commands: {
-    registerComponent(extension: string, paneId: string, spec: Omit<CommandSpec, "pane">): Disposable
-  }
-  readonly keys: {
-    capture(paneId: string): Disposable
-  }
-  readonly theme: {
-    getSnapshot(): Theme
-    subscribe(listener: () => void): () => void
-  }
-}
-
 /** Core's own Commands. "app" is a reserved Extension name, so these ids can never collide. */
 const coreOwner = "app"
 
@@ -179,7 +155,7 @@ export class ExtensionKernel {
   readonly keymap: Keymap<Renderable, KeyEvent>
   readonly keybindings: KeybindingHost<Renderable, KeyEvent>
   readonly git: GitService
-  readonly runtime: InternalRuntime
+  readonly runtime: HostRuntime
   readonly #repoRoot: string
   readonly #clipboardWriters: readonly ClipboardWriterSpec[] | undefined
   readonly #directories: ExtensionDirectories
