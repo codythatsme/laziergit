@@ -393,7 +393,7 @@ export default defineExtension({
         const draft = current.draft
         return (
           <box flexDirection="column" flexGrow={1}>
-            <text content={editingHeader(draft, staged.length)} style={{ fg: theme.textMuted }} />
+            <text wrapMode="none" content={editingHeader(draft, staged.length)} style={{ fg: theme.textMuted }} />
             <textarea
               key={draft.id}
               ref={(node) => {
@@ -420,7 +420,7 @@ export default defineExtension({
             <box flexDirection="column">
               <text content={countLabel(staged.length)} style={{ fg: theme.text }} />
               {staged.slice(0, listedPaths).map((file) => (
-                <text key={file.path} content={`  ${describe(file)}`} style={{ fg: theme.textMuted }} />
+                <text key={file.path} wrapMode="none" content={`  ${describe(file)}`} style={{ fg: theme.textMuted }} />
               ))}
               {staged.length > listedPaths ? (
                 <text content={`  +${staged.length - listedPaths} more`} style={{ fg: theme.textMuted }} />
@@ -428,14 +428,16 @@ export default defineExtension({
             </box>
           )}
           {keptDraft.length > 0 ? (
-            <text content={`draft kept: ${firstLine(keptDraft)}`} style={{ fg: theme.warning }} />
+            <text wrapMode="none" content={`draft kept: ${firstLine(keptDraft)}`} style={{ fg: theme.warning }} />
           ) : null}
-          {/* Named, because an editor nobody can find is an editor nobody uses. Two short
-              lines rather than one sentence: a sidebar column is narrower than the prose.
-              Spelled the way the Commands below are bound and the cheat sheet prints them —
-              `shift+a`, not `A` — so the hint and the keybinding cannot disagree. A user who
-              rebinds either in config still out-dates this line; the cheat sheet is where
-              the truth is, and a Pane cannot ask for a Command's resolved keys (§1.7). */}
+          {/* Named, because an editor nobody can find is an editor nobody uses — and the hint
+              bar structurally cannot say this: it shows the *focused* Pane's keys, and these
+              two live on the files Pane. Two short lines rather than one sentence: a sidebar
+              column is narrower than the prose. Spelled the way the Commands are bound and
+              the cheat sheet prints them — `shift+a`, not `A` — so the hint and the
+              keybinding cannot disagree. A user who rebinds either in config still out-dates
+              this line; the cheat sheet is where the truth is, and a Pane cannot ask for a
+              Command's resolved keys (§1.7). */}
           <text content="c commit  ·  shift+a amend" style={{ fg: theme.info }} />
           <text content="from the files pane" style={{ fg: theme.textMuted }} />
         </box>

@@ -1406,6 +1406,16 @@ autocompletes every prop; this table only orients. The ones the examples lean on
 Anything past this table — truncation, alignment, borders — is a prop on these same
 intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
 
+**One row is one line.** `<text>` defaults to `wrapMode: "word"`, so a row wider than its
+column reflows into two or three lines and a list stops being a list — one long branch name
+pushes every row below it down, and the cursor no longer lands where the eye does. Every
+bundled row therefore passes `wrapMode="none"`, which clips at the column edge, and so should
+yours. There is no width to truncate against — a pane cannot measure its own column, only its
+{@link ScrollView.viewportRows} — so clipping is the whole of the mechanism, and it clips from
+the **right**: order a row most-important-first and it degrades by losing the part the reader
+can most afford. What a clipped row cannot say belongs in the detail view, which is what
+`DiffApi.show` and its `branch` target are for (§1.11).
+
 ### 1.9 Menus — data, so anyone can splice
 
 ```ts

@@ -193,7 +193,7 @@ export default defineExtension({
       const dim = decoration?.dim === true
 
       return (
-        <text id={id} bg={selected && focused ? theme.selection : undefined}>
+        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
           {/* The marker, not the highlight, is what says where the cursor is while another
               Pane holds focus — the state in which the diff on screen is still this Pane's
               selection and the user needs to see which row that was. */}
