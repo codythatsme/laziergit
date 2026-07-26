@@ -71,6 +71,11 @@ packages/
                     # defineExtension, all public types, React hooks
   core/             # the host: bootstrap, extension kernel, UI framework,
                     # git service, config; bin entry (`laziergit`)
+  runtime-bridge/   # the seam the two halves share so neither imports the other:
+                    # the React contexts carrying the runtime, and the spec
+                    # validation both ends need. Nothing domain-specific lands
+                    # here — if core and laziergit both want it, that is a design
+                    # question, not a reason to widen this package.
 extensions/         # Bundled Extensions, one package each, public API only:
   status/  files/  branches/  commits/  stash/  diff/  commit-flow/  sync/
 docs/
@@ -85,6 +90,8 @@ CONTEXT.md          # glossary / ubiquitous language
 ```
 
 Bun workspaces; `packages/laziergit` has no dependency on `packages/core` (types + factories only) — core depends on it, never the reverse. That keeps the public surface honest: if a bundled extension needs something, it must arrive through the public package.
+
+Both depend on `packages/runtime-bridge`, which is the one thing they are allowed to share. React contexts are why it exists: a context object has identity, so the host that provides it and the hooks that read it must hold the *same* module instance, and neither package may import the other to get one. It carries the contexts (typed `unknown`, parsed at the boundary in `react.ts` rather than asserted), the host↔hooks runtime contract, and the `defineExtension` validation both ends need. It is deliberately not a shortcut around the boundary: anything domain-specific arriving here would mean core and the public package have grown a dependency the architecture says they must not have.
 
 ## The extension API
 

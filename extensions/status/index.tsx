@@ -12,12 +12,12 @@ import {
 } from "laziergit"
 
 /**
- * Where HEAD points, in the vocabulary this Pane draws rather than the one git reports.
+ * Where HEAD points, in the vocabulary this Pane draws rather than the one git reports —
+ * the oid already shortened, and `onBranch` renamed to the thing a reader sees.
  *
- * The one thing {@link Head} cannot say on its own is "there is no repository": outside one
- * the store serves an unborn HEAD whose branch is `""`, a name no real branch can have. That
- * is the only signal an Extension gets, so it is decoded here — once, at the boundary —
- * instead of being re-checked wherever an empty branch name would otherwise be rendered.
+ * Split from {@link HeadLine} so `headSegments` takes only the three variants that name a
+ * repository: "there is no repository" is a whole different row, not a branch line missing
+ * its branch, and this is what stops the two being confused for one another.
  */
 type RepositoryHead =
   | { readonly kind: "unborn"; readonly branch: string }

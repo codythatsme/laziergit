@@ -51,7 +51,7 @@ function cacheOwnerPid(name: string): number | undefined {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
 }
 
-function directoryLinkType(platform: NodeJS.Platform): "dir" | "junction" {
+export function directoryLinkType(platform: NodeJS.Platform): "dir" | "junction" {
   return platform === "win32" ? "junction" : "dir"
 }
 
@@ -82,8 +82,13 @@ async function linkDirectoryEntries(
   )
 }
 
-function hostPackageRoot(specifier: string): string {
-  return dirname(fileURLToPath(import.meta.resolve(specifier)))
+/**
+ * Where a package laziergit itself depends on sits on disk. Resolved through its `package.json`
+ * rather than its entry point because the two need not share a directory — `laziergit`'s entry
+ * is `src/index.ts` — and a types-only package has no entry to resolve at all.
+ */
+export function hostPackageRoot(specifier: string): string {
+  return dirname(fileURLToPath(import.meta.resolve(`${specifier}/package.json`)))
 }
 
 async function createNodeModulesOverlay(

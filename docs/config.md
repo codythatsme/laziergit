@@ -26,6 +26,26 @@ core sections plus one section per installed Extension. Point your editor at it:
 }
 ```
 
+## What laziergit writes beside your Extensions
+
+Extensions live in `~/.config/laziergit/extensions/` and `<repo>/.laziergit/extensions/`. Both
+are yours; laziergit publishes exactly two things into them on every start, so a file dropped
+there typechecks in your editor before it ever runs:
+
+- **`tsconfig.json`** — the compiler options the laziergit workspace itself uses: JSX pointed at
+  `@opentui/react`, `strict`, `verbatimModuleSyntax`, `moduleResolution: "Bundler"`. Written only
+  when it is absent, so one you have edited is never overwritten — delete it to get the current
+  one back.
+- **`node_modules/`** — links to everything an Extension may import (`laziergit`, `react`,
+  `@opentui/react`) plus the type packages they need, resolved out of the laziergit you are
+  running, so the types you write against are the API you will get. The links are refreshed on
+  every start, because moving or reinstalling laziergit strands them. It hides itself from git
+  with a `.gitignore` of `*`, and a directory you created there yourself is left untouched.
+
+Neither file affects loading: an Extension with type errors still loads, and if laziergit cannot
+write these it reports a diagnostic and carries on. `tsconfig.json` is an ordinary file in your
+repository — commit it or ignore it as you like.
+
 ## What a change costs
 
 Editing `layout`, `keybindings`, `theme`, `statusline`, `leader`, or `git` rearranges the
