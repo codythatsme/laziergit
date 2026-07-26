@@ -3,6 +3,10 @@ import {
   createRowSource,
   defineExtension,
   describeGitFailure,
+  isConflicted,
+  isStaged,
+  isUnstaged,
+  isUntracked,
   toneColor,
   useCommand,
   useGit,
@@ -13,36 +17,6 @@ import {
   type StashEntry,
 } from "laziergit"
 import { useEffect } from "react"
-
-const minute = 60_000
-const hour = 60 * minute
-const day = 24 * hour
-const week = 7 * day
-/** Calendar months and years vary; a list row wants a stable ruler more than an exact one. */
-const month = 30 * day
-/** Git's own relative dates round a year to 365 days; matching it keeps the two agreeing. */
-const year = 365 * day
-
-/**
- * An entry's age in the width a list row can spare: one unit, no "ago". Anything under a
- * minute is "now" rather than "0m", because a stash taken seconds ago reading as zero
- * looks like a missing value.
- *
- * The same ladder as the commits and branches Panes, deliberately: ADR-0001 gives these
- * three no package to share it through, so the copies are kept identical by hand instead —
- * they sit in adjacent Panes, and one saying `13w` where another says `3mo` for the same
- * elapsed time is laziergit contradicting itself on one screen.
- */
-function relativeAge(createdAt: number, now: number): string {
-  const elapsed = Math.max(0, now - createdAt)
-  if (elapsed < minute) return "now"
-  if (elapsed < hour) return `${Math.floor(elapsed / minute)}m`
-  if (elapsed < day) return `${Math.floor(elapsed / hour)}h`
-  if (elapsed < week) return `${Math.floor(elapsed / day)}d`
-  if (elapsed < month) return `${Math.floor(elapsed / week)}w`
-  if (elapsed < year) return `${Math.floor(elapsed / month)}mo`
-  return `${Math.floor(elapsed / year)}y`
-}
 
 /** The only name git gives an entry, and the operand every stash verb takes. */
 function stashRef(entry: StashEntry): string {
@@ -143,8 +117,12 @@ export default defineExtension({
     /** The `s` key in the files Pane: compose a message, then stash what is there. */
     async function save(): Promise<void> {
       const status = ctx.git.state.status
-      const tracked = status.staged.length + status.unstaged.length + status.conflicted.length
-      if (tracked === 0 && status.untracked.length === 0) {
+      // One entry per path, so a file staged *and* edited counts once — the old sum over
+      // three arrays counted it twice and could claim there was something to stash from a
+      // pair of arrays describing the same file.
+      const tracked = status.files.filter((file) => isStaged(file) || isUnstaged(file) || isConflicted(file)).length
+      const untrackedCount = status.files.filter(isUntracked).length
+      if (tracked === 0 && untrackedCount === 0) {
         ctx.popups.notify("Nothing to stash — the working tree is clean", "warning")
         return
       }
@@ -155,7 +133,7 @@ export default defineExtension({
       // Untracked files are opt-in because `git stash` leaves them alone by default, and a
       // stash that swept away a file git was never told about is one the user has no reason
       // to think of looking in.
-      const untracked = status.untracked.length
+      const untracked = untrackedCount
       const includeUntracked =
         untracked > 0 &&
         (await ctx.popups.confirm({
@@ -178,13 +156,11 @@ export default defineExtension({
     function StashRow({
       entry,
       id,
-      now,
       selected,
       focused,
     }: {
       readonly entry: StashEntry
       readonly id: string
-      readonly now: number
       readonly selected: boolean
       readonly focused: boolean
     }) {
@@ -193,7 +169,7 @@ export default defineExtension({
       const dim = decoration?.dim === true
 
       return (
-        <text id={id} bg={selected && focused ? theme.selection : undefined}>
+        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
           {/* The marker, not the highlight, is what says where the cursor is while another
               Pane holds focus — the state in which the diff on screen is still this Pane's
               selection and the user needs to see which row that was. */}
@@ -202,7 +178,6 @@ export default defineExtension({
           <span fg={dim ? theme.textMuted : theme.text}>{` ${entry.message}`}</span>
           {/* Absent for a stash taken on a detached HEAD, where git recorded no branch. */}
           {entry.branch === null ? null : <span fg={theme.textMuted}>{` on ${entry.branch}`}</span>}
-          <span fg={theme.textMuted}>{` ${relativeAge(entry.createdAt, now)}`}</span>
           {decoration?.badge === undefined ? null : (
             <span fg={toneColor(theme, decoration.tone)}>{` ${decoration.badge}`}</span>
           )}
@@ -215,8 +190,6 @@ export default defineExtension({
       const entries = useGit((state) => state.stash)
       const cursor = useListCursor({ items: entries, idPrefix: "stash", noun: "stash" })
       const selected = cursor.selected
-      // One clock read per frame, so every row in it agrees on what "now" is.
-      const now = Date.now()
 
       useEffect(() => {
         rows.setSelected(selected)
@@ -243,6 +216,7 @@ export default defineExtension({
       useCommand({
         id: "stash.apply",
         title: "Apply stash",
+        hint: "apply",
         keys: "space",
         run: async () => {
           if (selected !== undefined) await apply(selected)
@@ -251,6 +225,7 @@ export default defineExtension({
       useCommand({
         id: "stash.pop",
         title: "Pop stash",
+        hint: "pop",
         // Pane-scoped `p` while `sync` binds a global `p` for pull. Not a collision to fix:
         // the Pane layer (priority 100) shadows the global one (0) exactly while this Pane
         // is focused, so `p` here is the stash you are looking at and `p` anywhere else is
@@ -263,6 +238,7 @@ export default defineExtension({
       useCommand({
         id: "stash.drop",
         title: "Drop stash",
+        hint: "drop",
         keys: "d",
         run: async () => {
           if (selected !== undefined) await drop(selected)
@@ -271,6 +247,7 @@ export default defineExtension({
       useCommand({
         id: "stash.menu",
         title: "Stash actions",
+        hint: "menu",
         keys: "x",
         run: async () => {
           if (selected !== undefined) await ctx.menus.open("stash.actions", selected)
@@ -292,7 +269,6 @@ export default defineExtension({
               key={stashRef(entry)}
               id={cursor.rowId(index)}
               entry={entry}
-              now={now}
               selected={index === cursor.index}
               focused={focused}
             />
@@ -311,13 +287,14 @@ export default defineExtension({
     ctx.commands.register({
       id: "stash.focus",
       title: "Focus stash",
-      keys: "5",
+      keys: "4",
       run: () => pane.focus(),
     })
 
     ctx.commands.register({
       id: "stash.save",
       title: "Stash changes",
+      hint: "stash",
       keys: "s",
       // Bound inside a Pane another Extension owns. Bindings key on the Pane id rather than
       // on the registering Extension, so this needs no `needs` edge: with no files Pane

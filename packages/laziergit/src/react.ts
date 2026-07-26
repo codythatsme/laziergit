@@ -122,9 +122,9 @@ export function useEvent<K extends keyof EventMap & string>(
  * Registers a Pane-scoped Command for as long as the component is mounted.
  *
  * Only `run` is live: it is read through a ref, so it always sees the current render's
- * closure and a Command never acts on stale state. The rest of the spec — `title`, `keys`,
- * `hidden`, `capture` — is read once, at registration, and a later render changing one of
- * them does not re-register.
+ * closure and a Command never acts on stale state. The rest of the spec — `title`, `hint`,
+ * `keys`, `hidden`, `capture` — is read once, at registration, and a later render changing
+ * one of them does not re-register.
  *
  * That is deliberate rather than pending. Re-registering on every spec change would reorder
  * {@link CommandSpec.keys} conflict resolution, which is insertion-ordered, so a Pane that

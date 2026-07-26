@@ -29,8 +29,16 @@ The user-config-owned arrangement of Panes into the screen (columns/tabs). Exten
 _Avoid_: workspace, arrangement
 
 **Command**:
-A named action registered by an Extension, invokable via Keybinding or the palette. The unit all key-driven behavior is built from.
+A named action registered by an Extension, invokable via Keybinding or the palette. The unit all key-driven behavior is built from — one registration is also its Cheat Sheet row and, where it carries a `hint`, its Hint Bar entry.
 _Avoid_: action, binding (a binding maps a key to a Command)
+
+**Hint Bar**:
+The left of the bottom row, where Core prints the keys the focused Pane can act on right now, drawn from the `hint` on each live Command. Contextual by construction: it changes with focus, and collapses to a Pane's capture keys while that Pane owns the keyboard.
+_Avoid_: footer, options bar, status bar (the Status Line is the same row's other half)
+
+**Cheat Sheet**:
+The `?` overlay listing the focused Pane's keys, then its capture keys, then the globals. Derived from the Command catalog; scoped to one Pane, unlike the palette, which is global.
+_Avoid_: help, keymap popup
 
 **Exported API**:
 The typed surface an Extension itself exports for other Extensions to consume (e.g. the branches Extension's row decorations and menu items). Distinct from the Core's Extension Context.
@@ -39,6 +47,10 @@ _Avoid_: plugin interface
 **ScopedId**:
 A registration id carrying the owning Extension's name as its prefix (`"gh-workflows.refresh"`), enforced at the type level. The one naming rule for everything an Extension registers.
 _Avoid_: namespace, qualified name
+
+**Path Tree**:
+The files Pane's projection of `WorkingTreeStatus` into a flat-rooted folder hierarchy — one row per changed path, one row per directory above it, and single-child directory chains compressed into one row. Directory rows are not `FileChange` values, so they carry no Row Decoration and no `FilesApi` selection.
+_Avoid_: file tree view, explorer, directory listing
 
 **Row Decoration**:
 Extra visual data (badge, color, suffix) an Extension attaches to rows of another Extension's list Pane, e.g. PR status on branch rows.

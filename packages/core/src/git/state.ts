@@ -18,13 +18,7 @@ export const emptyGitState: GitState = Object.freeze({
   branches: Object.freeze([]),
   remotes: Object.freeze([]),
   tags: Object.freeze([]),
-  status: Object.freeze({
-    staged: noFiles,
-    unstaged: noFiles,
-    untracked: noFiles,
-    conflicted: noFiles,
-    isClean: true,
-  }),
+  status: Object.freeze({ files: noFiles, isClean: true }),
   commits: Object.freeze([]),
   stash: Object.freeze([]),
 })
@@ -89,18 +83,16 @@ function reuseList<T>(previous: readonly T[], next: readonly T[]): readonly T[] 
   return unchanged ? previous : Object.freeze(merged)
 }
 
+/**
+ * One list to reconcile, and it holds identity better than the four it replaced: staging a
+ * file used to move a fresh object from the unstaged array into the staged one, so both
+ * arrays changed length and every row after it shifted. Now the entry keeps its slot in
+ * path order with one field rewritten, and every neighbour stays `Object.is`-identical.
+ */
 function reuseStatus(previous: WorkingTreeStatus, next: WorkingTreeStatus): WorkingTreeStatus {
-  const staged = reuseList(previous.staged, next.staged)
-  const unstaged = reuseList(previous.unstaged, next.unstaged)
-  const untracked = reuseList(previous.untracked, next.untracked)
-  const conflicted = reuseList(previous.conflicted, next.conflicted)
-  const unchanged =
-    Object.is(staged, previous.staged) &&
-    Object.is(unstaged, previous.unstaged) &&
-    Object.is(untracked, previous.untracked) &&
-    Object.is(conflicted, previous.conflicted) &&
-    previous.isClean === next.isClean
-  return unchanged ? previous : Object.freeze({ staged, unstaged, untracked, conflicted, isClean: next.isClean })
+  const files = reuseList(previous.files, next.files)
+  const unchanged = Object.is(files, previous.files) && previous.isClean === next.isClean
+  return unchanged ? previous : Object.freeze({ files, isClean: next.isClean })
 }
 
 /**

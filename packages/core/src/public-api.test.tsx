@@ -275,15 +275,16 @@ describe("useKeyCapture", () => {
     await withExtensions(harness, { "editor.tsx": editorSource })
 
     await press(harness, () => void harness.kernel.openCheatSheet())
-    // The sheet scrolls, and the capture section is below the Pane's ordinary keys — which
-    // is the ordering under test, so it takes scrolling to see.
-    for (let scroll = 0; scroll < 3; scroll += 1) {
-      await press(harness, () => harness.setup.mockInput.pressArrow("down"))
-    }
 
     const rendered = frame(harness)
+    // Titled for the Pane it is about, because it is only about that Pane now.
+    expect(rendered).toContain("Keybindings — editor")
     expect(rendered).toContain("Submit message")
-    expect(rendered.indexOf("editor (capturing keys)")).toBeGreaterThan(rendered.indexOf("editor (focused)"))
+    expect(rendered).toContain("editor (capturing keys)")
+    // Against an entry rather than a heading, so this pins the ordering the name claims: the
+    // Pane's ordinary keys, then its capture keys, then the globals that trail every sheet.
+    expect(rendered.indexOf("editor (capturing keys)")).toBeGreaterThan(rendered.indexOf("Begin editing"))
+    expect(rendered.indexOf("Global")).toBeGreaterThan(rendered.indexOf("editor (capturing keys)"))
 
     await press(harness, () => harness.setup.mockInput.pressEscape())
   })

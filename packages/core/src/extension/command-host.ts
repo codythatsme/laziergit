@@ -4,11 +4,13 @@ import { normalizeError, type Diagnostics } from "./diagnostics"
 import { assertScopedId } from "./id"
 import { createNotifier, type Notifier } from "./notifier"
 
-/** One Command as the palette, cheat sheet, and keybinding layers see it. */
+/** One Command as the palette, cheat sheet, hint bar, and keybinding layers see it. */
 export interface CommandEntry {
   readonly id: string
   readonly owner: string
   readonly title: string
+  /** Short hint-bar label, or undefined for a Command that stays off the bar. */
+  readonly hint: string | undefined
   /** Pane id this Command is bound inside, or undefined for a global Command. */
   readonly pane: string | undefined
   readonly hidden: boolean
@@ -44,7 +46,7 @@ interface RegisteredCommand {
  * /`shift+ctrl+x` — the keymap folds too, but only its own parser knows them, so catching
  * those would mean re-implementing the parser here; they stay the caller's responsibility.)
  */
-function keyStroke(key: string): string {
+export function keyStroke(key: string): string {
   return key.toLowerCase()
 }
 
@@ -82,10 +84,10 @@ function claimScope(spec: CommandSpec): string {
 }
 
 /**
- * The Command catalog: one registration yields a keybinding, a palette row, and a
- * cheat-sheet row. Key resolution (user overrides, conflicts) happens here rather than
- * in the keymap layer, so every surface agrees on which keys a Command really has and
- * the rules stay testable without a renderer.
+ * The Command catalog: one registration yields a keybinding, a palette row, a cheat-sheet
+ * row, and — where the author wrote a `hint` — a hint-bar entry. Key resolution (user
+ * overrides, conflicts) happens here rather than in the keymap layer, so every surface
+ * agrees on which keys a Command really has and the rules stay testable without a renderer.
  */
 export class CommandHost {
   readonly #commands = new Map<string, RegisteredCommand>()
@@ -229,6 +231,7 @@ export class CommandHost {
       id,
       owner: command.owner,
       title: command.spec.title,
+      hint: command.spec.hint,
       pane: command.spec.pane,
       hidden: command.spec.hidden === true,
       capture: capturesOf(command.spec),

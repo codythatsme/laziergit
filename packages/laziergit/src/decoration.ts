@@ -75,12 +75,14 @@ export interface RowSourceOptions<Row> {
    * the objects beneath it.
    *
    * Make it unique across the rows this Pane shows — but "unique" is a claim about the ROW
-   * TYPE, not the screen. `files` keys on all three fields of its `FileChange` row (kind,
-   * previousPath, path), which is why a path modified in *both* the index and the working
-   * tree — one identical `FileChange` value drawn on two lines — lands in one slot: a
-   * decorating provider handed either object says the same thing, so sharing is correct. Two
-   * *different* objects sharing a key would evict each other on every pass and the merged
-   * decoration would never settle.
+   * TYPE, not the screen. Two *different* objects sharing a key would evict each other on
+   * every pass and the merged decoration would never settle.
+   *
+   * Prefer the row's most stable name over its state: `branches` keys on the branch name,
+   * `stash` on the entry's index, and `files` on `change.path` alone — the model gives a
+   * path exactly one entry (ADR-0005), so the path *is* the identity. Folding state into the
+   * key would move the slot every time the row's status changed, discarding a decoration the
+   * provider would only recompute to the same answer.
    */
   key(row: Row): string
 }

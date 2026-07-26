@@ -347,18 +347,20 @@ describe("the git the diff pane asks for", () => {
     ])
   })
 
-  it("shows a commit as a bare patch, always against its first parent", async () => {
+  it("shows a commit with its own header, always against its first parent", async () => {
     const diff = await createDiffHarness()
     const oid = (await git(diff.harness, "rev-parse", "HEAD")).trim()
 
     const argv = await diff.show("driver.head-commit-file")
 
-    // `--format=` keeps the commit's own subject off the top, because the parser behind
-    // `<diff>` wants a bare patch. `--first-parent` is byte-identical to no flag at all on
-    // an ordinary commit, so it rides along here for the merge case below.
+    // `--pretty=medium`, not the `--format=` that used to strip the header: rows are clipped
+    // to one line, so a subject that runs off the right edge has to be readable somewhere,
+    // and `splitPatch` lifts the preamble off the front rather than letting `<diff>` parse it
+    // as a file section. `--first-parent` is byte-identical to no flag at all on an ordinary
+    // commit, so it rides along here for the merge case below.
     expect(argv).toEqual([
       "show",
-      "--format=",
+      "--pretty=medium",
       "--no-ext-diff",
       "-U3",
       "--first-parent",

@@ -1,7 +1,16 @@
 import { afterEach, expect, it } from "bun:test"
 import { chmod, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { GitError, type GitState, type Head } from "laziergit"
+import {
+  GitError,
+  isConflicted,
+  isStaged,
+  isUnstaged,
+  isUntracked,
+  type FileChange,
+  type GitState,
+  type Head,
+} from "laziergit"
 
 import { defaultGitConfig } from "../config/config"
 import { ActivationScope } from "../extension/activation-scope"
@@ -45,6 +54,28 @@ function state(service: GitService): GitState {
 }
 
 /**
+ * The four questions the status's old four arrays answered, over the one list that replaced
+ * them (ADR-0005). A path both staged and edited since appears in `stagedPaths` *and*
+ * `unstagedPaths`, which is the same file counted twice — that is what the model now says
+ * out loud rather than encoding as two objects in two arrays.
+ */
+function pathsWhere(service: GitService, predicate: (change: FileChange) => boolean): readonly string[] {
+  return state(service)
+    .status.files.filter(predicate)
+    .map((file) => file.path)
+}
+
+const stagedPaths = (service: GitService): readonly string[] => pathsWhere(service, isStaged)
+const unstagedPaths = (service: GitService): readonly string[] => pathsWhere(service, isUnstaged)
+const untrackedPaths = (service: GitService): readonly string[] => pathsWhere(service, isUntracked)
+const conflictedPaths = (service: GitService): readonly string[] => pathsWhere(service, isConflicted)
+
+/** One entry, by path, so an assertion can read both of its columns at once. */
+function fileAt(service: GitService, path: string): FileChange | undefined {
+  return state(service).status.files.find((file) => file.path === path)
+}
+
+/**
  * Narrows HEAD to the branch-with-commits variant, so a test asserting on an oid or an
  * upstream fails on the wrong variant instead of never compiling.
  */
@@ -79,7 +110,7 @@ it("reads a repository with no commits without failing on `git log`", async () =
   // HEAD is still symbolic here, which is why the unborn variant carries a branch name.
   expect(state(service).head).toEqual({ kind: "unborn", branch: "main" })
   expect(state(service).commits).toEqual([])
-  expect(state(service).status.untracked.map((file) => file.path)).toEqual(["untracked.txt"])
+  expect(untrackedPaths(service)).toEqual(["untracked.txt"])
   expect(reports).toEqual([])
 })
 
@@ -114,17 +145,32 @@ it("classifies staged, unstaged, untracked, and renamed paths", async () => {
   const service = await open(repo.path)
   const status = state(service).status
 
-  expect(status.staged).toContainEqual({ path: "added.txt", previousPath: null, kind: "added" })
-  expect(status.staged).toContainEqual({ path: "seed.txt", previousPath: null, kind: "modified" })
+  expect(fileAt(service, "added.txt")).toEqual({
+    kind: "changed",
+    path: "added.txt",
+    previousPath: null,
+    index: "added",
+    worktree: null,
+  })
+  // Staged and then edited again: one entry, both columns filled. This is the shape the
+  // four-array model had to express as two objects in two arrays.
+  expect(fileAt(service, "seed.txt")).toEqual({
+    kind: "changed",
+    path: "seed.txt",
+    previousPath: null,
+    index: "modified",
+    worktree: "modified",
+  })
   // A `2` record carries its original path in a second NUL field, and the path itself
   // contains a space — neither may be lost.
-  expect(status.staged).toContainEqual({
+  expect(fileAt(service, "dir renamed.txt")).toEqual({
+    kind: "changed",
     path: "dir renamed.txt",
     previousPath: "movable.txt",
-    kind: "renamed",
+    index: "renamed",
+    worktree: null,
   })
-  expect(status.unstaged).toContainEqual({ path: "seed.txt", previousPath: null, kind: "modified" })
-  expect(status.untracked.map((file) => file.path)).toEqual(["loose.txt"])
+  expect(untrackedPaths(service)).toEqual(["loose.txt"])
   expect(status.isClean).toBe(false)
 })
 
@@ -142,9 +188,17 @@ it("records conflicted paths without also staging them", async () => {
   await repo.git("merge", "other").catch(() => undefined)
 
   const service = await open(repo.path)
-  expect(state(service).status.conflicted).toEqual([{ path: "seed.txt", previousPath: null, kind: "conflicted" }])
-  expect(state(service).status.staged).toEqual([])
-  expect(state(service).status.unstaged).toEqual([])
+  // Both sides modified the file, and the entry says so — which side did what is the whole
+  // content of a conflicted row, and it survives the parse now.
+  expect(fileAt(service, "seed.txt")).toEqual({
+    kind: "conflicted",
+    path: "seed.txt",
+    previousPath: null,
+    ours: "modified",
+    theirs: "modified",
+  })
+  expect(stagedPaths(service)).toEqual([])
+  expect(unstagedPaths(service)).toEqual([])
 })
 
 it("tracks divergence from an upstream, and reports a branch with none as null", async () => {
@@ -231,7 +285,7 @@ it("stages, commits, and refreshes before the caller's await resolves", async ()
   await repo.write("feature.txt", "feature\n")
 
   await service.stage(["feature.txt"])
-  expect(state(service).status.staged.map((file) => file.path)).toEqual(["feature.txt"])
+  expect(stagedPaths(service)).toEqual(["feature.txt"])
 
   await service.commit("add the feature")
   // The store is already current when the write resolves; no extra refresh is needed.
@@ -259,7 +313,7 @@ it("runs the branch and stash porcelain", async () => {
 
   await service.stash.pop()
   expect(state(service).stash).toEqual([])
-  expect(state(service).status.unstaged.map((file) => file.path)).toEqual(["seed.txt"])
+  expect(unstagedPaths(service)).toEqual(["seed.txt"])
 })
 
 it("republishes after a write that failed, because a failed write still moved the repository", async () => {
@@ -278,7 +332,7 @@ it("republishes after a write that failed, because a failed write still moved th
   // The pop rejected, but it wrote conflict markers and recorded the conflict on the way
   // out. Refreshing on the success channel alone would leave the store reporting a clean
   // tree over a repository mid-conflict.
-  expect(state(service).status.conflicted.map((file) => file.path)).toEqual(["seed.txt"])
+  expect(conflictedPaths(service)).toEqual(["seed.txt"])
   expect(state(service).status.isClean).toBe(false)
 })
 
@@ -300,11 +354,11 @@ it("unstages everything without touching the working tree", async () => {
   const service = await open(repo.path)
   await repo.write("added.txt", "x\n")
   await service.stage("all")
-  expect(state(service).status.staged).toHaveLength(1)
+  expect(stagedPaths(service)).toHaveLength(1)
 
   await service.unstage("all")
-  expect(state(service).status.staged).toEqual([])
-  expect(state(service).status.untracked.map((file) => file.path)).toEqual(["added.txt"])
+  expect(stagedPaths(service)).toEqual([])
+  expect(untrackedPaths(service)).toEqual(["added.txt"])
 })
 
 it("unstages on a repository that has no commits yet", async () => {
@@ -313,12 +367,12 @@ it("unstages on a repository that has no commits yet", async () => {
   await repo.write("first.txt", "x\n")
 
   await service.stage("all")
-  expect(state(service).status.staged.map((file) => file.path)).toEqual(["first.txt"])
+  expect(stagedPaths(service)).toEqual(["first.txt"])
 
   // There is no HEAD to restore from here, which is exactly where `git restore --staged` fails.
   await service.unstage("all")
-  expect(state(service).status.staged).toEqual([])
-  expect(state(service).status.untracked.map((file) => file.path)).toEqual(["first.txt"])
+  expect(stagedPaths(service)).toEqual([])
+  expect(untrackedPaths(service)).toEqual(["first.txt"])
 })
 
 it("treats an empty selection as unstaging nothing, not everything", async () => {
@@ -326,14 +380,14 @@ it("treats an empty selection as unstaging nothing, not everything", async () =>
   const service = await open(repo.path)
   await repo.write("staged.txt", "x\n")
   await service.stage("all")
-  expect(state(service).status.staged).toHaveLength(1)
+  expect(stagedPaths(service)).toHaveLength(1)
 
   // A pathspec-less `git reset --` is a mixed reset of the whole index; an empty
   // multi-select in a Bundled Extension must never reach it.
   await service.unstage([])
-  expect(state(service).status.staged.map((file) => file.path)).toEqual(["staged.txt"])
+  expect(stagedPaths(service)).toEqual(["staged.txt"])
   await service.discard([])
-  expect(state(service).status.staged.map((file) => file.path)).toEqual(["staged.txt"])
+  expect(stagedPaths(service)).toEqual(["staged.txt"])
 })
 
 it("creates a branch whose name begins with a dash without reading it as an option", async () => {
@@ -430,7 +484,7 @@ it("refreshes after a mutating raw invocation and not after a read", async () =>
   await service.raw(["add", "seed.txt"])
   // `add` is not on the read-only list, so the store is re-read — and it really changed.
   expect(publishes).toBe(1)
-  expect(state(service).status.staged.map((file) => file.path)).toEqual(["seed.txt"])
+  expect(stagedPaths(service)).toEqual(["seed.txt"])
 })
 
 it("classifies a read that is only a read in combination, and one behind a global option", async () => {
@@ -463,7 +517,7 @@ it("resolves a write's own refresh against reads taken after the write", async (
   await repo.write("late.txt", "late\n")
   await service.stage(["late.txt"])
 
-  expect(state(service).status.staged.map((file) => file.path)).toEqual(["late.txt"])
+  expect(stagedPaths(service)).toEqual(["late.txt"])
   await inFlight
 })
 
@@ -625,7 +679,7 @@ it("tracks a branch switch and a bare working-tree edit made outside laziergit",
   // never notice this — the poll reads the working tree status too.
   await repo.write("seed.txt", "edited outside\n")
   await waitFor(() => !state(service).status.isClean, "the external edit to appear")
-  expect(state(service).status.unstaged.map((file) => file.path)).toEqual(["seed.txt"])
+  expect(unstagedPaths(service)).toEqual(["seed.txt"])
 })
 
 it("tracks a stash dropped from the middle of the list, which moves no ref", async () => {
@@ -779,7 +833,7 @@ it("retries a write that lost a race for index.lock", async () => {
   setTimeout(() => void rm(`${repo.path}/.git/index.lock`, { force: true }), 120)
 
   await staged
-  expect(state(service).status.staged.map((file) => file.path)).toEqual(["locked.txt"])
+  expect(stagedPaths(service)).toEqual(["locked.txt"])
 })
 
 it("does not retry a command that merely printed `index.lock` on its stdout", async () => {
@@ -805,7 +859,7 @@ it("never runs git through a shell, so a hostile path is only ever a path", asyn
   await repo.write(hostile, "harmless\n")
 
   await service.stage([hostile])
-  expect(state(service).status.staged.map((file) => file.path)).toEqual([hostile])
+  expect(stagedPaths(service)).toEqual([hostile])
   // argv arrays, never a shell string: the metacharacters were data the whole way down.
   expect(await Bun.file(`${repo.path}/pwned`).exists()).toBe(false)
 })
@@ -828,13 +882,13 @@ it("stages only the bracketed path it was given, not the neighbour that path glo
   await service.refresh()
 
   await service.stage(["foo[1].txt"])
-  expect(state(service).status.staged.map((file) => file.path)).toEqual(["foo[1].txt"])
-  expect(state(service).status.unstaged.map((file) => file.path)).toEqual(["foo1.txt"])
+  expect(stagedPaths(service)).toEqual(["foo[1].txt"])
+  expect(unstagedPaths(service)).toEqual(["foo1.txt"])
 
   // Unstaging the same one path must leave the neighbour's staged state alone too.
   await service.stage(["foo1.txt"])
   await service.unstage(["foo[1].txt"])
-  expect(state(service).status.staged.map((file) => file.path)).toEqual(["foo1.txt"])
+  expect(stagedPaths(service)).toEqual(["foo1.txt"])
 })
 
 it("discards only the bracketed path it was given, and cleans only the file it named", async () => {

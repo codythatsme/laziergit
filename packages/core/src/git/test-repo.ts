@@ -1,7 +1,7 @@
 import { afterEach } from "bun:test"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 const created: string[] = []
 
@@ -65,7 +65,13 @@ export async function createTestRepo(): Promise<TestRepo> {
   const repo: TestRepo = {
     path,
     git: (...args) => run(path, args),
-    write: (relativePath, contents) => writeFile(join(path, relativePath), contents),
+    // Parent directories are created, so a fixture can spell a nested path and get the
+    // directory rows the files Pane draws above it.
+    write: async (relativePath, contents) => {
+      const full = join(path, relativePath)
+      await mkdir(dirname(full), { recursive: true })
+      await writeFile(full, contents)
+    },
     async commit(message) {
       await run(path, ["commit", "--quiet", "--message", message])
     },

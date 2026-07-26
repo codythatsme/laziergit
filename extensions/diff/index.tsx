@@ -2,14 +2,17 @@
 import {
   createCell,
   defineExtension,
+  isUntracked,
   literalPathspec,
   option,
   useCommand,
   useEvent,
+  useGit,
   useScrollView,
   useTheme,
   type DiffApi,
   type DiffTarget,
+  type GitState,
 } from "laziergit"
 import { Fragment, useCallback, useEffect, useRef, useState } from "react"
 
@@ -26,6 +29,16 @@ interface FilePatch {
   readonly hasHunks: boolean
 }
 
+/** A patch as this Pane reads it: git's own preamble, if it printed one, and the files. */
+interface ParsedPatch {
+  /**
+   * Everything git wrote before the first file section — the `commit`/`Author`/`Date` block
+   * and the whole message, indented. `null` where we asked for a bare patch.
+   */
+  readonly header: string | null
+  readonly files: readonly FilePatch[]
+}
+
 /**
  * What the Pane is showing, as the four states it can actually be in.
  *
@@ -37,7 +50,7 @@ type DiffState =
   /** No target at all — the Extensions that call `show` have not selected anything yet. */
   | { readonly kind: "empty" }
   | { readonly kind: "loading" }
-  | { readonly kind: "ready"; readonly files: readonly FilePatch[] }
+  | ({ readonly kind: "ready" } & ParsedPatch)
   | { readonly kind: "failed"; readonly message: string }
 
 /**
@@ -64,6 +77,8 @@ function targetKey(target: DiffTarget | null): string {
 interface DiffFetch {
   readonly argv: readonly string[]
   readonly nonZeroExitMayCarryPatch: boolean
+  /** Whether git was asked to print its own commit header before the patch. */
+  readonly headed: boolean
 }
 
 /**
@@ -90,6 +105,17 @@ function fetchFor(target: DiffTarget, context: number, untracked: ReadonlySet<st
   // one file should show — not an empty diff. `literalPathspec` because every path git takes
   // is a *pattern*: unwrapped, a file called `foo[1].txt` diffs `foo1.txt` as well (§1.5).
   const pathspec = target.path === null ? [] : ["--", literalPathspec(target.path)]
+  /**
+   * The same pathspec for an argv that must write its own `--`.
+   *
+   * Anything naming a *revision* has to end its revision list explicitly, because git
+   * resolves a bare name as either — `git show docs` in a repository with both a `docs`
+   * branch and a `docs/` directory exits 128 with "ambiguous argument". That was
+   * unreachable while every ref here was a 40-hex oid and became reachable the moment the
+   * branches Pane started naming its selection, which is the whole point of the `branch`
+   * kind. So the terminator goes in unconditionally rather than riding on `path`.
+   */
+  const pathTail = target.path === null ? [] : [literalPathspec(target.path)]
   switch (target.kind) {
     case "workingTree":
       // An untracked file has nothing in the index to diff against, so plain `git diff`
@@ -106,14 +132,27 @@ function fetchFor(target: DiffTarget, context: number, untracked: ReadonlySet<st
         return {
           argv: ["diff", "--no-index", ...patchFlags, "--", "/dev/null", target.path],
           nonZeroExitMayCarryPatch: true,
+          headed: false,
         }
       }
-      return { argv: ["diff", ...patchFlags, ...pathspec], nonZeroExitMayCarryPatch: false }
+      return { argv: ["diff", ...patchFlags, ...pathspec], nonZeroExitMayCarryPatch: false, headed: false }
     case "staged":
-      return { argv: ["diff", "--cached", ...patchFlags, ...pathspec], nonZeroExitMayCarryPatch: false }
+      return { argv: ["diff", "--cached", ...patchFlags, ...pathspec], nonZeroExitMayCarryPatch: false, headed: false }
     case "commit":
-      // `--format=` strips the commit header `show` would otherwise prepend; the parser
-      // behind `<diff>` wants a bare patch.
+    case "branch":
+      // A branch is a ref like any other, so both kinds fetch the same way; they differ only
+      // in the line the Pane writes above the result.
+      //
+      // `--pretty=medium` instead of the `--format=` that used to strip the header: the
+      // header is the *point* of this Pane now that a list row is clipped to one line, so
+      // the full subject and body have to be somewhere. `splitPatch` lifts it off the front
+      // rather than handing it to `<diff>`, whose parser still wants a bare patch.
+      //
+      // Pinned rather than defaulted, for two reasons that are really one: `format.pretty`
+      // in the user's config decides what `show` prints, and core pins diff settings but not
+      // that one. Under `oneline` the body — the thing this header exists to show — is gone,
+      // and under a `%n`-heavy custom format the four-space message indent that keeps a
+      // message line from parsing as a `diff --git` section boundary is gone with it.
       //
       // `--first-parent` is what makes a merge commit render at all: git suppresses a
       // merge's diff unless told which parent to diff against, so `show <merge>` prints
@@ -125,8 +164,9 @@ function fetchFor(target: DiffTarget, context: number, untracked: ReadonlySet<st
       // this merge brought into this branch — and is byte-identical to no flag at all on a
       // non-merge commit, so the ordinary case is untouched.
       return {
-        argv: ["show", "--format=", ...patchFlags, "--first-parent", target.ref, ...pathspec],
+        argv: ["show", "--pretty=medium", ...patchFlags, "--first-parent", target.ref, "--", ...pathTail],
         nonZeroExitMayCarryPatch: false,
+        headed: true,
       }
     case "stash":
       // `git stash show` takes one revision and nothing else: adding a pathspec makes it
@@ -135,14 +175,19 @@ function fetchFor(target: DiffTarget, context: number, untracked: ReadonlySet<st
       // and `git diff stash@{0}^1 stash@{0}` is byte-identical to `stash show -p`.
       if (target.path !== null) {
         return {
-          argv: ["diff", ...patchFlags, `${target.ref}^1`, target.ref, ...pathspec],
+          argv: ["diff", ...patchFlags, `${target.ref}^1`, target.ref, "--", ...pathTail],
           nonZeroExitMayCarryPatch: false,
+          headed: false,
         }
       }
       // `show` must sit immediately after `stash`: the service reads the argv element
       // *directly* after the subcommand as its operand, and only the exact pair
       // `stash show` is on its read-only list. A flag in between makes this a mutation.
-      return { argv: ["stash", "show", "-p", ...patchFlags, target.ref], nonZeroExitMayCarryPatch: false }
+      return {
+        argv: ["stash", "show", "-p", ...patchFlags, target.ref],
+        nonZeroExitMayCarryPatch: false,
+        headed: false,
+      }
   }
 }
 
@@ -176,21 +221,37 @@ function pathOfSection(lines: readonly string[]): string | null {
  *
  * A patch with nothing in it splits to nothing, so "this target has no changes" has exactly
  * one encoding rather than also being a `<diff>` with an empty string in it.
+ *
+ * `headed` says whether git was asked for a commit header, and only then is the text before
+ * the first section lifted off as one. A message body cannot be mistaken for a file section
+ * on the way: `git show` indents every line of the message by four spaces, so nothing inside
+ * one can start `diff --git` at column 0 — the same property that makes the section rule
+ * unambiguous in the first place.
  */
-function splitPatch(patch: string): readonly FilePatch[] {
+function splitPatch(patch: string, headed: boolean): ParsedPatch {
   const sections: string[][] = []
   for (const line of patch.split("\n")) {
     const open = sections[sections.length - 1]
     if (open === undefined || line.startsWith("diff --git ")) sections.push([line])
     else open.push(line)
   }
-  return sections
-    .map((lines) => ({
-      path: pathOfSection(lines),
-      patch: lines.join("\n"),
-      hasHunks: lines.some((line) => line.startsWith("@@")),
-    }))
-    .filter((file) => file.patch.trim() !== "")
+
+  // A preamble exists only when the first section is not itself a file, which for a headed
+  // fetch is every commit and for an unheaded one is never.
+  const preamble = sections[0]
+  const headless = preamble === undefined || preamble[0]?.startsWith("diff --git ") === true
+  const header = headed && !headless ? preamble.join("\n").trim() : null
+
+  return {
+    header: header === "" ? null : header,
+    files: (header === null ? sections : sections.slice(1))
+      .map((lines) => ({
+        path: pathOfSection(lines),
+        patch: lines.join("\n"),
+        hasHunks: lines.some((line) => line.startsWith("@@")),
+      }))
+      .filter((file) => file.patch.trim() !== ""),
+  }
 }
 
 /** The half of the header that names which side of the repository is being diffed. */
@@ -202,9 +263,38 @@ function scopeOf(target: DiffTarget): string {
       return "staged"
     case "commit":
       return `commit ${target.ref.slice(0, 8)}`
+    case "branch":
+      return `branch ${target.ref}`
     case "stash":
       return target.ref
   }
+}
+
+/**
+ * The context line the Pane writes above git's output, where git cannot write it itself.
+ *
+ * This is what makes a clipped list row recoverable: a Pane's rows are one line each, so the
+ * name or message that ran off the right edge has to be somewhere, and this is where. Only
+ * the two kinds git says nothing about need one — a commit's own header already names it,
+ * while `git show <branch>` names the tip commit and never the branch, and `stash show`
+ * prints no header at all.
+ */
+function contextOf(target: DiffTarget, state: GitState): string | null {
+  if (target.kind === "branch") {
+    const upstream = state.branches.find((candidate) => candidate.name === target.ref)?.upstream
+    if (upstream === undefined || upstream === null) return target.ref
+    const tracking = `${upstream.remote}/${upstream.branch}`
+    if (upstream.gone) return `${target.ref} → ${tracking} (gone)`
+    const behind = upstream.behind > 0 ? ` ↓${upstream.behind}` : ""
+    const ahead = upstream.ahead > 0 ? ` ↑${upstream.ahead}` : ""
+    return `${target.ref} → ${tracking}${ahead}${behind}`
+  }
+  if (target.kind === "stash") {
+    const entry = state.stash.find((candidate) => `stash@{${candidate.index}}` === target.ref)
+    if (entry === undefined) return null
+    return `${target.ref}: ${entry.message}${entry.branch === null ? "" : ` on ${entry.branch}`}`
+  }
+  return null
 }
 
 /**
@@ -268,6 +358,9 @@ export default defineExtension({
       const current = target.use()
       const layout = view.use()
       const [state, setState] = useState<DiffState>({ kind: "empty" })
+      // Live, not read once at fetch time: a branch's divergence moves under a target that
+      // has not changed, and the header is the place a user reads it.
+      const context = useGit((git) => (current === null ? null : contextOf(current, git)))
       // `<diff>` has no scroll API of its own, so the Pane gives it one (§1.8).
       const scroll = useScrollView()
 
@@ -287,7 +380,7 @@ export default defineExtension({
 
         // Read at call time, not render time: this runs again on every `git.refreshed`, and
         // a file that was untracked a moment ago may have just been staged.
-        const untracked = new Set(ctx.git.state.status.untracked.map((file) => file.path))
+        const untracked = new Set(ctx.git.state.status.files.filter(isUntracked).map((file) => file.path))
         const fetch = fetchFor(next, ctx.config.context, untracked)
         try {
           // `allowFailure`, because a diff of a ref git does not know is something to
@@ -297,7 +390,7 @@ export default defineExtension({
           const answered = output.exitCode === 0 || (fetch.nonZeroExitMayCarryPatch && output.stdout.trim() !== "")
           setState(
             answered
-              ? { kind: "ready", files: splitPatch(output.stdout) }
+              ? { kind: "ready", ...splitPatch(output.stdout, fetch.headed) }
               : {
                   // Shown in the Pane rather than raised through `notify`, because this runs
                   // on every store refresh: a target git rejects would otherwise put up a
@@ -331,6 +424,7 @@ export default defineExtension({
       useCommand({
         id: "diff.toggle-view",
         title: "Toggle unified/split diff",
+        hint: "layout",
         keys: "v",
         run: toggleView,
       })
@@ -385,6 +479,7 @@ export default defineExtension({
       useCommand({
         id: "diff.menu",
         title: "Diff actions",
+        hint: "menu",
         keys: "x",
         run: async () => {
           const open = target.get()
@@ -395,14 +490,17 @@ export default defineExtension({
 
       if (current === null) return <text fg={theme.textMuted}>nothing selected</text>
 
-      // Named per section when the header above cannot name the file: either the target is a
-      // whole side of the repository, or git returned more than one file for it.
+      // Named per section when the chrome line above cannot name the file: either the target
+      // is a whole side of the repository, or git returned more than one file for it.
       const files = state.kind === "ready" ? state.files : []
       const nameFiles = current.path === null || files.length > 1
 
       return (
         <box flexDirection="column" flexGrow={1} flexBasis={0}>
-          <text fg={theme.textMuted}>
+          {/* One line, clipped, always on screen: what this Pane is pointed at. The detail
+              below it scrolls away; this must not, or a reader ten screens into a patch
+              would have nothing telling them whose patch it is. */}
+          <text wrapMode="none" fg={theme.textMuted}>
             <span fg={theme.accent}>{scopeOf(current)}</span>
             {current.path === null ? "" : ` ${current.path}`}
             {` [${layout}]`}
@@ -410,18 +508,33 @@ export default defineExtension({
           {state.kind === "failed" ? (
             <text fg={theme.danger}>{state.message}</text>
           ) : state.kind === "ready" ? (
-            // An empty patch is the ordinary answer for a file whose changes were just
-            // staged away: the target is still valid, there is simply nothing in it.
-            files.length === 0 ? (
-              <text fg={theme.textMuted}>no changes</text>
-            ) : (
-              // `flexBasis={0}` is what keeps the box the size of the *Pane* rather than the
-              // size of its content, which is what makes it scroll instead of overflowing
-              // and painting across the header above it.
-              <scrollbox ref={scroll.ref} focusable={false} flexGrow={1} flexBasis={0}>
-                {files.map((file, index) => (
+            // `flexBasis={0}` is what keeps the box the size of the *Pane* rather than the
+            // size of its content, which is what makes it scroll instead of overflowing
+            // and painting across the chrome line above it.
+            <scrollbox ref={scroll.ref} focusable={false} flexGrow={1} flexBasis={0}>
+              {/* Inside the scrollbox, so it scrolls away rather than costing rows on every
+                  screen of a long patch — and above everything, because it is the answer to
+                  "what did that clipped row actually say". Wrapping, deliberately: a commit
+                  body is prose and this is the one place in the app that has room for it. */}
+              {context === null && state.header === null ? null : (
+                <box flexDirection="column" border={["bottom"]} borderColor={theme.border} marginBottom={1}>
+                  {context === null ? null : <text fg={theme.accent}>{context}</text>}
+                  {state.header === null ? null : <text fg={theme.textMuted}>{state.header}</text>}
+                </box>
+              )}
+              {/* An empty patch is the ordinary answer for a file whose changes were just
+                  staged away, and for a commit that changed nothing: the target is still
+                  valid, there is simply nothing in it. */}
+              {files.length === 0 ? (
+                <text fg={theme.textMuted}>no changes</text>
+              ) : (
+                files.map((file, index) => (
                   <Fragment key={`${index}\0${file.path ?? ""}`}>
-                    {nameFiles ? <text fg={theme.accent}>{file.path ?? "(unnamed)"}</text> : null}
+                    {nameFiles ? (
+                      <text wrapMode="none" fg={theme.accent}>
+                        {file.path ?? "(unnamed)"}
+                      </text>
+                    ) : null}
                     {file.hasHunks ? (
                       <diff diff={file.patch} view={layout} filetype={filetypeOf(file.path ?? current.path)} />
                     ) : (
@@ -430,9 +543,9 @@ export default defineExtension({
                       <text fg={theme.textMuted}>no textual diff (binary, mode or rename only)</text>
                     )}
                   </Fragment>
-                ))}
-              </scrollbox>
-            )
+                ))
+              )}
+            </scrollbox>
           ) : (
             <text fg={theme.textMuted}>loading…</text>
           )}

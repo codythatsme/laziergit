@@ -2,7 +2,7 @@
 
 lazygit's workflow, pi's philosophy: a git TUI with a deliberately light core where **every feature is a TypeScript extension** — including the built-in ones. Ask a coding agent for a new pane; it writes a `.ts(x)` file; laziergit hot-reloads; the feature exists.
 
-Status: **M2 UI framework complete; M3 git service is next**. Start here:
+Status: **M4 bundled extensions complete; M5 acceptance & polish is in progress**. Start here:
 
 - [PLAN.md](./PLAN.md) — architecture, repository layout, v1 scope, build order
 - [docs/extension-api.md](./docs/extension-api.md) — the extension API specification (the crown jewel)

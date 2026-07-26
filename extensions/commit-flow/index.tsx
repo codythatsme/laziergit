@@ -3,6 +3,10 @@ import {
   createCell,
   defineExtension,
   describeGitFailure,
+  isConflicted,
+  isStaged,
+  isUnstaged,
+  isUntracked,
   useCommand,
   useGit,
   useKeyCapture,
@@ -13,7 +17,7 @@ import {
   type Head,
   type PaneProps,
 } from "laziergit"
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 
 /**
  * Whether HEAD names a commit at all — the precondition for amending.
@@ -314,7 +318,7 @@ export default defineExtension({
       }
       // An amend rewrites a commit that already has content, so it is the one case where an
       // empty index does not mean an empty commit.
-      if (!draft.amend && ctx.git.state.status.staged.length === 0) {
+      if (!draft.amend && !ctx.git.state.status.files.some(isStaged)) {
         ctx.popups.notify("Nothing staged to commit", "warning")
         return
       }
@@ -333,7 +337,12 @@ export default defineExtension({
       const theme = useTheme()
       const current = flow.use()
       const keptDraft = kept.use()
-      const staged = useGit((state) => state.status.staged)
+      // The slice is selected and the filter derived from it, never the other way round:
+      // `useGit((s) => s.status.files.filter(isStaged))` builds a fresh array on every
+      // snapshot, so the `Object.is` check in the store subscription never holds and this
+      // Pane re-renders forever.
+      const files = useGit((state) => state.status.files)
+      const staged = useMemo(() => files.filter(isStaged), [files])
       const editor = useRef<MessageEditor | null>(null)
 
       // Publishes the buffer to the flow, which closes from places this component cannot
@@ -367,13 +376,19 @@ export default defineExtension({
       useCommand({
         id: "commit-flow.submit",
         title: "Commit the message",
-        keys: "mod+s",
+        hint: "commit",
+        // `ctrl+s` first, and first deliberately: it is what the hint bar prints, and it is
+        // the one of the two a terminal cannot take away (ADR-0004). `mod+s` stays beside it
+        // for the terminals that do deliver cmd, where it is the stroke a Mac user reaches
+        // for. Raw mode clears IXON, so ctrl+s is not flow control here.
+        keys: ["ctrl+s", "mod+s"],
         capture: true,
         run: () => (current.kind === "editing" ? commit(current.draft, editor.current?.plainText ?? "") : undefined),
       })
       useCommand({
         id: "commit-flow.cancel",
         title: "Close the editor, keeping the message",
+        hint: "keep draft",
         keys: "escape",
         capture: true,
         // Said out loud, because a key that used to destroy the message no longer does and
@@ -387,7 +402,7 @@ export default defineExtension({
         const draft = current.draft
         return (
           <box flexDirection="column" flexGrow={1}>
-            <text content={editingHeader(draft, staged.length)} style={{ fg: theme.textMuted }} />
+            <text wrapMode="none" content={editingHeader(draft, staged.length)} style={{ fg: theme.textMuted }} />
             <textarea
               key={draft.id}
               ref={(node) => {
@@ -399,8 +414,9 @@ export default defineExtension({
               initialValue={draft.initial}
               flexGrow={1}
             />
-            {/* `?` is inert while capturing, so the two keys that still work name themselves. */}
-            <text content="mod+s commit  ·  escape keeps the draft" style={{ fg: theme.textMuted }} />
+            {/* No footer of its own: a capture collapses the hint bar to exactly this Pane's
+                capture Commands, so the two keys that still work are already named down
+                there — in whatever the user actually rebound them to. */}
           </box>
         )
       }
@@ -413,7 +429,7 @@ export default defineExtension({
             <box flexDirection="column">
               <text content={countLabel(staged.length)} style={{ fg: theme.text }} />
               {staged.slice(0, listedPaths).map((file) => (
-                <text key={file.path} content={`  ${describe(file)}`} style={{ fg: theme.textMuted }} />
+                <text key={file.path} wrapMode="none" content={`  ${describe(file)}`} style={{ fg: theme.textMuted }} />
               ))}
               {staged.length > listedPaths ? (
                 <text content={`  +${staged.length - listedPaths} more`} style={{ fg: theme.textMuted }} />
@@ -421,14 +437,16 @@ export default defineExtension({
             </box>
           )}
           {keptDraft.length > 0 ? (
-            <text content={`draft kept: ${firstLine(keptDraft)}`} style={{ fg: theme.warning }} />
+            <text wrapMode="none" content={`draft kept: ${firstLine(keptDraft)}`} style={{ fg: theme.warning }} />
           ) : null}
-          {/* Named, because an editor nobody can find is an editor nobody uses. Two short
-              lines rather than one sentence: a sidebar column is narrower than the prose.
-              Spelled the way the Commands below are bound and the cheat sheet prints them —
-              `shift+a`, not `A` — so the hint and the keybinding cannot disagree. A user who
-              rebinds either in config still out-dates this line; the cheat sheet is where
-              the truth is, and a Pane cannot ask for a Command's resolved keys (§1.7). */}
+          {/* Named, because an editor nobody can find is an editor nobody uses — and the hint
+              bar structurally cannot say this: it shows the *focused* Pane's keys, and these
+              two live on the files Pane. Two short lines rather than one sentence: a sidebar
+              column is narrower than the prose. Spelled the way the Commands are bound and
+              the cheat sheet prints them — `shift+a`, not `A` — so the hint and the
+              keybinding cannot disagree. A user who rebinds either in config still out-dates
+              this line; the cheat sheet is where the truth is, and a Pane cannot ask for a
+              Command's resolved keys (§1.7). */}
           <text content="c commit  ·  shift+a amend" style={{ fg: theme.info }} />
           <text content="from the files pane" style={{ fg: theme.textMuted }} />
         </box>
@@ -447,6 +465,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "commit-flow.commit",
       title: "Commit",
+      hint: "commit",
       keys: "c",
       // Bound inside the files Pane, where staging happens. A Pane id is a name, not a live
       // object, so this needs no `needs`: it is simply inert while nothing owns that Pane.
@@ -456,6 +475,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "commit-flow.amend",
       title: "Amend the last commit",
+      hint: "amend",
       // `shift+a`, not `A`: the binding parser lowercases a bare letter, so `"A"` would
       // claim the same stroke as the files Pane's own `a` and one of them would go silent.
       keys: "shift+a",
@@ -465,6 +485,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "commit-flow.menu",
       title: "Commit actions",
+      hint: "menu",
       keys: "x",
       pane: "commit-flow",
       run: () => ctx.menus.open("commit-flow.actions", ctx.git.state.status),
@@ -472,7 +493,10 @@ export default defineExtension({
 
     ctx.menus.register({
       id: "commit-flow.actions",
-      title: (status) => (status.staged.length === 0 ? "Commit" : `Commit — ${countLabel(status.staged.length)}`),
+      title: (status) => {
+        const staged = status.files.filter(isStaged).length
+        return staged === 0 ? "Commit" : `Commit — ${countLabel(staged)}`
+      },
       groups: [
         {
           // An explicit id, not a defaulted one: this menu is the premier splice target
@@ -485,13 +509,13 @@ export default defineExtension({
             {
               key: "c",
               label: "Commit",
-              when: (status) => status.staged.length > 0,
+              when: (status) => status.files.some(isStaged),
               run: () => start({}),
             },
             {
               key: "s",
               label: "Commit with signoff",
-              when: (status) => status.staged.length > 0,
+              when: (status) => status.files.some(isStaged),
               run: () => start({ signoff: true }),
             },
             {
@@ -500,7 +524,8 @@ export default defineExtension({
               // Withdrawn entirely while anything is conflicted: `git add --all` would mark
               // those files resolved on the way past, and declaring a conflict resolved is
               // the files Pane's decision to offer, not a side effect of committing (§5.12).
-              when: (status) => status.conflicted.length === 0 && status.unstaged.length + status.untracked.length > 0,
+              when: (status) =>
+                !status.files.some(isConflicted) && status.files.some((file) => isUnstaged(file) || isUntracked(file)),
               run: async () => {
                 try {
                   await ctx.git.stage("all")

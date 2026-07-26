@@ -85,18 +85,6 @@
         "@types/react": "catalog:",
       },
     },
-    "extensions/status": {
-      "name": "@laziergit/extension-status",
-      "version": "0.0.0",
-      "dependencies": {
-        "@opentui/react": "catalog:",
-        "laziergit": "workspace:*",
-        "react": "catalog:",
-      },
-      "devDependencies": {
-        "@types/react": "catalog:",
-      },
-    },
     "extensions/sync": {
       "name": "@laziergit/extension-sync",
       "version": "0.0.0",
@@ -200,8 +188,6 @@
     "@laziergit/extension-files": ["@laziergit/extension-files@workspace:extensions/files"],
 
     "@laziergit/extension-stash": ["@laziergit/extension-stash@workspace:extensions/stash"],
-
-    "@laziergit/extension-status": ["@laziergit/extension-status@workspace:extensions/status"],
 
     "@laziergit/extension-sync": ["@laziergit/extension-sync@workspace:extensions/sync"],
 
