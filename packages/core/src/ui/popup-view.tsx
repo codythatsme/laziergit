@@ -2,7 +2,7 @@ import { useBindings } from "@opentui/keymap/react"
 import { useMemo, useRef, useState, type ReactNode } from "react"
 import { useTheme, type Theme } from "laziergit"
 
-import { fuzzyFilter } from "./fuzzy"
+import { fuzzyFilter, type FuzzyResult } from "./fuzzy"
 import { modalLayerPriority } from "./keybindings"
 import type {
   ActionsPopup,
@@ -91,8 +91,16 @@ function ConfirmView({ popup, theme }: { popup: ConfirmPopup; theme: Theme }) {
 function PromptView({ popup, theme }: { popup: PromptPopup; theme: Theme }) {
   const [value, setValue] = useState(popup.initial)
   const [error, setError] = useState<string | null>(null)
-  const latest = useRef(value)
-  latest.current = value
+  /**
+   * What `return` submits — written by the input handler below, not during render.
+   *
+   * A keypress is not a React event: the binding runs on the modal key layer the moment the
+   * byte arrives, so Enter in the same tick as the keystroke before it reads whatever the
+   * last *render* left behind. Mirroring state during render made that window a lie the user
+   * could see through — the input drew what they typed while the popup submitted the value it
+   * replaced. Rare by hand, certain on a paste, and certain again under load.
+   */
+  const latest = useRef(popup.initial)
 
   // Enter is bound on the modal layer rather than taken from the input's submit event:
   // the JSX namespace merges OpenTUI's `input` with the DOM one, so `onSubmit` has two
@@ -123,6 +131,7 @@ function PromptView({ popup, theme }: { popup: PromptPopup; theme: Theme }) {
         value={value}
         placeholder={popup.placeholder ?? ""}
         onInput={(next: string) => {
+          latest.current = next
           setValue(next)
           setError(null)
         }}
@@ -132,36 +141,54 @@ function PromptView({ popup, theme }: { popup: PromptPopup; theme: Theme }) {
   )
 }
 
+/** One definition, so the render and the key handlers can never disagree on what matches. */
+function filterChoices(popup: ChoosePopup, query: string): readonly FuzzyResult<ChoosePopup["choices"][number]>[] {
+  return fuzzyFilter(popup.choices, query, (choice) => choice.label)
+}
+
 function ChooseView({ popup, theme }: { popup: ChoosePopup; theme: Theme }) {
   const [query, setQuery] = useState("")
   const [cursor, setCursor] = useState(0)
 
-  const matches = useMemo(() => fuzzyFilter(popup.choices, query, (choice) => choice.label), [popup, query])
+  const matches = useMemo(() => filterChoices(popup, query), [popup, query])
   const clamped = Math.min(cursor, Math.max(0, matches.length - 1))
-  const state = useRef({ matches, cursor: clamped })
-  state.current = { matches, cursor: clamped }
 
-  useBindings(
-    () => ({
+  /**
+   * The filter and the row the key handlers act on, written by those handlers rather than
+   * mirrored during render — see {@link PromptView}'s `latest` for the window this closes.
+   *
+   * It matters more here than there. A stale read in a prompt submits the value you replaced;
+   * a stale read here runs a *different row* — and this is the component behind both the
+   * command palette and every `select`, so the rows include force-push, hard reset and
+   * discard. Typing a name and hitting enter must never run the entry that was highlighted
+   * before the filter was applied.
+   */
+  const state = useRef({ query: "", cursor: 0 })
+
+  useBindings(() => {
+    const move = (delta: number): void => {
+      const list = filterChoices(popup, state.current.query)
+      const next = Math.min(Math.max(0, state.current.cursor + delta), Math.max(0, list.length - 1))
+      state.current = { ...state.current, cursor: next }
+      setCursor(next)
+    }
+    return {
       priority: modalLayerPriority,
       bindings: [
         { key: "escape", cmd: () => popup.dismiss() },
-        { key: "up", cmd: () => setCursor((current) => Math.max(0, current - 1)) },
-        {
-          key: "down",
-          cmd: () => setCursor((current) => Math.min(state.current.matches.length - 1, current + 1)),
-        },
+        { key: "up", cmd: () => move(-1) },
+        { key: "down", cmd: () => move(1) },
         {
           key: "return",
           cmd: () => {
-            const match = state.current.matches[state.current.cursor]
+            const list = filterChoices(popup, state.current.query)
+            const match = list[Math.min(state.current.cursor, Math.max(0, list.length - 1))]
             if (match) popup.choose(match.index)
           },
         },
       ],
-    }),
-    [popup],
-  )
+    }
+  }, [popup])
 
   const start = windowStart(matches.length, clamped, visibleRows)
   const window = matches.slice(start, start + visibleRows)
@@ -174,6 +201,7 @@ function ChooseView({ popup, theme }: { popup: ChoosePopup; theme: Theme }) {
         value={query}
         placeholder={popup.placeholder ?? "Filter"}
         onInput={(next) => {
+          state.current = { query: next, cursor: 0 }
           setQuery(next)
           setCursor(0)
         }}
