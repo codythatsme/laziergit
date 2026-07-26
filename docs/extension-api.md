@@ -180,9 +180,12 @@ declare module "laziergit" {
    *   binds its *lowercase* stroke — the parser lowercases the key name when it matches —
    *   so `"D"` binds plain `d`, **not** a shifted `D`. Write `"shift+d"` for the shifted
    *   stroke. `"D"` and `"d"` are therefore one and the same binding (see the diagnostic note below).
-   * - platform-aware modifier: `"mod+p"` — ctrl everywhere, upgraded to cmd on
+   * - platform-aware modifier: `"mod+s"` — ctrl everywhere, upgraded to cmd on
    *   macOS terminals whose keyboard protocol can report it (kitty keyboard
-   *   protocol); elsewhere on macOS it stays ctrl
+   *   protocol); elsewhere on macOS it stays ctrl. Reporting cmd and *delivering*
+   *   it are different things — a terminal is free to keep a cmd stroke for
+   *   itself, and several do — so no core or bundled default is spelled with
+   *   `mod+` alone (ADR-0004). Yours may be; just pair it with a plain stroke.
    * - multi-key sequences, concatenated: `"gg"`, `"dd"`, `"go"` — but named keys win over
    *   concatenation: a spelling that begins with a named key (`"gt"`, `"up"`, `"f5"`)
    *   parses as that single named stroke, not a sequence

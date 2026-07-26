@@ -77,7 +77,7 @@ alone is a valid Layout. Omit `layout` entirely and both apply.
 ```
 
 The key is a Command id, the value a [key spec](./extension-api.md) (`"c"`, `"ctrl+r"`,
-`"gg"`, `"mod+p"`, `"<leader>p"`), an array of them, or `null` to unbind. A config binding
+`"gg"`, `"ctrl+p"`, `"<leader>p"`), an array of them, or `null` to unbind. A config binding
 replaces the Command's declared defaults rather than adding to them. When two Commands in
 the same scope claim one key, the later registration wins and the earlier one keeps its
 palette entry without the key; the swap is reported as a diagnostic.
@@ -86,8 +86,8 @@ Core's own Commands, all rebindable:
 
 | Command | Default | |
 |---|---|---|
-| `app.palette` | `mod+p` | Command palette |
-| `app.cheatsheet` | `?` | Every key that is live right now |
+| `app.palette` | `ctrl+p`, `:` | Command palette. Not `mod+p`: a macOS terminal that can report cmd is also free to keep it, and several do ([ADR-0004](./adr/0004-terminal-safe-default-keys.md)) |
+| `app.cheatsheet` | `?` | Every key live in the focused Pane, then the globals |
 | `app.focus.next` / `app.focus.previous` | `tab` / `shift+tab` | Move between Panes |
 | `app.tab.next` / `app.tab.previous` | `]` / `[` | Cycle tabs inside the focused cell |
 | `app.reload` | — | Reload every Extension |

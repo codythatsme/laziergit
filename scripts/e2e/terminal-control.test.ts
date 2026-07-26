@@ -122,6 +122,17 @@ async function pressPrimaryModifier(session: Session, key: string): Promise<void
   await session.keyboard.write(new TextEncoder().encode(`\u001b[${codePoint};${modifier}u`))
 }
 
+/**
+ * A ctrl-modified key through the same protocol, for the bindings that are deliberately
+ * ctrl rather than `mod` (ADR-0004) — writing the sequence keeps the PTY line discipline
+ * out of it, which a legacy control byte would not.
+ */
+async function pressCtrl(session: Session, key: string): Promise<void> {
+  const codePoint = key.codePointAt(0)
+  if (codePoint === undefined) throw new TypeError("A modified key needs one character")
+  await session.keyboard.write(new TextEncoder().encode(`\u001b[${codePoint};5u`))
+}
+
 async function pressEscape(session: Session): Promise<void> {
   // With Kitty disambiguation enabled, a physical Escape key is reported as its Unicode
   // codepoint rather than the ambiguous lone ESC byte.
@@ -191,7 +202,8 @@ describe("laziergit through a real terminal", () => {
       await waitForText(session, "Staged")
 
       await session.keyboard.type("c")
-      await waitForText(session, "mod+s commit")
+      // The hint bar, which during a capture is the Pane's two remaining keys.
+      await waitForText(session, "ctrl+s commit")
       await session.keyboard.type("q from e2e")
       await waitForText(session, "q from e2e")
       expect((await session.status()).state).toBe("running")
@@ -231,7 +243,7 @@ describe("laziergit through a real terminal", () => {
     await inTerminal(repo, async (session) => {
       await waitForText(session, "working tree clean")
 
-      await pressPrimaryModifier(session, "p")
+      await pressCtrl(session, "p")
       await waitForText(session, "Commands")
       await session.keyboard.type("Focus branches")
       await waitForText(session, "Focus branches")
