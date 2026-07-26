@@ -308,6 +308,10 @@ export default defineExtension({
 
     ctx.statusline.register({ id: "sync", component: SyncSegment, align: "right" })
 
+    // No `hint` on any of these. The bar clips, and a global's hint sits on *every* Pane's
+    // bar for as long as the app is open — so it has to be worth a permanent slot there.
+    // Push, pull and fetch are one `shift+s` away, and hinting them cost the files Pane the
+    // tail of its own row.
     ctx.commands.register({
       id: "sync.push",
       title: "Push",

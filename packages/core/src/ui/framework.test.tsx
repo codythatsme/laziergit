@@ -127,7 +127,10 @@ const betaSource = `
   })
 `
 
-/** A LEFT status line segment — the half the bundled `status` Extension always occupies. */
+/**
+ * A Pane with a hinted Command, plus a LEFT status line segment — the two things that share
+ * the left of the bottom row, which is the arrangement under test.
+ */
 const leftSegmentSource = `
   /** @jsxImportSource @opentui/react */
   import { defineExtension } from "laziergit"
@@ -136,6 +139,15 @@ const leftSegmentSource = `
     name: "left",
     activate(ctx) {
       ctx.statusline.register({ id: "left", component: () => <text content="left-segment" />, align: "left" })
+      ctx.panes.register({ id: "left", title: "Left", component: () => <text content="left pane" /> })
+      ctx.commands.register({
+        id: "left.act",
+        title: "Do the thing",
+        hint: "do it",
+        keys: "z",
+        pane: "left",
+        run: () => undefined,
+      })
     },
   })
 `
@@ -405,16 +417,18 @@ describe("menus and status line", () => {
     expect(frame(harness)).not.toContain("beta-segment")
   })
 
-  it("keeps the key hint beside an Extension's own left segment", async () => {
+  it("renders the focused Pane's hints beside an Extension's own left segment", async () => {
     const harness = await createHarness()
     await writeFile(join(harness.repo, "left.tsx"), leftSegmentSource)
     await renderApp(harness)
 
-    expect(frame(harness)).toContain("left-segment")
-    // The shipped app always has a left segment (the bundled `status` Extension), so a hint
-    // shown only in its absence is a hint nobody ever sees — and it is the only on-screen
-    // route to the palette, the cheat sheet, and the way out.
-    expect(frame(harness)).toContain("mod+p palette")
+    const rendered = frame(harness)
+    // One row, shared: core writes the focused Pane's hints along its left and an
+    // Extension's own left-aligned segments follow them, rather than either displacing
+    // the other.
+    expect(rendered).toContain("z do it")
+    expect(rendered).toContain("left-segment")
+    expect(rendered.indexOf("z do it")).toBeLessThan(rendered.indexOf("left-segment"))
   })
 
   it("caps a many-line notification and says how many lines it dropped", async () => {

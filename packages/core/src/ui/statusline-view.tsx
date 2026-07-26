@@ -3,12 +3,11 @@ import { usePendingSequence } from "@opentui/keymap/react"
 import { useTheme, type Theme } from "laziergit"
 
 import type { PaneHost } from "../extension/pane-host"
+import type { LiveBinding } from "./keybindings"
 import type { NotificationHost, Toast } from "./notification-host"
 import { segmentSlotName } from "./slots"
 import type { StatusSegment, StatuslineHost } from "./statusline-host"
-import { useStore } from "./use-store"
-
-const hint = "tab focus  ·  mod+p palette  ·  ?  keys  ·  q quit"
+import { useStore, type ExternalStore } from "./use-store"
 
 function toastColor(level: Toast["level"], theme: Theme): string {
   if (level === "success") return theme.success
@@ -34,26 +33,70 @@ function Segments({ panes, segments }: { panes: PaneHost; segments: readonly Sta
   )
 }
 
+/** Between two hints, and wide enough to read as a gap rather than as punctuation. */
+const hintSeparator = "  ·  "
+
 /**
- * One row of Extension-owned segments. Core adds only the pending key sequence, because
- * "what did I just press" is the one piece of state no Extension can report.
+ * What the focused Pane can do, in the keys that would do it.
+ *
+ * Only the Commands whose author wrote a {@link CommandSpec.hint} appear. `tab`, the palette
+ * and `q` are on every screen in every mode, so printing them forever would crowd out the
+ * keys that actually change — core writes no hint of its own for exactly that reason.
+ *
+ * Clipped rather than wrapped or elided: the row is one line by contract (§1.10), and there
+ * is no width here to elide against. The order is the order the Commands were registered in,
+ * and the live set puts the focused Pane's before the globals, so what a narrow terminal
+ * loses is the least specific end of the line.
  */
-export function StatuslineView({ statusline, panes }: { statusline: StatuslineHost; panes: PaneHost }) {
+function HintBar({ keys }: { keys: ExternalStore<readonly LiveBinding[]> }) {
+  const theme = useTheme()
+  const bindings = useStore(keys)
+  // Narrowed by the same pass that filters, so the label below is a string rather than a
+  // second check of the field that decided it was there.
+  const hints = bindings.flatMap((binding) =>
+    binding.hint === undefined ? [] : [{ id: binding.id, key: binding.key, label: binding.hint }],
+  )
+
+  return (
+    <text wrapMode="none">
+      {hints.map((entry, index) => (
+        <span key={entry.id}>
+          <span fg={theme.textMuted}>{index === 0 ? "" : hintSeparator}</span>
+          <span fg={theme.accent}>{entry.key}</span>
+          <span fg={theme.textMuted}>{` ${entry.label}`}</span>
+        </span>
+      ))}
+    </text>
+  )
+}
+
+/**
+ * The bottom row: what you can press on the left, Extension-owned segments on the right.
+ *
+ * Core adds the pending key sequence, because "what did I just press" is the one piece of
+ * state no Extension can report. Left-aligned segments still render — the config may pin
+ * one there — but they follow the hints rather than displacing them.
+ */
+export function StatuslineView({
+  statusline,
+  panes,
+  keys,
+}: {
+  statusline: StatuslineHost
+  panes: PaneHost
+  keys: ExternalStore<readonly LiveBinding[]>
+}) {
   const theme = useTheme()
   const segments = useStore(statusline)
   const pending = usePendingSequence()
 
   return (
     <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
-      <Segments panes={panes} segments={segments.left} />
-      {/* Core's own, and unconditional. It is the only on-screen route to the palette, the
-          cheat sheet, and the way out, and it used to render only while no Extension had
-          registered a LEFT segment — a condition the shipped app never meets, since the
-          bundled `status` Extension always registers one, and one that also blanked the
-          whole line outside a repository. Between the two groups rather than beside them,
-          so a wide segment on either side pushes it around instead of over it. */}
-      <text content={hint} style={{ fg: theme.textMuted }} />
-      <box flexDirection="row" gap={2}>
+      <box flexDirection="row" gap={2} flexShrink={1}>
+        <HintBar keys={keys} />
+        <Segments panes={panes} segments={segments.left} />
+      </box>
+      <box flexDirection="row" gap={2} flexShrink={0}>
         <Segments panes={panes} segments={segments.right} />
         {pending.length > 0 ? (
           <text content={pending.map((part) => part.display).join("")} style={{ fg: theme.accent }} />

@@ -243,6 +243,7 @@ export default defineExtension({
       useCommand({
         id: "stash.apply",
         title: "Apply stash",
+        hint: "apply",
         keys: "space",
         run: async () => {
           if (selected !== undefined) await apply(selected)
@@ -251,6 +252,7 @@ export default defineExtension({
       useCommand({
         id: "stash.pop",
         title: "Pop stash",
+        hint: "pop",
         // Pane-scoped `p` while `sync` binds a global `p` for pull. Not a collision to fix:
         // the Pane layer (priority 100) shadows the global one (0) exactly while this Pane
         // is focused, so `p` here is the stash you are looking at and `p` anywhere else is
@@ -263,6 +265,7 @@ export default defineExtension({
       useCommand({
         id: "stash.drop",
         title: "Drop stash",
+        hint: "drop",
         keys: "d",
         run: async () => {
           if (selected !== undefined) await drop(selected)
@@ -271,6 +274,7 @@ export default defineExtension({
       useCommand({
         id: "stash.menu",
         title: "Stash actions",
+        hint: "menu",
         keys: "x",
         run: async () => {
           if (selected !== undefined) await ctx.menus.open("stash.actions", selected)
@@ -318,6 +322,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "stash.save",
       title: "Stash changes",
+      hint: "stash",
       keys: "s",
       // Bound inside a Pane another Extension owns. Bindings key on the Pane id rather than
       // on the registering Extension, so this needs no `needs` edge: with no files Pane

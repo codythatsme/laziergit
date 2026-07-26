@@ -331,6 +331,7 @@ export default defineExtension({
       useCommand({
         id: "diff.toggle-view",
         title: "Toggle unified/split diff",
+        hint: "layout",
         keys: "v",
         run: toggleView,
       })
@@ -385,6 +386,7 @@ export default defineExtension({
       useCommand({
         id: "diff.menu",
         title: "Diff actions",
+        hint: "menu",
         keys: "x",
         run: async () => {
           const open = target.get()

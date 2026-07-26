@@ -374,6 +374,7 @@ export default defineExtension({
       useCommand({
         id: "commit-flow.cancel",
         title: "Close the editor, keeping the message",
+        hint: "keep draft",
         keys: "escape",
         capture: true,
         // Said out loud, because a key that used to destroy the message no longer does and
@@ -399,8 +400,9 @@ export default defineExtension({
               initialValue={draft.initial}
               flexGrow={1}
             />
-            {/* `?` is inert while capturing, so the two keys that still work name themselves. */}
-            <text content="mod+s commit  ·  escape keeps the draft" style={{ fg: theme.textMuted }} />
+            {/* No footer of its own: a capture collapses the hint bar to exactly this Pane's
+                capture Commands, so the two keys that still work are already named down
+                there — in whatever the user actually rebound them to. */}
           </box>
         )
       }
@@ -447,6 +449,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "commit-flow.commit",
       title: "Commit",
+      hint: "commit",
       keys: "c",
       // Bound inside the files Pane, where staging happens. A Pane id is a name, not a live
       // object, so this needs no `needs`: it is simply inert while nothing owns that Pane.
@@ -456,6 +459,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "commit-flow.amend",
       title: "Amend the last commit",
+      hint: "amend",
       // `shift+a`, not `A`: the binding parser lowercases a bare letter, so `"A"` would
       // claim the same stroke as the files Pane's own `a` and one of them would go silent.
       keys: "shift+a",
@@ -465,6 +469,7 @@ export default defineExtension({
     ctx.commands.register({
       id: "commit-flow.menu",
       title: "Commit actions",
+      hint: "menu",
       keys: "x",
       pane: "commit-flow",
       run: () => ctx.menus.open("commit-flow.actions", ctx.git.state.status),

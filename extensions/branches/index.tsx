@@ -294,12 +294,14 @@ export default defineExtension({
       useCommand({
         id: "branches.checkout",
         title: "Check out branch",
+        hint: "checkout",
         keys: "space",
         run: () => (selected === undefined ? undefined : checkout(selected)),
       })
       useCommand({
         id: "branches.create",
         title: "Create branch here",
+        hint: "new branch",
         keys: "n",
         // Refused before the prompt: outside a repository there is nothing to create a branch
         // in, and asking for a name only to hand git a request it must reject is the Pane
@@ -310,12 +312,14 @@ export default defineExtension({
       useCommand({
         id: "branches.delete",
         title: "Delete branch",
+        hint: "delete",
         keys: "d",
         run: () => (selected === undefined ? undefined : deleteBranch(selected)),
       })
       useCommand({
         id: "branches.menu",
         title: "Branch actions",
+        hint: "menu",
         keys: "x",
         run: () => (selected === undefined ? undefined : openMenu(selected)),
       })

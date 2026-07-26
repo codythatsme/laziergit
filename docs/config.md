@@ -160,6 +160,13 @@ Ids listed in `left`/`right` come first, in the order written, overriding the se
 `align`. Every other segment falls back to its declared `align` and `priority`. `hidden`
 removes a segment entirely. Ids nothing registered are ignored.
 
+The status line shares the bottom row with the **hint bar** — the keys the focused Pane can
+act on right now, which core writes along the left and which changes as you tab. Segments
+follow it, so `"right"` is where one has room; pinning a segment `left` puts it beside the
+hints and both clip when the terminal is narrow. Nothing in config turns the hint bar off:
+what appears there is whichever live Commands carry a `hint`, so an Extension decides for its
+own Pane, and `keybindings` above decides what each one is labelled with.
+
 ## `extensions` — per-Extension options
 
 ```jsonc

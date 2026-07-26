@@ -29,8 +29,16 @@ The user-config-owned arrangement of Panes into the screen (columns/tabs). Exten
 _Avoid_: workspace, arrangement
 
 **Command**:
-A named action registered by an Extension, invokable via Keybinding or the palette. The unit all key-driven behavior is built from.
+A named action registered by an Extension, invokable via Keybinding or the palette. The unit all key-driven behavior is built from — one registration is also its Cheat Sheet row and, where it carries a `hint`, its Hint Bar entry.
 _Avoid_: action, binding (a binding maps a key to a Command)
+
+**Hint Bar**:
+The left of the bottom row, where Core prints the keys the focused Pane can act on right now, drawn from the `hint` on each live Command. Contextual by construction: it changes with focus, and collapses to a Pane's capture keys while that Pane owns the keyboard.
+_Avoid_: footer, options bar, status bar (the Status Line is the same row's other half)
+
+**Cheat Sheet**:
+The `?` overlay listing the focused Pane's keys, then its capture keys, then the globals. Derived from the Command catalog; scoped to one Pane, unlike the palette, which is global.
+_Avoid_: help, keymap popup
 
 **Exported API**:
 The typed surface an Extension itself exports for other Extensions to consume (e.g. the branches Extension's row decorations and menu items). Distinct from the Core's Extension Context.
