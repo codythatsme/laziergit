@@ -124,14 +124,21 @@ function toastLines(message: string): readonly string[] {
   return [...lines.slice(0, maxToastLines), `… ${lines.length - maxToastLines} more lines`]
 }
 
-/** Transient notifications, stacked above the status line and never taking focus. */
+/**
+ * Transient notifications, stacked above the status line and never taking focus.
+ *
+ * `bottom={3}` clears that row rather than landing on it. At `2` a toast sat exactly on the
+ * status line and blanked whatever was there for as long as it lasted — survivable when the
+ * row held a branch name, not once it also holds the keys you can press, since the moment a
+ * toast appears is the moment you are deciding what to do next.
+ */
 export function ToastLayer({ notifications }: { notifications: NotificationHost }) {
   const theme = useTheme()
   const toasts = useStore(notifications)
   if (toasts.length === 0) return null
 
   return (
-    <box position="absolute" right={2} bottom={2} zIndex={10} flexDirection="column" alignItems="flex-end" gap={1}>
+    <box position="absolute" right={2} bottom={3} zIndex={10} flexDirection="column" alignItems="flex-end" gap={1}>
       {toasts.map((toast) => (
         <box
           key={toast.id}
