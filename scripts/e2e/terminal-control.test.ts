@@ -242,9 +242,12 @@ describe("laziergit through a real terminal", () => {
       const keys = await waitForScreen(
         session,
         "the focused branches pane's live keybindings",
-        (screen) => screen.includes("Keybindings") && screen.includes("Focus branches"),
+        (screen) => screen.includes("Keybindings — branches") && screen.includes("Check out branch"),
       )
+      // Scoped to the Pane holding the keyboard: the files Pane is on screen, in the same
+      // tab group, and its keys are not on this sheet.
       expect(keys).not.toContain("Stage / unstage file")
+      expect(keys).toContain("Global")
       await pressEscape(session)
       await waitForScreen(session, "the keybindings popup to close", (screen) => !screen.includes("Keybindings"))
 
