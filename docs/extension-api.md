@@ -949,14 +949,32 @@ tagged with the extension name, and routed to the log file / debug pane.
 
 ```ts
   /**
-   * A Command is the single unit behind keybindings, the command palette, and
-   * the cheat sheet ("?"). Registering one thing gives you all three.
+   * A Command is the single unit behind keybindings, the command palette, the
+   * cheat sheet ("?"), and the hint bar along the bottom of the screen.
+   * Registering one thing gives you all four.
    */
   export interface CommandSpec<TName extends string = string> {
     /** Unique id, compile-checked to start with your extension name ("gh-workflows.refresh"). */
     id: ScopedId<TName>;
     /** Human label — palette row and cheat-sheet text. */
     title: string;
+    /**
+     * Short label for the **hint bar** — "checkout", not "Check out branch".
+     * Its *presence* is the opt-in: a command without one is still bound, still
+     * in the palette, still in the cheat sheet, and simply stays off the bar.
+     *
+     * The bar shows what you can press *here*: the focused pane's commands in
+     * registration order, then any global commands whose key that pane has not
+     * claimed (so the stash pane's `p` reads "pop" while the global `p` still
+     * means pull everywhere else), and during a {@link useKeyCapture} it
+     * collapses to that pane's `capture` commands — the same bands the keymap
+     * dispatches through, so the bar cannot name a key that would do something
+     * else. It clips rather than wrapping, so put what matters first.
+     *
+     * Leave it off for anything that is on every screen in every mode: `tab`,
+     * the palette and `q` are core's, and core does not hint them either.
+     */
+    hint?: string;
     /** Default binding(s). Users override per-command in config. Omit for palette-only. */
     keys?: KeySpec | readonly KeySpec[];
     /**
@@ -974,6 +992,7 @@ tagged with the extension name, and routed to the log file / debug pane.
     pane?: string;
     /** Hide from the palette (still bindable & in the cheat sheet). For j/k-style motions. */
     hidden?: boolean;
+
     /**
      * Bind `keys` while {@link pane} is capturing raw keyboard input
      * ({@link useKeyCapture}) *instead of* while it is merely focused — the way
@@ -992,7 +1011,7 @@ tagged with the extension name, and routed to the log file / debug pane.
   }
 
   export interface CommandRegistry<TName extends string = string> {
-    /** Register a command (keybinding + palette entry + cheat-sheet row in one). */
+    /** Register a command (keybinding + palette entry + cheat-sheet row + hint in one). */
     register(spec: CommandSpec<TName>): Disposable;
 
     /**
@@ -1539,6 +1558,12 @@ intrinsics; the authority is `@opentui/react`'s JSX types, not this document.
    * {@link createCell}: `set` from activate, `use()` in the component — or own
    * the polling entirely inside the component, as ci-status does (§4.2).
    * Render null to hide the segment. Keep it to one row of text.
+   *
+   * The bottom row is shared: core writes the hint bar for the focused pane
+   * along its left ({@link CommandSpec.hint}), and segments follow. `"right"`
+   * is therefore where a segment has room — it is where the bundled `sync`
+   * segment puts the branch and its divergence — and a left-aligned segment
+   * competes with the hints for the same space.
    */
   export interface StatusSegmentSpec<TName extends string = string> {
     /** Users order/hide segments by this id in config. Compile-checked prefix. */

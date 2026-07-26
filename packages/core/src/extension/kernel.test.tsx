@@ -783,6 +783,7 @@ describe("Application shell", () => {
             activate(ctx) {
               function ToyPane() { throw new Error("toy render exploded") }
               ctx.panes.register({ id: "toy", title: "Toy", component: ToyPane })
+              ctx.commands.register({ id: "toy.act", title: "Act", hint: "act", keys: "z", pane: "toy", run: () => undefined })
             },
           })
         `,
@@ -791,7 +792,9 @@ describe("Application shell", () => {
       await renderApp(harness)
       expect(harness.setup.captureCharFrame()).toContain("Pane crashed")
       expect(harness.setup.captureCharFrame()).toContain("toy render exploded")
-      expect(harness.setup.captureCharFrame()).toContain("mod+p palette")
+      // The rest of the shell is still drawing: the Pane's own hints are on the bottom row
+      // even though the Pane above them threw.
+      expect(harness.setup.captureCharFrame()).toContain("z act")
       expect(errorMessages.some((message) => message.includes("not wrapped in act"))).toBe(false)
     } finally {
       errorSpy.mockRestore()

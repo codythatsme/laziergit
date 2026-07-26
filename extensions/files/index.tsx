@@ -485,13 +485,21 @@ export default defineExtension({
       useCommand({
         id: "files.toggle-stage",
         title: "Stage / unstage file",
+        hint: "stage",
         keys: "space",
         run: () => toggleStage(selected),
       })
-      useCommand({ id: "files.stage-all", title: "Stage all files", keys: "a", run: () => stage("all") })
+      useCommand({
+        id: "files.stage-all",
+        title: "Stage all files",
+        hint: "stage all",
+        keys: "a",
+        run: () => stage("all"),
+      })
       useCommand({
         id: "files.discard",
         title: "Discard changes to file",
+        hint: "discard",
         keys: "d",
         run: () => (selected === undefined ? undefined : discard(selected.change)),
       })
@@ -501,7 +509,7 @@ export default defineExtension({
         keys: "e",
         run: () => (selected === undefined ? undefined : openFile(selected.change)),
       })
-      useCommand({ id: "files.menu", title: "File actions", keys: "x", run: () => openMenu(selected) })
+      useCommand({ id: "files.menu", title: "File actions", hint: "menu", keys: "x", run: () => openMenu(selected) })
 
       // Outside a repository there is no working tree to be clean, and saying it is clean
       // would report a healthy, fully committed repository where there is none at all.

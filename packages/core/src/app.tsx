@@ -43,7 +43,7 @@ function AppShell({ kernel }: { kernel: ExtensionKernel }) {
     <box width="100%" height="100%" backgroundColor={theme.background}>
       <box flexGrow={1} flexDirection="column" padding={1} gap={1}>
         <LayoutView layout={kernel.layout} panes={kernel.panes} fallback={<ExtensionStatusList kernel={kernel} />} />
-        <StatuslineView statusline={kernel.statusline} panes={kernel.panes} />
+        <StatuslineView statusline={kernel.statusline} panes={kernel.panes} keys={kernel.keybindings} />
       </box>
       <ToastLayer notifications={kernel.notifications} />
       <PopupLayer popups={kernel.popups} />

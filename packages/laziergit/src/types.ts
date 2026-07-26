@@ -340,6 +340,13 @@ export interface CommandSpec<TName extends string = string> {
   pane?: string
   hidden?: boolean
   /**
+   * Short label for the hint bar — "checkout", not "Check out branch". Its *presence* is
+   * the opt-in: a Command without one is still bound, still in the palette, still in the
+   * cheat sheet, and simply stays off the bar. Bar order is registration order, and only
+   * the Commands live right now are listed, so a Pane's bar is what that Pane can do.
+   */
+  hint?: string
+  /**
    * Keep this Command's keys live while its Pane is capturing raw input
    * ({@link useKeyCapture}) — the exit keys of a Pane that owns the keyboard, `mod+s` to
    * submit and `escape` to cancel. Capture is a property of a Pane's keyboard, so this is

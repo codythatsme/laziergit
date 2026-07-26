@@ -322,6 +322,7 @@ export default defineExtension({
       useCommand({
         id: "commits.menu",
         title: "Commit actions",
+        hint: "menu",
         keys: "x",
         run: async () => {
           if (selected === undefined) return
