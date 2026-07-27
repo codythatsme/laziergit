@@ -27,13 +27,9 @@ const visibleRows = 10
 const popupChrome = 5
 
 /**
- * How many rows the cheat sheet may draw, given the terminal it is drawn in.
- *
- * A fixed window was fine while the globals were seven lines; it stopped being fine the
- * moment the pane-jump keys joined them, because the sheet's whole job is to answer "what
- * can I press" and the answer had grown past the window. A floor of six keeps it a popup
- * rather than a full-screen takeover on a very short terminal, where scrolling is the
- * honest fallback.
+ * How many rows the cheat sheet may draw, given the terminal it is drawn in. A floor of six
+ * keeps it a popup rather than a full-screen takeover on a very short terminal, where
+ * scrolling is the honest fallback.
  */
 function sheetRows(height: number): number {
   return Math.max(6, height - popupChrome - 4)
@@ -116,19 +112,16 @@ function PromptView({ popup, theme }: { popup: PromptPopup; theme: Theme }) {
   const [value, setValue] = useState(popup.initial)
   const [error, setError] = useState<string | null>(null)
   /**
-   * What `return` submits — written by the input handler below, not during render.
-   *
-   * A keypress is not a React event: the binding runs on the modal key layer the moment the
-   * byte arrives, so Enter in the same tick as the keystroke before it reads whatever the
-   * last *render* left behind. Mirroring state during render made that window a lie the user
-   * could see through — the input drew what they typed while the popup submitted the value it
-   * replaced. Rare by hand, certain on a paste, and certain again under load.
+   * What `return` submits — written by the input handler below, not during render. A keypress
+   * is not a React event: the binding runs on the modal key layer the moment the byte arrives,
+   * so Enter in the same tick as the keystroke before it would otherwise read whatever the
+   * last render left behind. Rare by hand, certain on a paste.
    */
   const latest = useRef(popup.initial)
 
-  // Enter is bound on the modal layer rather than taken from the input's submit event:
-  // the JSX namespace merges OpenTUI's `input` with the DOM one, so `onSubmit` has two
-  // incompatible signatures. One key path also keeps validation in a single place.
+  // Enter is bound on the modal layer rather than taken from the input's submit event: the JSX
+  // namespace merges OpenTUI's `input` with the DOM one, so `onSubmit` has two incompatible
+  // signatures. One key path also keeps validation in a single place.
   useBindings(
     () => ({
       priority: modalLayerPriority,
@@ -179,13 +172,10 @@ function ChooseView({ popup, theme }: { popup: ChoosePopup; theme: Theme }) {
 
   /**
    * The filter and the row the key handlers act on, written by those handlers rather than
-   * mirrored during render — see {@link PromptView}'s `latest` for the window this closes.
-   *
-   * It matters more here than there. A stale read in a prompt submits the value you replaced;
-   * a stale read here runs a *different row* — and this is the component behind both the
-   * command palette and every `select`, so the rows include force-push, hard reset and
-   * discard. Typing a name and hitting enter must never run the entry that was highlighted
-   * before the filter was applied.
+   * mirrored during render — see {@link PromptView}'s `latest` for the window this closes. It
+   * matters more here: this is the component behind both the command palette and every
+   * `select`, so a stale read runs a different row, and the rows include force-push and hard
+   * reset.
    */
   const state = useRef({ query: "", cursor: 0 })
 
@@ -275,9 +265,7 @@ function ActionsView({ popup, theme }: { popup: ActionsPopup; theme: Theme }) {
   )
 
   // One key column for the whole menu, measured across every group: a `shift+d` beside an `s`
-  // otherwise pushes its own label six columns right and the labels stop forming a column at
-  // all. Measured over the menu rather than per group so the groups line up with each other,
-  // which is what the cheat sheet already does with its own keys.
+  // otherwise pushes its own label six columns right and the labels stop forming a column.
   const keyWidth = Math.max(0, ...popup.groups.flatMap((group) => group.items.map((item) => item.key.length)))
 
   return (

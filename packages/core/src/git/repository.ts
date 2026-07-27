@@ -2,10 +2,9 @@ import { realpath } from "node:fs/promises"
 import { dirname } from "node:path"
 
 /**
- * A repository laziergit can serve, identified by its root. The root comes from git
- * itself rather than from looking for a `.git` directory, because `.git` may be a *file*
- * in a linked worktree or a submodule — the `gitdir:` pointer inside it is git's to
- * follow, never ours.
+ * A repository laziergit can serve, identified by its root. The root comes from git itself
+ * rather than from looking for a `.git` directory, which may be a *file* in a linked worktree
+ * or a submodule.
  */
 export interface Repository {
   readonly root: string
@@ -55,18 +54,17 @@ export async function discoverRepository(cwd: string): Promise<Repository | null
   try {
     return readRepository(await revParse(cwd, {}))
   } catch {
-    // A missing or unrunnable `git` binary is indistinguishable here from "no repository":
-    // both mean the git service has nothing to serve, which the caller degrades on.
+    // A missing or unrunnable `git` is indistinguishable here from "no repository": both mean
+    // the git service has nothing to serve.
     return null
   }
 }
 
 /**
- * Opens `root` as a repository, refusing to accept an *enclosing* one. `git` normally
- * searches upward, so a directory that merely sits inside a checkout would silently bind
- * to it — which is how a temp directory under a clone ends up driving the store.
- * `GIT_CEILING_DIRECTORIES` stops the walk, and the toplevel is re-checked because the
- * ceiling does not apply to symlinked paths.
+ * Opens `root` as a repository, refusing to accept an *enclosing* one: `git` normally searches
+ * upward, so a directory merely sitting inside a checkout would silently bind to it.
+ * `GIT_CEILING_DIRECTORIES` stops the walk, and the toplevel is re-checked because the ceiling
+ * does not apply to symlinked paths.
  */
 export async function openRepository(root: string): Promise<Repository | null> {
   try {

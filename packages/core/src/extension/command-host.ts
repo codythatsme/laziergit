@@ -37,14 +37,11 @@ interface RegisteredCommand {
 /**
  * The spelling two KeySpecs share exactly when they bind the same physical stroke.
  *
- * @opentui/keymap lowercases every key NAME when it matches (`normalizeKeyName`) and compares
- * modifier tokens case-insensitively, so a KeySpec and its case-folded form always resolve to
- * the same binding. Folding case here is therefore sound — it can never invent a conflict
- * between two keys the keymap would keep apart — and it closes the collision the KeySpec
- * grammar warns about: a bare letter binds its lowercase stroke, so `"D"` and `"d"` are one
- * key, not two. (Alias and modifier-order spellings — `esc`/`escape`, `ctrl+shift+x`
- * /`shift+ctrl+x` — the keymap folds too, but only its own parser knows them, so catching
- * those would mean re-implementing the parser here; they stay the caller's responsibility.)
+ * @opentui/keymap lowercases every key name when it matches and compares modifier tokens
+ * case-insensitively, so folding case here can never invent a conflict the keymap would keep
+ * apart — and it closes the one the KeySpec grammar warns about, where `"D"` and `"d"` are one
+ * key. Alias and modifier-order spellings are the caller's responsibility: only the keymap's
+ * own parser knows them.
  */
 export function keyStroke(key: string): string {
   return key.toLowerCase()
@@ -84,10 +81,9 @@ function claimScope(spec: CommandSpec): string {
 }
 
 /**
- * The Command catalog: one registration yields a keybinding, a palette row, a cheat-sheet
- * row, and — where the author wrote a `hint` — a hint-bar entry. Key resolution (user
- * overrides, conflicts) happens here rather than in the keymap layer, so every surface
- * agrees on which keys a Command really has and the rules stay testable without a renderer.
+ * The Command catalog: one registration yields a keybinding, a palette row, a cheat-sheet row,
+ * and — where the author wrote a `hint` — a hint-bar entry. Key resolution happens here rather
+ * than in the keymap layer, so every surface agrees on which keys a Command really has.
  */
 export class CommandHost {
   readonly #commands = new Map<string, RegisteredCommand>()
@@ -182,11 +178,9 @@ export class CommandHost {
   }
 
   /**
-   * Two passes, because the two kinds of claim are not equal. Keys the user set in config
-   * are claimed first and cannot be taken: an Extension's declared default must never
-   * quietly steal a key its owner deliberately bound elsewhere. Within a pass the later
-   * registration wins, mirroring the keymap's own layer precedence; the loser keeps its
-   * palette row and loses only the key.
+   * Two passes, because the two kinds of claim are not equal. Keys the user set in config are
+   * claimed first and cannot be taken. Within a pass the later registration wins, mirroring the
+   * keymap's own layer precedence; the loser keeps its palette row and loses only the key.
    */
   #resolve(): readonly CommandEntry[] {
     const claimed = new Map<string, string>()

@@ -46,10 +46,9 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
 }
 
 /**
- * Stands in for the bundled `diff` Extension, which `commits` declares as a `need` and which
- * a sibling agent is writing in parallel. A stub keeps this file testing what `commits`
- * *asks for* — the exact {@link DiffTarget} it pushes on every selection change — instead of
- * what some other Extension chose to render for it.
+ * Stands in for the bundled `diff` Extension, which `commits` declares as a `need`. A stub
+ * keeps this file testing what `commits` asks for — the exact {@link DiffTarget} it pushes on
+ * every selection change — rather than what another Extension chose to render.
  */
 const diffStub = `
   /** @jsxImportSource @opentui/react */
@@ -229,8 +228,8 @@ describe("the commits action menu", () => {
     await commit(repo, "first commit")
     await commit(repo, "second commit")
     const parent = await repo.oid("HEAD~1")
-    // One staged edit, so the confirmation has an index rearrangement to report as well as
-    // the commit it drops.
+    // One staged edit, so the confirmation reports an index rearrangement as well as the
+    // commit it drops.
     await writeFile(join(repo.harness.directory, "first-commit.txt"), "edited\n")
     await repo.run("add", "first-commit.txt")
 
@@ -240,8 +239,8 @@ describe("the commits action menu", () => {
     await press(repo.harness, "x")
     await press(repo.harness, "m")
 
-    // A mixed reset is one keystroke from the hard one and moves the branch just as far, so
-    // it asks first — and it says what it costs rather than only that it is about to happen.
+    // A mixed reset moves the branch as far as the hard one, so it asks first — and says what
+    // it costs.
     expect(frame(repo.harness)).toContain("1 staged change unstaged, though kept in the working tree")
     expect(frame(repo.harness)).toContain("1 commit off this branch, left only in the reflog")
 
@@ -267,7 +266,7 @@ describe("the commits action menu", () => {
     await press(repo.harness, "s")
 
     // Soft touches neither the index nor the files, and still takes a commit off the branch
-    // with only the reflog to get it back — which is the whole reason it asks.
+    // with only the reflog to get it back.
     expect(frame(repo.harness)).toContain("Reset soft to")
     expect(frame(repo.harness)).toContain("1 commit off this branch, left only in the reflog")
 
@@ -333,13 +332,12 @@ describe("the commits action menu", () => {
     await press(repo.harness, "x")
 
     // The merge is the newest commit and so the selected row. Offering the item here would
-    // promise an undo that `git revert` rejects outright for want of `-m`.
+    // promise an undo `git revert` rejects for want of `-m`.
     expect(frame(repo.harness)).toContain("Check out this commit")
     expect(frame(repo.harness)).not.toContain("Revert this commit")
 
     // `"ESCAPE"`, not `"escape"`: the mock sends a named key's byte sequence and any other
-    // string as literal characters, so the lowercase spelling types e-s-c-a-p-e and the `c`
-    // in it fires the checkout item.
+    // string as literal characters, so the lowercase spelling would type e-s-c-a-p-e.
     await press(repo.harness, "ESCAPE")
     await press(repo.harness, "j")
     await press(repo.harness, "x")

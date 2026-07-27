@@ -5,16 +5,10 @@ function freezeTheme(theme: Theme): Theme {
 }
 
 /**
- * A named, complete set of tokens a user selects with `theme.preset`.
+ * A named, complete set of tokens a user selects with `theme.preset`. A preset is a base, not
+ * a mode: `theme` merges a user's own token overrides on top of the one they named.
  *
- * A preset is a *base*, not a mode: `theme` merges a user's own token overrides on top of the
- * one they named, so picking a preset and then recolouring one token is the ordinary case
- * rather than an escape from the preset system.
- *
- * Every preset here is held to the contrast floors in `theme.test.ts`. That is not decoration:
- * `textMuted` carries every empty state in the app and the cursor gutter beside every
- * unselected row, so a preset that renders it as decorative grey has made the sentence telling
- * you your working tree is clean the least readable thing on the screen.
+ * Every preset here is held to the contrast floors in `theme.test.ts`.
  */
 export interface ThemePreset {
   /** What the user types as `theme.preset`. */
@@ -31,12 +25,9 @@ function preset(name: string, description: string, tokens: Theme): ThemePreset {
 export const themePresets: readonly ThemePreset[] = Object.freeze([
   /**
    * The default. Violet-black, because git had already spent green, red, amber and cyan on
-   * meaning — violet is the only hue left that can be loud without claiming to be a state.
-   *
-   * The three surfaces are deliberately three: `background` near-black, `backgroundPanel`
-   * lifted enough that a popup reads as a card rather than a rectangle of the same paint, and
-   * a `selection` bar you can find without hunting. The diff pair separates in luminance as
-   * well as hue, so a patch stays readable where red and green are hard to tell apart.
+   * meaning. The three surfaces are deliberately three: `background` near-black,
+   * `backgroundPanel` lifted enough that a popup reads as a card, and a `selection` bar you
+   * can find without hunting. The diff pair separates in luminance as well as hue.
    */
   preset("nocturne", "Violet-black night with three stacked surfaces — laziergit's default", {
     text: "#e9ebf7",
@@ -136,7 +127,7 @@ export const defaultThemePreset = "nocturne"
 export const defaultTheme: Theme = (() => {
   const found = findThemePreset(defaultThemePreset)
   // Unreachable by construction, but a missing default theme would render an unreadable
-  // screen rather than fail, so it is worth saying out loud.
+  // screen rather than fail.
   if (!found) throw new Error(`The default theme preset "${defaultThemePreset}" is not registered`)
   return found.tokens
 })()

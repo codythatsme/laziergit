@@ -19,14 +19,14 @@ it("says nothing about an operation that finishes before it was worth mentioning
   })
 
   // The case that made the delay necessary: the diff Pane stages a hunk per keypress, and a
-  // spinner appearing for one frame per keystroke reads as a fault rather than as progress.
+  // spinner appearing for one frame per keystroke reads as a fault.
   store.begin("staging")()
 
   await Bun.sleep(pastReveal)
   expect(store.getSnapshot()).toEqual([])
   expect(notified).toBe(0)
-  // Identity too, not just contents: `useSyncExternalStore` re-reads the snapshot every render
-  // and treats a fresh array as a change, so a fast write must not cost a re-render either.
+  // Identity too: `useSyncExternalStore` re-reads the snapshot every render and treats a fresh
+  // array as a change.
   expect(store.getSnapshot()).toBe(before)
 })
 
@@ -107,9 +107,8 @@ it("drops everything in flight on shutdown, so no reveal outlives the renderer",
 // ---- labels --------------------------------------------------------------------------
 
 /**
- * The argv each case names is the argv the service actually builds — see `GitService.push`,
- * `unstage`, `commit` and friends — so a helper that changes its flags is caught here rather
- * than by someone noticing the status line saying the wrong word.
+ * The argv each case names is the argv the service actually builds, so a helper that changes
+ * its flags is caught here rather than by someone noticing the wrong word on the status line.
  */
 it("names an operation after what it does, not after its subcommand", () => {
   const cases: readonly (readonly [readonly string[], string])[] = [

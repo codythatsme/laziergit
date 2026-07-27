@@ -8,8 +8,7 @@ import { errorCode, normalizeError } from "./diagnostics"
 
 /**
  * Every scope, weakest first: an Extension from a later scope shadows a same-named one from
- * any earlier scope. Discovery, import, and fingerprinting all walk this order, so which copy
- * wins never depends on which directory read happened to finish first.
+ * any earlier scope. Discovery, import and fingerprinting all walk this order.
  */
 export const extensionScopePrecedence = ["bundled", "global", "repo"] as const
 
@@ -17,8 +16,8 @@ export type ExtensionSourceScope = (typeof extensionScopePrecedence)[number]
 
 /**
  * The scopes whose directories belong to the user rather than to the installation. laziergit
- * creates them and publishes authoring support into them; doing either inside the bundled
- * directory would be writing into its own install tree.
+ * creates them and publishes authoring support into them, neither of which it may do inside
+ * its own install tree.
  */
 export const userWritableExtensionScopes = ["global", "repo"] as const satisfies readonly ExtensionSourceScope[]
 
@@ -56,9 +55,8 @@ export interface ExtensionDiscoveryResult {
 export type ExtensionDirectories = { readonly [Scope in ExtensionSourceScope]: string }
 
 /**
- * The two user-writable directories. `bundled` is a parameter rather than a default because
- * only the process entry point knows where laziergit itself is installed — the working
- * directory is the user's repository, which is a different tree entirely.
+ * The two user-writable directories. `bundled` is a parameter because only the process entry
+ * point knows where laziergit itself is installed.
  */
 export function defaultExtensionDirectories(repoRoot: string, bundled: string): ExtensionDirectories {
   const configRoot = process.env.XDG_CONFIG_HOME || join(homedir(), ".config")
@@ -78,18 +76,15 @@ function isExtensionFile(name: string): boolean {
 }
 
 /**
- * The one directory laziergit writes into an Extension directory: every generation's import
- * copies live inside it rather than beside the Extensions themselves. Nested, because an
- * Extension directory is somebody else's tree — in this repository it is a Bun workspace
- * glob, and a copy that lands as its sibling becomes a second package with the same name.
+ * The one directory laziergit writes into an Extension directory. Nested rather than beside
+ * the Extensions, because an Extension directory is somebody else's tree — in this repository
+ * it is a Bun workspace glob, where a sibling copy becomes a second package of the same name.
  */
 export const importCopyContainerName = ".laziergit-cache"
 
 /**
- * The one file inside the container that is not an import copy — it is what keeps the
- * container out of the host repository's status. Named here beside the container so the
- * cache and everything that reads the container back agree on what is scratch and what is
- * bookkeeping.
+ * The one file inside the container that is not an import copy: it is what keeps the container
+ * out of the host repository's status.
  */
 export const importCopyIgnoreName = ".gitignore"
 

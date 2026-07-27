@@ -4,21 +4,15 @@ import { GitError, type GitOutput } from "laziergit"
 /**
  * Flags every invocation carries.
  *
- * - `--no-pager` — git execs a pager when it believes stdout is a terminal; we own the
- *   terminal, so a pager would fight the renderer for it.
- * - `core.quotepath=false` — `-z` already defeats path quoting, but every non-`-z`
- *   surface (diff headers, error text naming a path) would otherwise arrive as
- *   `"h\303\251llo"`. Setting it once means no C-string unquoter is ever needed.
+ * - `--no-pager` — a pager would fight the renderer for the terminal.
+ * - `core.quotepath=false` — without it every non-`-z` surface naming a path arrives as
+ *   `"h\303\251llo"`, and something would have to unquote C strings.
  * - `color.ui=false` — a user with `color.ui=always` cannot tint anything we parse.
- * - the `diff.*` four — the diff Pane reads the file a patch section is about out of that
- *   section's `--- a/`/`+++ b/` header, and each of these rewrites that header: `noprefix`
- *   drops the prefixes, `mnemonicPrefix` swaps them for `i/`, `w/`, `c/`, `o/`, and
- *   `srcPrefix`/`dstPrefix` replace them outright. Unpinned, a user who sets any of them sees
- *   every file in a multi-file diff named "(unnamed)" and highlighted as no language at all.
+ * - the `diff.*` four — each rewrites the `--- a/`/`+++ b/` header the diff Pane reads a
+ *   section's filename out of. Unpinned, a multi-file diff names every file "(unnamed)".
  *
- * The other setting that reshapes a patch, an external differ, cannot be pinned here: `-c
- * diff.external=` does not override the `GIT_EXTERNAL_DIFF` environment variable, and the flag
- * that does — `--no-ext-diff` — is a diff option that `status`, `add` and `commit` reject. It
+ * An external differ cannot be pinned here: `-c diff.external=` does not override
+ * `GIT_EXTERNAL_DIFF`, and `--no-ext-diff` is rejected by `status`, `add` and `commit`, so it
  * goes on the argvs that actually produce a patch.
  */
 const baseFlags = [
@@ -38,21 +32,16 @@ const baseFlags = [
 ] as const
 
 /**
- * Reads additionally suppress the *optional* index rewrite `git status` performs to
- * persist its refreshed stat cache. Without this the ~2s poll would rewrite the index
- * on every tick — contending for `index.lock` with the user's own terminal, and
- * invalidating the very fingerprint the poll compares against.
+ * Reads suppress the optional index rewrite `git status` performs to persist its stat cache.
+ * Without it the poll would rewrite the index every tick, contending for `index.lock` and
+ * invalidating the fingerprint it compares against.
  */
 const readFlags = ["--no-optional-locks"] as const
 
 /**
- * `GIT_TERMINAL_PROMPT=0` is the one that matters: a `fetch` against a remote wanting
- * credentials would otherwise block forever on a prompt nobody can answer, because our
- * stdio is piped and the terminal belongs to the renderer. It becomes a fast failure
- * whose stderr we can show instead.
- *
- * The `LC_*` trio forces byte-stable English. That is not cosmetic — {@link isLockContention}
- * matches `cannot lock ref`, which git translates.
+ * `GIT_TERMINAL_PROMPT=0` turns a credential prompt nobody can answer — our stdio is piped —
+ * into a fast failure whose stderr we can show. The `LC_*` trio forces byte-stable English,
+ * which {@link isLockContention} depends on.
  */
 const baseEnv: Readonly<Record<string, string>> = Object.freeze({
   GIT_TERMINAL_PROMPT: "0",
@@ -69,9 +58,8 @@ const retryFactor = 2
 const maxRetries = 6
 
 /**
- * Both fragments are matched bare and unanchored, deliberately: `index.lock` alone also
- * catches a linked worktree's and a submodule's lock file, which a fuller path would miss.
- * That is only safe because {@link isLockContention} reads stderr alone — see there.
+ * Matched bare and unanchored, so `index.lock` also catches a linked worktree's and a
+ * submodule's. Safe only because {@link isLockContention} reads stderr alone.
  */
 const lockFragments = ["index.lock", "cannot lock ref"] as const
 
@@ -97,11 +85,9 @@ type ExecFailure =
   | { readonly kind: "locked"; readonly output: GitOutput }
 
 /**
- * stderr only, because stdout is repository *content*: the diff Pane's untracked-file view
- * runs `diff --no-index`, which always exits nonzero with the file's own bytes on stdout,
- * so a file that merely mentions `index.lock` would otherwise spend the whole retry budget
- * — before `allowFailure` is consulted, so no caller could opt out. git reports lock
- * contention on stderr.
+ * stderr only, where git reports lock contention: stdout is repository content, so a file
+ * merely mentioning `index.lock` would otherwise burn the whole retry budget — before
+ * `allowFailure` is consulted, so no caller could opt out.
  */
 function isLockContention(output: GitOutput): boolean {
   if (output.exitCode === 0) return false
@@ -113,9 +99,8 @@ function argv(args: readonly string[], write: boolean): readonly string[] {
 }
 
 /**
- * One attempt. Failure here means "worth retrying or reporting", never "git said no":
- * a nonzero exit is an ordinary success that carries its exit code, because whether it
- * is an error at all is the caller's decision (`allowFailure`).
+ * One attempt. Failure here means "worth retrying or reporting", never "git said no": a
+ * nonzero exit succeeds carrying its exit code, and `allowFailure` decides what that means.
  */
 function attempt(cwd: string, args: readonly string[], options: GitExecOptions): Effect.Effect<GitOutput, ExecFailure> {
   return Effect.callback<GitOutput, ExecFailure>((resume, signal) => {
@@ -148,20 +133,16 @@ function attempt(cwd: string, args: readonly string[], options: GitExecOptions):
       },
     )
 
-    // Runs when the fiber is interrupted. The AbortSignal above already terminates the
-    // child; this makes the kill part of interruption rather than a race beside it.
+    // The AbortSignal above already terminates the child; this makes the kill part of
+    // interruption rather than a race beside it.
     return Effect.sync(() => spawned.kill())
   })
 }
 
 /**
- * Runs git with explicit argv — never through a shell, so no input can ever be parsed
- * as shell syntax. Retries only lock contention, and only for as long as lazygit does;
- * every other nonzero exit is reported on the first attempt.
- *
- * Resolves with the {@link GitOutput} whatever the exit code when `allowFailure`, and
- * fails with {@link GitError} otherwise. Spawn failure (no `git` on PATH) is a defect,
- * not a {@link GitError}: there is no exit code to report and no retry that would help.
+ * Runs git with explicit argv, never through a shell. Retries only lock contention; every
+ * other nonzero exit is reported on the first attempt. Spawn failure — no `git` on PATH — is a
+ * defect rather than a {@link GitError}: there is no exit code to report.
  */
 export function execGit(
   cwd: string,
@@ -175,8 +156,8 @@ export function execGit(
   })
 
   return Effect.flatMap(
-    // Exhausting the retries leaves the last locked output as the outcome: the caller
-    // then sees git's real "Unable to create index.lock" message instead of a synthetic one.
+    // Exhausted retries leave the last locked output as the outcome, so the caller sees git's
+    // own "Unable to create index.lock" rather than a synthetic message.
     Effect.catch(retried, (failure: ExecFailure) =>
       failure.kind === "locked" ? Effect.succeed(failure.output) : Effect.die(failure.error),
     ),
@@ -188,10 +169,9 @@ export function execGit(
 }
 
 /**
- * Runs git tolerating one specific nonzero exit as an empty result. `git config
- * --get-regexp` exits 1 on a repository with no remotes, and `git show-ref` exits 1 on
- * one with no refs — both are "nothing to report", not failures, and both are
- * distinguished from a real error by an empty stderr.
+ * Runs git tolerating one nonzero exit as an empty result: `git config --get-regexp` exits 1
+ * with no remotes and `git show-ref` exits 1 with no refs. An empty stderr is what separates
+ * those from a real error.
  */
 export function execGitAllowingEmpty(
   cwd: string,

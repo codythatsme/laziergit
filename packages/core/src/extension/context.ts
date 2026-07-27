@@ -61,19 +61,18 @@ function attachDisposable<T extends Disposable>(scope: ActivationScope, disposab
 }
 
 /**
- * Modal flows belong to their caller. The popup is dismissed when the scope closes, and
- * because the scope clears the pending settlement first, the dismissal's own resolution
- * is dropped — the awaited call never settles rather than resuming on a stale ctx.
+ * Modal flows belong to their caller. The popup is dismissed when the scope closes, and the
+ * scope clears the pending settlement first, so the awaited call never settles rather than
+ * resuming on a stale ctx.
  */
 function supervisePopup<T>(scope: ActivationScope, handle: PopupHandle<T>): Promise<T> {
   return scope.supervise(handle.promise, () => handle.dismiss())
 }
 
 /**
- * The one Effect door. It hands out the core's *own* git effects rather than re-wrapping
- * the Promise surface, so a power Extension and an ordinary one are driving exactly the
- * same code — but only bound services and `runPromise` cross the boundary, never a
- * service key or a runtime, so core's internals stay unreachable (ADR-0002).
+ * The one Effect door. It hands out core's own git effects rather than re-wrapping the Promise
+ * surface, but only bound services and `runPromise` cross the boundary — never a service key
+ * or a runtime (ADR-0002).
  */
 function createEffectEscape(extension: string, scope: ActivationScope, hosts: ContextHosts): EffectEscape {
   return {
@@ -83,8 +82,8 @@ function createEffectEscape(extension: string, scope: ActivationScope, hosts: Co
       changes: hosts.git.changes,
     },
     events: {
-      // Checked inside the Effect, not when it is described: the Effect door must be the
-      // same gate as `ctx.events.emit`, or it would be the way around it.
+      // Checked inside the Effect, not when it is described: this door must be the same gate
+      // as `ctx.events.emit`, or it would be the way around it.
       publish: (event, ...payload) =>
         Effect.sync(() => {
           assertScopedId(extension, event)
@@ -153,23 +152,17 @@ function guardConsumedApi(api: unknown, scope: ActivationScope): unknown {
 }
 
 /**
- * The bound on one clipboard writer.
- *
- * Putting text on the local clipboard is IPC with a compositor or a window server, so a
- * writer that has not finished in this long is not slow, it is stuck — and the cascade in
- * {@link ExtensionContext.copy} is a sequential loop, so one stuck writer costs the caller's
- * Command, not just its own turn.
+ * The bound on one clipboard writer. Writing to the clipboard is IPC with a compositor, so a
+ * writer that has not finished in this long is stuck — and the cascade in
+ * {@link ExtensionContext.copy} is sequential, so it costs the caller's Command.
  */
 const clipboardTimeoutMs = 2_000
 
 /**
- * The clipboard writers worth trying on a platform, most likely first.
- *
- * Every one of them takes the text on stdin rather than in argv, so nothing a user copies
- * can be read as an option or a filename. A Linux session has exactly one of the three
- * installed and which one is a property of the session (Wayland vs X11), not of the
- * distribution — which is precisely the per-platform branching {@link ExtensionContext.copy}
- * exists to keep out of every Extension that wants to copy an oid.
+ * The clipboard writers worth trying on a platform, most likely first. Every one takes the
+ * text on stdin rather than in argv, so nothing a user copies can be read as an option. A
+ * Linux session has exactly one of the three installed, and which one is a property of the
+ * session rather than of the distribution.
  */
 function clipboardWriters(platform: NodeJS.Platform): readonly ClipboardWriterSpec[] {
   if (platform === "darwin") return [["pbcopy", []]]
@@ -182,14 +175,10 @@ function clipboardWriters(platform: NodeJS.Platform): readonly ClipboardWriterSp
 }
 
 /**
- * How long a finished command's pipes are still drained.
- *
- * `child.exited` is the honest end of a command; its pipes are not. Anything the child
- * spawned inherits them and holds them open for as long as *it* lives, so a reader that
- * waits for end-of-file waits for the grandchild — `wl-copy` daemonises exactly this way,
- * and a shell script that backgrounds anything does it by accident. So the pipes get a
- * short grace period after the exit and then the command reports what arrived. A
- * well-behaved child's output is already there, so this costs nothing in the ordinary case.
+ * How long a finished command's pipes are still drained. `child.exited` is the honest end of a
+ * command; its pipes are not, because anything the child spawned inherits them — `wl-copy`
+ * daemonises exactly this way. So the pipes get a short grace period after the exit; a
+ * well-behaved child's output is already there.
  */
 const pipeGraceMs = 100
 
@@ -232,10 +221,9 @@ function exec(
     if (options.stdin) child.stdin.write(options.stdin)
     void child.stdin.end()
 
-    // Started before the exit is awaited, not after: a child that fills the pipe buffer
-    // blocks until someone reads it, so a read that began after `child.exited` would be a
-    // deadlock on any output larger than a pipe. The grace period is applied below, once
-    // the child is gone — until then a slow command is simply a slow command.
+    // Started before the exit is awaited: a child that fills the pipe buffer blocks until
+    // someone reads it, so a read beginning after `child.exited` would deadlock on any output
+    // larger than a pipe.
     const stdoutText = new Response(child.stdout).text()
     const stderrText = new Response(child.stderr).text()
     // The timeout path abandons both reads; neither may become an unhandled rejection.
@@ -246,8 +234,8 @@ function exec(
     if (options.timeoutMs !== undefined) {
       const limit = options.timeoutMs
       timeout = setTimeout(() => {
-        // Rejecting rather than only killing: a child whose pipes a survivor holds does
-        // not die with `kill` alone, and a timeout that can itself hang is not a timeout.
+        // Rejecting rather than only killing: a child whose pipes a survivor holds does not
+        // die with `kill` alone.
         child?.kill()
         expiry.reject(new Error(`${command} exceeded ${limit}ms`))
       }, limit)
@@ -327,8 +315,8 @@ export function createExtensionContext(
       return attachDisposable(scope, hosts.menus.extend(extension, id, splice))
     },
     open(id, target) {
-      // Documented as a rejection, so an unregistered id cannot throw synchronously past
-      // an `await` the caller wrote in good faith.
+      // Documented as a rejection, so an unregistered id cannot throw synchronously past an
+      // `await` the caller wrote in good faith.
       try {
         return supervisePopup(scope, hosts.menus.open(extension, id, target))
       } catch (error) {
@@ -368,11 +356,10 @@ export function createExtensionContext(
   })
 
   /**
-   * Git work is supervised but never cancelled. `scope.supervise` is called with the call
-   * already made, so a write started while the Extension was live always runs to
-   * completion — a hot reload landing mid-`git commit` parks the promise it was awaited
-   * on, it does not leave a half-written repository (docs/extension-api.md §5.3). This is
-   * exactly why `ctx.exec` passes a cancel callback here and `ctx.git` does not.
+   * Git work is supervised but never cancelled: a write started while the Extension was live
+   * always runs to completion, and a hot reload landing mid-`git commit` parks the promise
+   * rather than leaving a half-written repository (§5.3). This is why `ctx.exec` passes a
+   * cancel callback and `ctx.git` does not.
    */
   const supervised = <T>(pending: Promise<T>): Promise<T> => scope.supervise(pending)
 
@@ -417,10 +404,9 @@ export function createExtensionContext(
     statusline,
     extensions: scope.guard({
       /**
-       * The one assertion the hub needs, and no wider than that. `ExtensionHub.get` returns
-       * a type conditional on the caller's own `needs` tuple, which this untyped host — it
-       * hands back whatever the other Extension exported — can neither compute nor satisfy
-       * structurally; `never` is what every instantiation of that conditional accepts.
+       * `ExtensionHub.get` returns a type conditional on the caller's own `needs` tuple, which
+       * this untyped host can neither compute nor satisfy structurally; `never` is what every
+       * instantiation of that conditional accepts.
        */
       get(name: string): never {
         const lookup = hosts.getExtensionApi(name)
@@ -456,9 +442,8 @@ export function createExtensionContext(
           if (output.exitCode === 0) return
           failure = new Error(output.stderr.trim() || `${command} exited with ${output.exitCode}`)
         } catch (error) {
-          // A writer that is not installed is the ordinary case on a machine with a
-          // different session type, so it is a reason to try the next one rather than to
-          // fail — but the last reason is kept, for the machine that has none of them.
+          // A writer that is not installed is the ordinary case on a machine with a different
+          // session type, so it is a reason to try the next one. The last reason is kept.
           failure = error instanceof Error ? error : new Error(String(error))
         }
       }

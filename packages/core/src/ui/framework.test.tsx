@@ -325,10 +325,8 @@ describe("popups", () => {
     expect(frame(harness)).toContain("Name it")
 
     // One `act`, so React commits nothing between the keystroke and the Enter: the popup's
-    // `return` binding runs on the key layer, which is not a React event and does not wait
-    // for a render. Typing each key in its own `act` — as every other popup test does —
-    // flushes in between and cannot catch this. A person hitting enter straight after a
-    // paste, and every automated driver, produces exactly this ordering.
+    // `return` binding runs on the key layer, which is not a React event and does not wait for
+    // a render. Typing each key in its own `act` flushes in between and cannot catch this.
     await press(harness, () => {
       void harness.setup.mockInput.typeText("x")
       harness.setup.mockInput.pressEnter()
@@ -476,9 +474,8 @@ describe("menus and status line", () => {
     await renderApp(harness)
 
     const rendered = frame(harness)
-    // One row, shared: core writes the focused Pane's hints along its left and an
-    // Extension's own left-aligned segments follow them, rather than either displacing
-    // the other.
+    // One row, shared: core writes the focused Pane's hints along its left and an Extension's
+    // own left-aligned segments follow them.
     expect(rendered).toContain("z do it")
     expect(rendered).toContain("left-segment")
     expect(rendered.indexOf("z do it")).toBeLessThan(rendered.indexOf("left-segment"))
@@ -488,9 +485,8 @@ describe("menus and status line", () => {
     const harness = await createHarness()
     await renderApp(harness)
 
-    // git's most useful refusals are multi-line — the header plus the file list — and every
-    // Bundled Extension passes GitError.stderr through verbatim, so the toast must keep the
-    // lines that name what went wrong, while an overlay that grew to forty lines would cover
+    // git's most useful refusals are multi-line — the header plus the file list — so the toast
+    // keeps the lines that name what went wrong, while an overlay of forty lines would cover
     // the screen. Eight lines in, six shown, the rest counted.
     await act(async () => {
       harness.kernel.notifications.publish({

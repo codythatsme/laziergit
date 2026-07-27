@@ -8,15 +8,7 @@ function remote(fetchUrl: string, name = "origin"): Remote {
   return { name, fetchUrl, pushUrl: fetchUrl }
 }
 
-/**
- * The spellings git actually hands back, and what each one is worth as a web page.
- *
- * Table-driven and exhaustive on purpose. This transform lived in two Bundled Extensions as
- * hand-synced copies, under a comment claiming they were character-for-character identical;
- * they were not, and the port case below is where they disagreed — one opened
- * `https://github.com/22/owner/repo`. A table is what makes the next divergence a failing
- * test rather than a menu item that quietly opens the wrong page.
- */
+/** The spellings git actually hands back, and what each one is worth as a web page. */
 const cases: readonly (readonly [label: string, url: string, expected: string | null])[] = [
   [
     "scp-short, the spelling git prints for most hosts",
@@ -25,7 +17,7 @@ const cases: readonly (readonly [label: string, url: string, expected: string | 
   ],
   ["scp-short without the .git suffix", "git@github.com:owner/repo", "https://github.com/owner/repo"],
   ["ssh URL with a user", "ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo"],
-  // The regression: `:22` is a port in this spelling and a path segment in the scp one.
+  // `:22` is a port in this spelling and a path segment in the scp one.
   ["ssh URL carrying a port", "ssh://git@github.com:22/owner/repo.git", "https://github.com/owner/repo"],
   ["ssh URL with no user at all", "ssh://github.com/owner/repo.git", "https://github.com/owner/repo"],
   ["https", "https://github.com/owner/repo.git", "https://github.com/owner/repo"],

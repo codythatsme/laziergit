@@ -6,10 +6,9 @@ import type { Notifier } from "../extension/notifier"
 import type { PopupAction, PopupActionGroup, PopupHandle, PopupHost } from "./popup-host"
 
 /**
- * The Menu types with their target erased. Menus are data, and the data is uniform at
- * runtime; only the public {@link MenuMap} keeps each menu's target type honest at the
- * `register`/`extend`/`open` boundary. `when` and `run` are declared as methods so a
- * typed `MenuItem<Branch>` still satisfies them.
+ * The Menu types with their target erased. Menus are data, and the data is uniform at runtime;
+ * only the public {@link MenuMap} keeps each menu's target type honest at the
+ * `register`/`extend`/`open` boundary.
  */
 export interface MenuHostItem {
   readonly key: string
@@ -137,9 +136,8 @@ export class MenuHost {
     const contributors = new Set<string>()
     const rendered: PopupActionGroup[] = []
 
-    // An open menu is one keyspace — every item's key is bound on the same modal layer —
-    // so conflicts resolve across the whole merged menu, not group by group. Visibility
-    // is settled first: an item `when` hides never contests a key.
+    // An open menu is one keyspace — every item's key is bound on the same modal layer — so
+    // conflicts resolve across the whole merged menu. Visibility is settled first.
     const visible = groups.map((group) => group.items.filter((owned) => this.#isVisible(owned, target, id)))
     const winners = this.#resolveConflicts(visible.flat(), id)
 
@@ -186,9 +184,8 @@ export class MenuHost {
   }
 
   /**
-   * Reported once per distinct conflict, as the Command catalog reports its own: the merge
-   * is redone on every open, and a conflict between two standing registrations says nothing
-   * new the second time the user presses the key that opens the menu.
+   * Reported once per distinct conflict: the merge is redone on every open, and a conflict
+   * between two standing registrations says nothing new the second time.
    */
   #reportConflict(id: string, previous: OwnedItem, winner: OwnedItem): void {
     const signature = `${id}\0${winner.item.key}\0${previous.item.label}\0${winner.item.label}`

@@ -18,7 +18,6 @@ import {
 } from "laziergit"
 import { useEffect } from "react"
 
-/** Git's own definition of a merge, and the only one the store carries. */
 function isMerge(commit: Commit): boolean {
   return commit.parents.length > 1
 }
@@ -27,14 +26,9 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`
 }
 
-/** The three ways `git reset` treats the index and the working tree it leaves behind. */
 type ResetMode = "soft" | "mixed" | "hard"
 
-/**
- * Why there is no log to draw. The three read identically as "zero rows" and mean entirely
- * different things — telling an unborn HEAD from no repository is what keeps the empty
- * state from promising a first commit in a directory git has never heard of.
- */
+/** Why there is no log to draw. All three read as zero rows and mean different things. */
 type EmptyReason = "noRepository" | "unborn" | "loaded"
 
 function emptyReason(head: Head): EmptyReason {
@@ -49,11 +43,8 @@ export default defineExtension({
 
   activate(ctx): CommitsApi {
     const diff = ctx.extensions.get("diff")
-    // The full oid, not the short one: abbreviation length varies with repository size, so
-    // the short form is a rendering choice rather than an identity.
     const rows = createRowSource<Commit>({ key: (row) => row.oid })
 
-    /** `GitError` carries git's own words, and they beat anything this Extension could invent. */
     function report(error: unknown): void {
       ctx.popups.notify(describeGitFailure(error), "error")
     }
@@ -76,35 +67,15 @@ export default defineExtension({
       await attempt(done, action)
     }
 
-    /**
-     * `--no-edit` because laziergit owns the terminal: without it git spawns the user's
-     * editor onto a screen this process is drawing, and neither survives the encounter.
-     *
-     * `revert` has no porcelain helper, so it goes through `ctx.git.raw` — §1.5's sanctioned
-     * escape hatch, not a privilege a Bundled Extension holds. `raw` is public API, it
-     * classifies the subcommand as mutating, and so it refreshes the store afterwards exactly
-     * as a helper would. `reset` reaches for it for the same reason.
-     */
+    // `--no-edit`: laziergit owns the terminal, and git would spawn an editor onto it.
     function revert(commit: Commit): Promise<unknown> {
       return ctx.git.raw(["revert", "--no-edit", commit.oid])
     }
 
-    /**
-     * Names what a reset costs, in the currencies the chosen mode actually spends. They are
-     * listed separately because they are not equally recoverable — the commits survive in the
-     * reflog, the working-tree changes only a hard reset takes are simply gone — and each is
-     * omitted when it is zero, so the warning never inflates itself with losses that are not
-     * on the table.
-     *
-     * Soft and mixed have a warning at all because all three modes move the branch ref, and
-     * so all three drop every commit between HEAD and the target onto the reflog and nothing
-     * else. That the working tree survives makes soft and mixed *quieter*, not safe.
-     */
+    /** What a reset costs, naming only the losses the chosen mode actually spends. */
     function resetLoss(commit: Commit, mode: ResetMode): string {
       const { status, commits } = ctx.git.state
-      // Untracked files survive every reset, so counting them here would overstate the loss.
-      // One entry per path is also what makes this count right: an `MM` file used to appear
-      // in both arrays and be counted as two changes about to be destroyed.
+      // Untracked files survive every reset, so counting them would overstate the loss.
       const dirty = status.files.filter((file) => isStaged(file) || isUnstaged(file)).length
       const dropped = Math.max(
         0,
@@ -113,9 +84,7 @@ export default defineExtension({
 
       const losses: string[] = []
       if (mode === "hard" && dirty > 0) losses.push(`${plural(dirty, "uncommitted change")} destroyed for good`)
-      // Mixed rewrites the index but not the files, so this line names a nuisance rather than
-      // a loss — and naming it as one is the point: a user who staged a hunk by hand is about
-      // to lose that arrangement, and nothing else on this list would have told them.
+      // Mixed keeps the files but clears the index, losing a hand-staged arrangement.
       const stagedCount = status.files.filter(isStaged).length
       if (mode === "mixed" && stagedCount > 0) {
         losses.push(`${plural(stagedCount, "staged change")} unstaged, though kept in the working tree`)
@@ -131,9 +100,7 @@ export default defineExtension({
         {
           title: done,
           message: resetLoss(commit, mode),
-          // `danger` stays the hard reset's alone. It is the only mode that spends something
-          // the reflog cannot hand back, and painting all three red would leave the styling
-          // saying nothing about which one is which.
+          // Hard alone: the only mode that spends something the reflog cannot hand back.
           danger: mode === "hard",
         },
         done,
@@ -168,15 +135,8 @@ export default defineExtension({
             {
               key: "v",
               label: "Revert this commit",
-              // Merges are hidden rather than offered and then refused: `git revert` rejects a
-              // merge outright without `-m`, so without this the confirmation promises an undo
-              // that git will never perform. The alternative — asking which parent is the
-              // mainline — is declined for v1: the answer is unreadable from a flat log (the
-              // Pane draws no topology), and picking the wrong side produces a commit whose
-              // effect is the opposite of the one asked for, on top of the standing trap that
-              // a reverted merge blocks the branch from ever merging again until the revert is
-              // itself reverted. §1.9 hides what cannot apply, the same rule the remote item
-              // below uses.
+              // Merges are hidden: `git revert` rejects one without `-m`, and this Pane draws
+              // no topology to choose a mainline from.
               when: (commit) => !isMerge(commit),
               run: (commit) =>
                 confirmThen(
@@ -192,24 +152,17 @@ export default defineExtension({
             {
               key: "o",
               label: "Open this commit on the remote",
-              // Hidden rather than inert when there is nothing to open: a `file://` remote
-              // or a sibling clone has no web page, and §1.9 hides what cannot apply.
               when: () => remoteWebUrl(ctx.git.state.remotes) !== null,
               run: async (commit) => {
                 const base = remoteWebUrl(ctx.git.state.remotes)
-                // `when` already hid the item; re-reading keeps a null out of the URL if the
-                // remote went away between opening the menu and pressing the key.
                 if (base === null) return ctx.popups.notify("No web remote configured", "warning")
-                // GitHub's path, which GitLab and Gitea share — the same bet §0 makes for
-                // the repository root.
+                // GitHub's path, which GitLab and Gitea share.
                 await ctx.open(`${base}/commit/${commit.oid}`)
               },
             },
             {
               key: "y",
               label: "Copy the full oid",
-              // The full oid, not the short one: what you paste into another tool has to
-              // still resolve when the repository grows and the abbreviation lengthens.
               run: (commit) => attempt(`Copied ${commit.shortOid}`, () => ctx.copy(commit.oid)),
             },
           ],
@@ -256,17 +209,11 @@ export default defineExtension({
 
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
-          {/* No cursor marker: the highlight says where the cursor is, and the subject is
-              what the row clips from the right — so two columns spent saying it twice come
-              straight out of the text you came to read. The trade is stated in the files
-              Pane and taken here for the same reason. */}
           <span fg={dim ? theme.textMuted : theme.accent}>{commit.shortOid}</span>
-          {/* A fixed-width gutter, so the merge marker reads as a column instead of shifting
-              every merge row's subject one place right. */}
+          {/* A fixed-width gutter, so the merge marker does not shift the subject right. */}
           <span fg={dim ? theme.textMuted : theme.info}>{isMerge(commit) ? " ⑂ " : "   "}</span>
           <span fg={dim ? theme.textMuted : theme.text}>{commit.subject}</span>
-          {/* Last, because the row clips from the right: the subject is what the reader came
-              for and the author is what they can lose. */}
+          {/* Last, because the row clips from the right and the author is the loseable half. */}
           <span fg={theme.textMuted}>{`  ${commit.author.name}`}</span>
           {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
         </text>
@@ -282,22 +229,15 @@ export default defineExtension({
 
       useEffect(() => {
         rows.setSelected(selected)
-        // Cleared on unmount, not only replaced on the next move: a Pane the Layout has
-        // hidden has no selection, and `CommitsApi.selected()` must not keep naming the row
-        // it had when it went away.
         return () => rows.setSelected(undefined)
       }, [selected])
 
       useEffect(() => {
-        // Only while focused: the diff follows the Pane you are looking at, so an unfocused
-        // list must not yank it away from the one that is.
+        // Only while focused: the diff belongs to whichever list the user is driving.
         if (!focused || selected === undefined) return
         diff.show({ kind: "commit", ref: selected.oid, path: null })
       }, [focused, selected])
 
-      // A selection is empty only when the list is, and the empty state below already says so
-      // — a toast would repeat it, so a key with nothing to act on is a silent no-op. The same
-      // rule in the files, branches and stash Panes.
       useCommand({
         id: "commits.menu",
         title: "Commit actions",
@@ -310,10 +250,6 @@ export default defineExtension({
       })
 
       if (commits.length === 0) {
-        // Neither an error nor a slow load — but which of the three it is decides whether the
-        // user is being told to make a commit or told that there is nowhere to make one. The
-        // no-repository wording is the branches Pane's, word for word: the two sit in the
-        // same column, and disagreeing about it would read as one of them being wrong.
         const message =
           empty === "noRepository"
             ? "no repository here"
@@ -324,17 +260,13 @@ export default defineExtension({
       }
 
       const last = commits[commits.length - 1]
-      // The store's window is bounded by `git.commitLimit`, and the last row still having a
-      // parent is the only honest evidence that history continues past it — a root commit
-      // there means the log really did end. Paging deeper is `ctx.git.raw(["log", ...])`,
-      // and deliberately not this Pane's job.
+      // The store's window is bounded by `git.commitLimit`; a last row that still has a parent
+      // is the only evidence history continues past it.
       const truncated = last !== undefined && last.parents.length > 0
 
       return (
-        // `flexBasis={0}` on both, or the box is sized by its *content*: 200 rows make a
-        // 200-row-tall scrollbox that overflows the Pane and paints across the Pane above it,
-        // instead of a Pane-tall window that scrolls. `scrollRef` is what keeps the cursor —
-        // which every key acts on — inside that window.
+        // `flexBasis={0}` on both, or the boxes are sized by their content and overflow the
+        // Pane instead of scrolling inside it.
         <box flexDirection="column" flexGrow={1} flexBasis={0}>
           <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
             {commits.map((commit, index) => (
@@ -365,8 +297,7 @@ export default defineExtension({
       placement: { column: 0, order: 40 },
     })
 
-    // Keyless by design: core binds `1`–`9` positionally over the Layout (§1.7), so this
-    // registration is the palette row and the id a user rebinds, not the jump key.
+    // Keyless: core binds `1`–`9` positionally over the Layout (§1.7).
     ctx.commands.register({
       id: "commits.focus",
       title: "Focus commits",

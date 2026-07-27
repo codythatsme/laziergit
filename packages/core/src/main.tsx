@@ -22,8 +22,7 @@ export async function main() {
   ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
 
   // Walking up from the cwd is what makes `laziergit` work from a subdirectory. Outside a
-  // repository the cwd stands in: the app still starts, with an empty store and a
-  // diagnostic, rather than refusing to open.
+  // repository the cwd stands in: the app still starts, with an empty store and a diagnostic.
   const repository = await discoverRepository(process.cwd())
   const repoRoot = repository?.root ?? process.cwd()
 
@@ -69,8 +68,7 @@ export async function main() {
     createRoot(renderer).render(<App kernel={kernel} />)
     await kernel.start()
     if (!repository) {
-      // Said in the app rather than on stdout, which the renderer owns by now — and said
-      // once, because every Pane being empty otherwise has no visible explanation.
+      // Said in the app rather than on stdout, which the renderer owns by now.
       kernel.notifications.publish({
         extension: "app",
         message: `${repoRoot} is not a git repository`,

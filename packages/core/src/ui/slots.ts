@@ -5,11 +5,10 @@ import type { PaneProps } from "laziergit"
 import { normalizeError, type Diagnostics } from "../extension/diagnostics"
 
 /**
- * Every Extension-rendered region — Panes and status line segments — shares one slot
- * registry: `createReactSlotRegistry` is memoised per renderer, so a second registry is
- * not available, and one registry with disjoint slot names is the honest way to get the
- * registry's per-plugin error boundary for both surfaces. Pane slots are named by the
- * Pane id; segments carry a prefix no {@link ScopedId} can produce.
+ * Every Extension-rendered region — Panes and status line segments — shares one slot registry:
+ * `createReactSlotRegistry` is memoised per renderer, so one registry with disjoint slot names
+ * is how both surfaces get its per-plugin error boundary. Pane slots are named by the Pane id;
+ * segments carry a prefix no {@link ScopedId} can produce.
  */
 export type UiSlots = Record<string, PaneProps>
 
@@ -27,9 +26,7 @@ export function segmentSlotName(segmentId: string): string {
 
 /**
  * Maps a registered plugin back to the Extension that owns it, so a render failure the
- * registry catches is reported against a name rather than swallowed. Shared by every
- * surface that registers into the registry — a plugin nobody claims has no owner to
- * blame, and reporting it against the wrong one would be worse than silence.
+ * registry catches is reported against a name rather than swallowed.
  */
 export class SlotOwners {
   readonly #owners = new Map<string, string>()

@@ -3,15 +3,12 @@ import type { GitState, WorkingTreeStatus } from "laziergit"
 const noFiles = Object.freeze([])
 
 /**
- * What the store reads before its first refresh, and what it keeps serving when there is
- * no repository to read. Frozen down to the leaves so the very first publish already has
- * the stable slice identities every later reconcile compares against.
+ * What the store reads before its first refresh, and what it keeps serving when there is no
+ * repository. Frozen down to the leaves, so the very first publish already has the stable
+ * slice identities every later reconcile compares against.
  *
- * `head` is `noRepository`, the one variant that asserts nothing at all — every other one
- * would have to invent something git never said: an oid, a branch name, or both. It is also
- * what the store keeps serving outside a repository, so a Pane reads the same answer at
- * startup and after a failed open rather than distinguishing "not read yet" from "nothing
- * to read".
+ * `head` is `noRepository`, the one variant that asserts nothing at all — every other would
+ * have to invent an oid or a branch name git never said.
  */
 export const emptyGitState: GitState = Object.freeze({
   head: Object.freeze({ kind: "noRepository" }),
@@ -84,10 +81,8 @@ function reuseList<T>(previous: readonly T[], next: readonly T[]): readonly T[] 
 }
 
 /**
- * One list to reconcile, and it holds identity better than the four it replaced: staging a
- * file used to move a fresh object from the unstaged array into the staged one, so both
- * arrays changed length and every row after it shifted. Now the entry keeps its slot in
- * path order with one field rewritten, and every neighbour stays `Object.is`-identical.
+ * One list to reconcile: an entry keeps its slot in path order with one field rewritten, so
+ * staging a file leaves every neighbour `Object.is`-identical.
  */
 function reuseStatus(previous: WorkingTreeStatus, next: WorkingTreeStatus): WorkingTreeStatus {
   const files = reuseList(previous.files, next.files)
@@ -96,13 +91,10 @@ function reuseStatus(previous: WorkingTreeStatus, next: WorkingTreeStatus): Work
 }
 
 /**
- * Publishes `next` while keeping every unchanged part of `previous` referentially stable.
- *
- * This is what makes `useGit` selectors cheap: a refresh that only touched the working
- * tree leaves `state.branches` — and every `Branch` inside it — `Object.is`-identical, so
- * a pane selecting branches never re-renders, and `git.branches.changed` never fires.
- * Identity is only ever kept for values that are structurally equal, so a reused reference
- * can never be a stale one.
+ * Publishes `next` while keeping every unchanged part of `previous` referentially stable, which
+ * is what makes `useGit` selectors cheap: a refresh that only touched the working tree leaves
+ * `state.branches` identical, so a pane selecting branches never re-renders. Identity is only
+ * kept for structurally equal values, so a reused reference can never be a stale one.
  */
 export function reconcileGitState(previous: GitState, next: GitState): GitState {
   const head = reuseValue(previous.head, next.head)

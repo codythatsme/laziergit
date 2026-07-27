@@ -161,8 +161,7 @@ it("falls back to the default palette when the named preset does not exist", () 
   expect(loaded.problems).toHaveLength(1)
   expect(loaded.problems[0]?.path).toBe("theme.preset")
   expect(loaded.problems[0]?.message).toContain("nocturne")
-  // A typo in one field costs the user that field. The tokens they spelled correctly still
-  // apply, and the rest come from the default rather than from nothing at all.
+  // A typo costs the user that field: the rest come from the default rather than nothing.
   expect(loaded.core.theme.accent).toBe("#123456")
   expect(loaded.core.theme.background).toBe(defaultTheme.background)
 })
@@ -234,7 +233,7 @@ it("rejects a git section that is not an object, and a fractional interval", () 
 
 it("does not read an Extension option off Object.prototype", () => {
   // Through `loadConfig`, because the hazard is the section object the loader rebuilds: an
-  // object literal written here would carry the prototype whatever the loader does.
+  // object literal here would carry the prototype whatever the loader does.
   const loaded = loadConfig(documents(null, `{ "extensions": { "labels": { "limit": 5 } } }`))
   const resolved = resolveExtensionConfig(
     "labels",
@@ -268,8 +267,8 @@ it("reads the startup focus, and rejects one that is not a Pane id", () => {
 it("keeps a Layout that says only where to start, leaving placement to the hints", () => {
   const loaded = loadConfig(documents(null, `{ "layout": { "focus": "files" } }`))
 
-  // Choosing the startup Pane must not cost you the whole Layout: with no `columns`, every
-  // Pane still lands on its Extension's hint and this only says which one opens focused.
+  // With no `columns`, every Pane still lands on its Extension's hint and this only says
+  // which one opens focused.
   expect(loaded.problems).toEqual([])
   expect(loaded.core.layout).toEqual({ columns: [], focus: "files" })
 })

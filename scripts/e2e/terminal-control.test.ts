@@ -44,11 +44,9 @@ async function createE2eRepo(layout: Layout = "working-panes"): Promise<TestRepo
 }
 
 /**
- * The `gh-workflows` extension exactly as §2 of the specification prints it.
- *
- * Extracted rather than copied so there is only one of it: a reader who types the example
- * out gets what this test proved, and a change to the example that breaks it fails here
- * instead of in someone's config directory.
+ * The `gh-workflows` extension exactly as §2 of the specification prints it. Extracted rather
+ * than copied, so a change to the example that breaks it fails here instead of in someone's
+ * config directory.
  */
 async function workedExample(): Promise<string> {
   const document = await Bun.file(specification).text()
@@ -113,17 +111,12 @@ async function waitForScreen(
 }
 
 /**
- * The row the focused Pane has lit, read off the terminal's own cells.
+ * The row the focused Pane has lit, read off the terminal's own cells. The list Panes draw no
+ * cursor marker — the selection highlight is the cursor — and this is the only place that
+ * highlight is checked against a real terminal rather than OpenTUI's buffer.
  *
- * The list Panes draw no cursor marker: the selection highlight *is* the cursor, and a
- * screen-text assertion cannot see a colour. This is the only place that highlight is
- * checked against a real terminal — a unit test reads OpenTUI's buffer, which is one layer
- * above the escape sequences a terminal has to receive and reassemble.
- *
- * Matched on the default preset's own `selection` token, byte for byte. That is the second
- * thing this proves: laziergit writes 24-bit colour, and a terminal that quantised it on the
- * way through — or a preset whose selection stopped being distinguishable — fails here
- * rather than in someone's eyes.
+ * Matched on the default preset's own `selection` token, byte for byte, so a terminal that
+ * quantised the 24-bit colour on the way through fails here.
  */
 async function selectedRow(session: Session): Promise<string> {
   const frame = await session.screen.frame()
@@ -190,18 +183,16 @@ async function inTerminal(
 async function pressPrimaryModifier(session: Session, key: string): Promise<void> {
   const codePoint = key.codePointAt(0)
   if (codePoint === undefined) throw new TypeError("A modified key needs one character")
-  // Terminal Control reports Kitty keyboard support to OpenTUI. On macOS laziergit therefore
-  // resolves `mod` to Super; elsewhere it resolves to Ctrl. Writing the protocol sequence
-  // exercises the same real key event instead of sending a legacy control byte that the PTY
-  // line discipline can consume as XON/XOFF.
+  // Terminal Control reports Kitty keyboard support to OpenTUI, so `mod` resolves to Super on
+  // macOS and Ctrl elsewhere. Writing the protocol sequence exercises a real key event rather
+  // than a legacy control byte the PTY line discipline can consume as XON/XOFF.
   const modifier = process.platform === "darwin" ? 9 : 5
   await session.keyboard.write(new TextEncoder().encode(`\u001b[${codePoint};${modifier}u`))
 }
 
 /**
- * A ctrl-modified key through the same protocol, for the bindings that are deliberately
- * ctrl rather than `mod` (ADR-0004) — writing the sequence keeps the PTY line discipline
- * out of it, which a legacy control byte would not.
+ * A ctrl-modified key through the same protocol, for the bindings that are deliberately ctrl
+ * rather than `mod` (ADR-0004).
  */
 async function pressCtrl(session: Session, key: string): Promise<void> {
   const codePoint = key.codePointAt(0)
@@ -272,12 +263,9 @@ describe("laziergit through a real terminal", () => {
   }, 20_000)
 
   /**
-   * The only place `keys: "return"` is proven against a real terminal.
-   *
-   * OpenTUI names the Enter key `return`, and core does not install the keymap's alias
-   * field — so `keys: "enter"` parses, registers, typechecks, and shows up in the cheat
-   * sheet while never firing. That failure is invisible to a unit test that presses the
-   * name it bound; only a real PTY sending a real Enter byte catches it.
+   * The only place `keys: "return"` is proven against a real terminal. OpenTUI names the Enter
+   * key `return` and core installs no aliases, so `keys: "enter"` would parse, register, and
+   * never fire — invisible to a unit test that presses the name it bound.
    */
   it("collapses a folder with Enter, hiding its descendants", async () => {
     const repo = await createE2eRepo()
@@ -285,8 +273,8 @@ describe("laziergit through a real terminal", () => {
     await repo.write("pkg/sub/b.txt", "b\n")
 
     await inTerminal(repo, async (session) => {
-      // Also the only check that the full-size triangles are one cell wide in a real
-      // terminal: at two they would push the status columns beside them off their grid.
+      // Also the only check that the fold triangles are one cell wide in a real terminal: at
+      // two they would push the status columns off their grid.
       await waitForText(session, "▼  pkg")
       expect(await session.screen.text()).toContain("a.txt")
 
@@ -385,18 +373,15 @@ describe("laziergit through a real terminal", () => {
   }, 20_000)
 
   /**
-   * The acceptance test of PLAN.md, run by machine.
+   * The acceptance test of PLAN.md, run by machine: a user drops a `.tsx` file into their own
+   * config directory and the feature exists — no core change, nothing rebuilt.
    *
-   * The gate is that a user drops a `.tsx` file into their own config directory and the
-   * feature exists — no core change, no bundled change, nothing rebuilt. Rather than keep a
-   * copy of that file here, this lifts the extension **out of the specification itself**, so
-   * §2's worked example is executed rather than merely published. An example that stops
-   * compiling, stops rendering, or drifts from the API it teaches fails this test, which is
-   * the defect it exists to prevent: the spec is what an authoring agent learns from, and it
-   * had already grown a row that wrapped where §1.8 says rows clip.
+   * The extension is lifted out of the specification itself rather than copied here, so §2's
+   * worked example is executed rather than merely published; an example that stops compiling
+   * or drifts from the API it teaches fails this test.
    *
-   * `gh` is stubbed on PATH — the point under test is laziergit's loading, layout, cursor and
-   * hint machinery, not GitHub's availability or the network.
+   * `gh` is stubbed on PATH: the point under test is laziergit's loading, layout, cursor and
+   * hint machinery, not GitHub's availability.
    */
   it("loads §2's worked example from the user's config directory and runs it", async () => {
     const repo = await createE2eRepo()
@@ -436,8 +421,7 @@ describe("laziergit through a real terminal", () => {
         // tail never reaches the screen. Without `wrapMode="none"` it reflows and TAIL shows.
         expect(listed).not.toContain("TAIL")
 
-        // Tab reaches it, and the cursor it got from `useListCursor` walks and lights rows —
-        // the example draws the highlight and nothing else, exactly as the bundled Panes do.
+        // Tab reaches it, and the cursor it got from `useListCursor` walks and lights rows.
         await session.keyboard.press("Tab")
         await waitForSelectedRow(session, "✓ verify — first run")
         // `hint` on the user's own Command reaches the bottom row, like any bundled one.

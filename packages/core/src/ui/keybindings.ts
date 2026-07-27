@@ -10,10 +10,9 @@ import { keyStroke, type CommandEntry } from "../extension/command-host"
 import { normalizeError, type Diagnostics } from "../extension/diagnostics"
 
 /**
- * Priority bands, one per {@link LayerScope} kind. The keymap breaks ties by registration
- * recency, which across Extensions is arbitrary, so every laziergit layer states its band
- * explicitly. Capture sits above every Pane layer and below a popup: a modal still
- * outranks a Pane that captures keys.
+ * Priority bands, one per {@link LayerScope} kind. Stated explicitly because the keymap
+ * otherwise breaks ties by registration recency, which across Extensions is arbitrary.
+ * Capture sits above every Pane layer and below a popup.
  */
 const layerPriority: Record<LayerScope["kind"], number> = {
   global: 0,
@@ -30,11 +29,9 @@ const modModifierPattern = /(^|[+,\s])mod(?=\s*\+)/i
 const modModifierReplacePattern = /(^|[+,\s])mod(?=\s*\+)/gi
 
 /**
- * `mod+` resolution, in place of the keymap's own addon. Upstream maps `mod` to the
- * platform's primary modifier whenever that modifier is not known to be *unsupported*,
- * which on macOS means `super` even in a terminal that can never report it — a binding
- * the user could not press. laziergit's {@link KeySpec} contract is the narrower one:
- * cmd only where the keyboard protocol proves it works, ctrl everywhere else.
+ * `mod+` resolution, in place of the keymap's own addon, which maps `mod` to `super` on macOS
+ * even in a terminal that can never report it. laziergit's contract is narrower: cmd only
+ * where the keyboard protocol proves it works, ctrl everywhere else.
  */
 function registerModBindings<TTarget extends object, TEvent extends KeymapEvent>(
   keymap: Keymap<TTarget, TEvent>,
@@ -57,12 +54,10 @@ function registerModBindings<TTarget extends object, TEvent extends KeymapEvent>
 }
 
 /**
- * Installs the addon set laziergit's {@link KeySpec} grammar promises: the default
- * parser, `enabled` layer gating, platform-aware `mod+`, escape-cancels-sequence, and
- * the ambiguity resolver that makes `g` and `gg` coexist in one Pane. `<leader>` is
- * registered separately because the config can change it without a reload. Warning and
- * error channels are routed to diagnostics first — without listeners the keymap writes
- * to the console, which corrupts the terminal it is drawing on.
+ * Installs the addon set laziergit's {@link KeySpec} grammar promises. `<leader>` is
+ * registered separately because the config can change it without a reload. The warning and
+ * error channels are routed to diagnostics first: with no listener the keymap writes to the
+ * console, corrupting the terminal it is drawing on.
  */
 export function installKeymap<TTarget extends object, TEvent extends KeymapEvent>(
   keymap: Keymap<TTarget, TEvent>,
@@ -98,29 +93,22 @@ export function installKeymap<TTarget extends object, TEvent extends KeymapEvent
 }
 
 /**
- * The audience of one keymap layer: whose Commands it carries, and in which mode. A
- * `"capture"` layer carries the `capture: true` Commands that are live only while its Pane
- * is capturing raw input, and it names a Pane because capture is a property of a Pane —
- * a global Command's {@link CommandEntry.capture} is always false, so a capturing global
- * layer is not a state this type can describe.
+ * The audience of one keymap layer. A `"capture"` layer names a Pane because capture is a
+ * property of a Pane, so a capturing global layer is not a state this type can describe.
  */
 type LayerScope = { readonly kind: "global" } | { readonly kind: "pane" | "capture"; readonly paneId: string }
 
 /**
- * One key that would fire if it were pressed right now, and what it would do.
- *
- * Derived from the same three pieces of state the layer matchers read, in the same object,
- * so the hint bar cannot claim a key the keymap would route elsewhere. That is the whole
- * reason this lives here rather than in a display-side host: "which layers are live" is one
- * question with one answer, and a second implementation of it would drift the first time a
- * band was added.
+ * One key that would fire if it were pressed right now, and what it would do. Derived from the
+ * same state the layer matchers read, so the hint bar cannot claim a key the keymap would
+ * route elsewhere.
  */
 export interface LiveBinding {
   readonly id: string
   /** As its author spelled it — the first of the Command's keys no higher band has claimed. */
   readonly key: string
   readonly title: string
-  /** {@link CommandSpec.hint}: the short label, or undefined for a Command that stays off the bar. */
+  /** The short bar label, or undefined for a Command that stays off the bar. */
   readonly hint: string | undefined
 }
 
@@ -141,10 +129,9 @@ function scopeKey(scope: LayerScope): string {
 }
 
 /**
- * Projects the Command catalog onto keymap layers: one layer for global Commands and
- * one per Pane, each gated by a reactive matcher rather than by renderer focus, so
- * laziergit's own focus model — not whichever Renderable happens to hold the cursor —
- * decides which Pane's keys are live.
+ * Projects the Command catalog onto keymap layers: one for global Commands and one per Pane,
+ * each gated by a reactive matcher rather than by renderer focus, so laziergit's own focus
+ * model decides which Pane's keys are live.
  */
 export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> {
   readonly #keymap: Keymap<TTarget, TEvent>
@@ -168,8 +155,8 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   }
 
   /**
-   * The keys that would fire right now, in registration order. Read by the hint bar; a
-   * {@link ExternalStore}, so the bound arrow properties are load-bearing.
+   * The keys that would fire right now, in registration order. An external store, so the bound
+   * arrow properties are load-bearing.
    */
   getSnapshot = (): readonly LiveBinding[] => this.#live
 
@@ -191,12 +178,9 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   }
 
   /**
-   * The Pane whose capture is actually in force, if any.
-   *
-   * A capture only counts while its Pane is focused. Focus cannot leave a capturing Pane by
-   * keyboard — that is the point — so this guards the other door: an Extension focusing
-   * another Pane while an editor is open would otherwise leave a background Pane holding
-   * the keyboard with no key left to get out with.
+   * The Pane whose capture is actually in force. A capture only counts while its Pane is
+   * focused, so an Extension focusing another Pane mid-edit cannot leave a background Pane
+   * holding the keyboard with no key to get out with.
    */
   get capturingPaneId(): string | null {
     return this.#capturingPane !== null && this.#capturingPane === this.#focusedPaneId ? this.#capturingPane : null
@@ -216,10 +200,9 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   }
 
   /**
-   * While a Pane captures raw keyboard input — an editor inside it owns the keys — the
-   * global layer and every Pane layer go inert, and only that Pane's `capture: true`
-   * Commands stay live. Deliberately the same mechanism as {@link setModalOpen}, one
-   * priority band lower, so a popup opened mid-edit still wins.
+   * While a Pane captures raw keyboard input, every other layer goes inert and only that
+   * Pane's `capture: true` Commands stay live. The same mechanism as {@link setModalOpen}, one
+   * band lower, so a popup opened mid-edit still wins.
    */
   setCapturingPane(paneId: string | null): void {
     if (this.#capturingPane === paneId) return
@@ -236,16 +219,8 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   }
 
   /**
-   * Which layers are live, highest band first — the one answer both consumers read.
-   *
-   * The layer matchers ask "is *this* scope live"; the hint bar asks "which scopes are live,
-   * and in what order". They are the same question, and writing it twice is how a bar comes
-   * to advertise a key the keymap routes elsewhere — so it is written once, here, and the
-   * matcher below is a membership test against it.
-   *
-   * A capture suppresses everything else, which is the point of the band: while a Pane owns
-   * the keys, its capture Commands are the only ones that answer. Otherwise the focused
-   * Pane's layer sits above the global one, exactly as their priorities say.
+   * Which layers are live, highest band first — the one answer both the layer matchers and the
+   * hint bar read, so a bar can never advertise a key the keymap routes elsewhere.
    */
   #liveScopes(): readonly LayerScope[] {
     if (this.#modalOpen) return []
@@ -257,13 +232,9 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   }
 
   /**
-   * The live bindings, resolved against those bands in the order the keymap consults them.
-   *
-   * A stroke the focused Pane claims shadows the global Command that also claims it — the
-   * stash Pane's `p` (pop) over the global `p` (pull) — because that is what the priority
-   * bands do at dispatch, and a bar that said "pull" while `p` popped a stash would be
-   * worse than no bar. Within a band the catalog has already resolved conflicts, so the
-   * only shadowing left to apply is between them.
+   * The live bindings, resolved against those bands in the order the keymap consults them: a
+   * stroke the focused Pane claims shadows the global Command claiming it. Within a band the
+   * catalog has already resolved conflicts.
    */
   #resolveLive(): readonly LiveBinding[] {
     const scopes = this.#liveScopes()
@@ -335,10 +306,7 @@ export class KeybindingHost<TTarget extends object, TEvent extends KeymapEvent> 
   #matcher(scope: LayerScope): ReactiveMatcher {
     const key = scopeKey(scope)
     return {
-      get: () => {
-        // Membership, not a second copy of the rule — see {@link liveScopes}.
-        return this.#liveScopes().some((live) => scopeKey(live) === key)
-      },
+      get: () => this.#liveScopes().some((live) => scopeKey(live) === key),
       subscribe: (onChange) => {
         this.#matcherListeners.add(onChange)
         return () => this.#matcherListeners.delete(onChange)

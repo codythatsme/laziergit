@@ -37,12 +37,9 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
 }
 
 /**
- * A repository the Extension can commit into.
- *
- * These commits are made by the git service, which inherits the *process* environment, so the
- * identity and hook settings the other fixtures pass as env vars have to be written into the
- * repository itself — otherwise a developer's global `user.email`, signing key, or
- * `core.hooksPath` would decide whether `git commit` succeeds here.
+ * A repository the Extension can commit into. These commits are made by the git service,
+ * which inherits the process environment, so the identity and hook settings the other fixtures
+ * pass as env vars have to be written into the repository itself.
  */
 async function repository(options: { readonly onQuit?: () => void } = {}): Promise<Harness> {
   const harness = await createHarness({ git: true, onQuit: options.onQuit })
@@ -67,12 +64,9 @@ async function seed(harness: Harness, ...message: readonly string[]): Promise<vo
 }
 
 /**
- * The files Pane, standing in for the Extension that owns it.
- *
- * It has to be called `files` — `commit-flow` binds `c` and `A` into the Pane named `files`,
- * and a Pane id carries its owner's name. It also consumes `CommitFlowApi` the way §4.3's
- * conventional-commit does: `begin` composes a message elsewhere and waits for the standard
- * editor to close, so every settlement is counted and announced.
+ * The files Pane, standing in for the Extension that owns it. It has to be called `files` —
+ * `commit-flow` binds `c` and `A` into the Pane of that name. It also consumes `CommitFlowApi`
+ * the way §4.3's conventional-commit does, so every settlement is counted and announced.
  */
 const filesStandIn = `
   /** @jsxImportSource @opentui/react */
@@ -107,10 +101,8 @@ const filesStandIn = `
 `
 
 /**
- * The diff Pane, standing in for the Extension that owns it.
- *
- * Registered only where a test asks for it: the default Layout tab-groups `diff` with
- * `commit-flow`, and a cell with one Pane in it cannot show the flow stranding its neighbour.
+ * The diff Pane, standing in for the Extension that owns it. Registered only where a test asks
+ * for it: a cell with one Pane in it cannot show the flow stranding its neighbour.
  */
 const diffStandIn = `
   /** @jsxImportSource @opentui/react */
@@ -132,10 +124,8 @@ async function start(harness: Harness, options: { readonly tabbed?: boolean } = 
   await writeFile(join(harness.repo, "files.tsx"), filesStandIn)
   const tabbed = options.tabbed === true
   if (tabbed) await writeFile(join(harness.repo, "diff.tsx"), diffStandIn)
-  // The files Pane is first, so it holds focus until `begin` moves it — and the poll is off,
-  // because every refresh these tests need is one they caused.
-  // A cell is an array of Pane ids, so the tab group is one cell holding both — the shape
-  // `.laziergit/config.jsonc` ships, where the editor is tabbed behind the diff.
+  // The files Pane is first, so it holds focus until `begin` moves it, and the poll is off. A
+  // cell is an array of Pane ids, so the tab group is one cell holding both.
   const columns = tabbed ? `[["files"], [["diff", "commit-flow"]]]` : `[["files"], ["commit-flow"]]`
   await writeFile(
     harness.configFiles.repo,
@@ -190,11 +180,8 @@ async function stageFile(harness: Harness, path: string): Promise<void> {
 }
 
 /**
- * Focuses the files Pane.
- *
- * At startup the focused Pane is whichever registered first, which is the bundled
- * commit-flow one — and `c` and `A` are live only in the files Pane, that being the whole
- * point of a cross-pane binding.
+ * Focuses the files Pane. At startup the focused Pane is whichever registered first — the
+ * bundled commit-flow one — and `c` and `A` are live only in the files Pane.
  */
 async function focusFiles(harness: Harness): Promise<void> {
   await act(async () => {
@@ -262,10 +249,9 @@ describe("commit-flow pane", () => {
     await stageFile(harness, "feature.txt")
     await focusFiles(harness)
 
-    // In production the four Panes that `needs: ["diff"]` make the diff register before the
-    // editor, so the diff is the cell's visible tab. This harness's graph is smaller and the
-    // bundled editor registers first, so put the diff in front explicitly — the strand is only
-    // visible against a diff that *was* showing.
+    // In production the four Panes with `needs: ["diff"]` make the diff register first, so it
+    // is the cell's visible tab. This harness's graph is smaller, so put it in front
+    // explicitly — the strand is only visible against a diff that was showing.
     await act(async () => {
       harness.kernel.layout.reveal("diff")
     })
@@ -338,9 +324,9 @@ describe("commit-flow pane", () => {
     await press(harness, () => harness.setup.mockInput.pressEscape())
     await waitFor(harness, "begin closed #1")
 
-    // A second `begin` displaces the first: one Pane holds one message, and the caller of
-    // the displaced flow must not be left waiting on an editor that is no longer on screen.
-    // Run rather than pressed, because `m` is a letter while the editor owns the keyboard.
+    // A second `begin` displaces the first, and the displaced caller must not be left waiting
+    // on an editor that is no longer on screen. Run rather than pressed, because `m` is a
+    // letter while the editor owns the keyboard.
     await press(harness, () => harness.setup.mockInput.pressKey("b"))
     await press(harness, () => void harness.kernel.commands.execute("files.begin-prefilled"))
     await waitFor(harness, "begin closed #2")
@@ -374,7 +360,7 @@ describe("commit-flow pane", () => {
     await start(harness)
 
     // The textarea parks a prefilled caret at offset 0, so without the Pane moving it to the
-    // end this types " now" onto the FRONT — " nowreword me". Amend-to-reword lives or dies here.
+    // end this types " now" onto the front: " nowreword me".
     await press(harness, () => harness.setup.mockInput.pressKey("n"))
     await waitFor(harness, "reword me")
     await press(harness, () => void harness.setup.mockInput.typeText(" now"))

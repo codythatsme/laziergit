@@ -28,13 +28,10 @@ function contrast(foreground: string, background: string): number {
 }
 
 /**
- * What each pair has to clear, and why that number.
- *
- * `text` and the selected row are held to AAA because they are the whole screen for eight
- * hours. `textMuted` is held to AA against *both* grounds it is ever drawn on, which is the
- * floor the original palette missed: it renders every empty state in the app — the sentence
- * telling you the working tree is clean — plus the cursor gutter beside every unselected row,
- * so treating it as decorative grey makes the app's own explanations its least readable text.
+ * What each pair has to clear. `text` and the selected row are held to AAA because they are
+ * the whole screen for eight hours. `textMuted` is held to AA against *both* grounds it is
+ * drawn on: it renders every empty state in the app plus the gutter beside every unselected
+ * row, so treating it as decorative grey makes the app's explanations its least readable text.
  */
 const contrastFloors: readonly (readonly [keyof Theme, keyof Theme, number])[] = [
   ["text", "background", 7],
@@ -92,9 +89,8 @@ describe("theme presets", () => {
       if (step < 2) failures.push(`${entry.name}: focused border is only ${step.toFixed(2)}x the unfocused one`)
 
       // The files Pane draws the index column green immediately beside the working-tree column
-      // red (§ files/index.tsx `statusCell`). Hue alone therefore carries a meaning that a
-      // red-green colour vision deficiency cannot read, so the pair must differ in luminance
-      // too — which is the second channel that keeps `M ` and ` M` apart for everyone.
+      // red, so hue alone carries a meaning a red-green deficiency cannot read: the pair has
+      // to differ in luminance too.
       const staged = luminance(entry.tokens.success)
       const unstaged = luminance(entry.tokens.danger)
       const separation = Math.abs(staged - unstaged) / Math.max(staged, unstaged)

@@ -39,11 +39,9 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
 }
 
 /**
- * Drives `DiffApi.show` from a Pane of its own.
- *
- * The real list Panes each push one kind and would drag their own git requirements in with
- * them; this asks for a target directly, so a test names the {@link DiffTarget} it is about.
- * The target is read from a file the test writes, because a Command takes no arguments.
+ * Drives `DiffApi.show` from a Pane of its own, so a test names the {@link DiffTarget} it is
+ * about rather than dragging a real list Pane's git requirements in. The target is read from
+ * a file the test writes, because a Command takes no arguments.
  */
 const driverSource = `
   /** @jsxImportSource @opentui/react */
@@ -141,14 +139,12 @@ describe("the diff Pane's context header", () => {
     await start(harness)
     await show(harness, { kind: "commit", ref: oid, path: null })
 
-    // The subject *and* the body: dropping `--format=` is what makes the detail view the
-    // place a clipped row's text can be read in full.
+    // The subject *and* the body, which is what makes the detail view readable in full.
     await waitForFrame(harness, "Rework the hint bar")
     const rendered = frame(harness)
     expect(rendered).toContain("The body a one-line row can never show.")
     expect(rendered).toContain("Ada Lovelace")
-    // Both files, and the header lifted off the front rather than parsed as one of them —
-    // "no textual diff" is what a header left in the section list used to render as.
+    // Both files, and the header lifted off rather than parsed as one of them.
     expect(rendered).toContain("one.txt")
     expect(rendered).toContain("two.txt")
     expect(rendered).not.toContain("no textual diff")
@@ -163,8 +159,8 @@ describe("the diff Pane's context header", () => {
     await start(harness)
     await show(harness, { kind: "branch", ref: long, path: null })
 
-    // The whole point of the `branch` kind: the row clips this name, so the detail view is
-    // the only place it can be read, and `{ kind: "commit" }` could only name the tip.
+    // The point of the `branch` kind: the row clips this name, and `{ kind: "commit" }` could
+    // only ever name the tip.
     await waitForFrame(harness, long)
     expect(frame(harness)).toContain("seed")
   }, 30_000)
@@ -172,8 +168,8 @@ describe("the diff Pane's context header", () => {
   it("resolves a branch whose name is also a path, which git alone reads as ambiguous", async () => {
     const harness = await createHarness({ git: true, width: 150 })
     await seed(harness)
-    // `git show docs` in a repository holding both is a fatal, not a patch. The branches
-    // Pane names its selection, so the argv has to end its revision list explicitly.
+    // `git show docs` in a repository holding both is a fatal, not a patch, so the argv has
+    // to end its revision list explicitly.
     await writeFile(join(harness.directory, "one.txt"), "changed\n")
     await git(harness.directory, "commit", "--quiet", "--all", "--message", "docs commit")
     await git(harness.directory, "branch", "one.txt")
@@ -194,8 +190,8 @@ describe("the diff Pane's context header", () => {
     await show(harness, { kind: "workingTree", path: "one.txt" })
 
     await waitForFrame(harness, "edited")
-    // Nothing was asked for a header here, so nothing may lift one: the leading section of
-    // `git diff` output is a file, and treating it as a header would swallow the patch.
+    // Nothing asked for a header here: the leading section of `git diff` output is a file,
+    // and lifting it as a header would swallow the patch.
     expect(frame(harness)).not.toContain("Author:")
     expect(frame(harness)).not.toContain("Ada Lovelace")
   }, 30_000)
@@ -222,8 +218,7 @@ describe("the diff Pane's context header", () => {
     await start(harness)
     await show(harness, { kind: "stash", ref: "stash@{0}", path: null })
 
-    // `stash show` prints no header of its own, so this line is the Pane's, read out of the
-    // store rather than out of git.
+    // `stash show` prints no header, so this line is the Pane's, read out of the store.
     await waitForFrame(harness, "stash@{0}: a message longer than a row")
     expect(frame(harness)).toContain("stashed")
   }, 30_000)

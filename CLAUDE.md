@@ -16,6 +16,7 @@ A lazygit-inspired git TUI: light core, everything is a TypeScript Extension. Th
 - **Bun only** (ADR-0003): `@opentui/react` on React 19; no build step for extensions.
 - Menus are data; every ctx registration is auto-disposed on deactivate; hot-reload correctness (scope disposal + stale-ctx poisoning) is an M1 gate, not a retrofit.
 - Git: shell out to system git via argv arrays (never string shell); no fs-watching of `.git` — refresh-after-mutation + ~2s fingerprint poll.
+- **Comments describe the code as it is, never the change that produced it.** Write one only where the code cannot be made clear on its own — a git or OpenTUI behaviour that would surprise a reader, a footgun a reader would otherwise reintroduce. Keep it to a line or two. Never justify a decision to a reviewer, restate what the line below does, or mention what the code used to be ("no longer", "used to", "the old version", "this replaced"); that is what git history is for. A comment that needs a paragraph is a sign the code needs a better name.
 
 ## Reference code (`vendor/`, gitignored — run `bun scripts/vendor.ts` if missing)
 

@@ -64,15 +64,12 @@ it("keeps every unchanged file in the working tree status stable", () => {
   )
 
   expect(reconciled.status).not.toBe(previous.status)
-  // Per-entry identity is what a row memoizes on, and it is what the decoration cache keys
-  // its slots by: `a.txt` did not change, so the Pane must be handed the same object back.
+  // Per-entry identity is what a row memoizes on, and what the decoration cache keys its
+  // slots by.
   expect(reconciled.status.files[0]).toBe(previous.status.files[0])
 })
 
 it("keeps a file's identity when only its other side changes", () => {
-  // Staging an edited file used to move a fresh object out of one array and into another,
-  // so both arrays changed and every row after it shifted. One list in path order means the
-  // entry keeps its slot with one field rewritten, and its neighbours never move.
   const previous = stateWith({
     status: {
       files: [

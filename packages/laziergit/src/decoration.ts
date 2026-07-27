@@ -16,13 +16,9 @@ const toneTokens: { readonly [K in Tone]: keyof Theme } = {
 }
 
 /**
- * The colour a {@link RowDecoration} badge is drawn in.
- *
- * Decorations are contributed by one Extension and drawn by the Extension that owns the
- * row, so the tone→colour mapping cannot live in either: the decorator never sees a theme,
- * and the list Pane never sees the tone vocabulary the decorator was written against.
- * Both sides reach it here instead of agreeing on raw colours. An absent tone is ordinary
- * text — a badge is extra data, not an alarm.
+ * The colour a {@link RowDecoration} badge is drawn in. Decorations are contributed by one
+ * Extension and drawn by another, so both reach the mapping here rather than agreeing on raw
+ * colours. An absent tone is ordinary text.
  */
 export function toneColor(theme: Theme, tone: Tone | undefined): string {
   return theme[tone === undefined ? "text" : toneTokens[tone]]
@@ -55,7 +51,6 @@ interface DecorationProvider<Row> {
   readonly decorate: (row: Row) => RowDecoration | undefined
 }
 
-/** What a row's merged decoration was, and what it was computed from. */
 interface CachedDecoration<Row> {
   readonly generation: number
   readonly row: Row
@@ -65,24 +60,13 @@ interface CachedDecoration<Row> {
 /** Options for {@link createRowSource}. */
 export interface RowSourceOptions<Row> {
   /**
-   * Stable identity for a row, independent of the object carrying it.
+   * Stable identity for a row, independent of the object carrying it: the git store replaces
+   * a row's object whenever its data changes, so the cache slot has to be the row's own name —
+   * a path, an oid, a stash index.
    *
-   * The git store hands out a fresh object for a row whenever its data changes and reuses
-   * the old one when it does not, so object identity is a cache *hit* test but not a cache
-   * *slot*: keyed by object, every refresh would strand the previous generation's entries
-   * with nothing able to say they are dead. Keyed by the row's own name — a path, an oid, a
-   * stash index — there is exactly one slot per logical row, reused as the store replaces
-   * the objects beneath it.
-   *
-   * Make it unique across the rows this Pane shows — but "unique" is a claim about the ROW
-   * TYPE, not the screen. Two *different* objects sharing a key would evict each other on
-   * every pass and the merged decoration would never settle.
-   *
-   * Prefer the row's most stable name over its state: `branches` keys on the branch name,
-   * `stash` on the entry's index, and `files` on `change.path` alone — the model gives a
-   * path exactly one entry (ADR-0005), so the path *is* the identity. Folding state into the
-   * key would move the slot every time the row's status changed, discarding a decoration the
-   * provider would only recompute to the same answer.
+   * Must be unique across the row type. Two different rows sharing a key evict each other on
+   * every pass, and the merged decoration never settles. Prefer the most stable name over the
+   * row's state, or staging a file would discard a decoration only to recompute it.
    */
   key(row: Row): string
 }
@@ -101,12 +85,8 @@ export interface RowSourceHost<Row> {
 }
 
 /**
- * Builds the {@link RowSource} a list Extension exports.
- *
- * Every list Pane owes the same four things — hold the providers, merge them per row, track
- * the selection, re-render when a provider's async data lands — and ADR-0001 leaves the
- * Bundled Extensions no sibling package to share them through. So they live here, on the
- * same public API a third-party list Pane would use.
+ * Builds the {@link RowSource} a list Extension exports: holds the decoration providers,
+ * merges them per row, tracks the selection, and re-renders when a provider's data lands.
  */
 export function createRowSource<Row>(options: RowSourceOptions<Row>): RowSourceHost<Row> {
   const providers = new Set<DecorationProvider<Row>>()
@@ -170,8 +150,7 @@ export function createRowSource<Row>(options: RowSourceOptions<Row>): RowSourceH
 
       let disposed = false
       const handle: RowDecorationHandle = {
-        // Both are "do something to my registration", so the answer for a dead one is
-        // "nothing" — never a throw, however late an async tail calls them (§1.1).
+        // Both are no-ops once disposed, never a throw, however late an async tail calls them.
         refresh: () => {
           if (disposed) return
           bump()

@@ -102,10 +102,7 @@ export interface ExtensionKernelOptions {
 /** Core's own Commands. "app" is a reserved Extension name, so these ids can never collide. */
 const coreOwner = "app"
 
-/**
- * How many Panes the number row can jump to. Nine because that is how many single digits
- * there are above the letters; a tenth Pane is reachable with `tab` like every other.
- */
+/** How many Panes the number row can jump to. A tenth is still reachable with `tab`. */
 const maxJumpKeys = 9
 
 function candidateKey(candidate: ExtensionCandidate): string {
@@ -227,9 +224,8 @@ export class ExtensionKernel {
       { focus: (paneId) => this.layout.focus(paneId), isLive: (paneId) => this.panes.isLive(paneId) },
       this.#notifier,
     )
-    // Constructed here rather than as a field initializer: field initializers run before
-    // the constructor body, so `options.repoRoot` is not yet on `this`. Construction does
-    // no I/O — the repository is opened by `prime()`, inside the reload transaction.
+    // Not a field initializer: those run before the constructor body, so `options.repoRoot`
+    // would not be on `this` yet. Construction does no I/O — `prime()` opens the repository.
     this.git = new GitService({
       repoRoot: this.#repoRoot,
       config: emptyConfig.core.git,
@@ -294,15 +290,13 @@ export class ExtensionKernel {
   }
 
   async start(): Promise<void> {
-    // The two directories a user drops Extensions into, made so they are always there to drop
-    // into. The bundled directory is deliberately absent: it ships inside the installation, so
-    // creating one would only invent an empty directory in someone's install tree.
+    // The bundled directory is absent on purpose: it ships inside the installation.
     const userDirectories = userWritableExtensionScopes.map((scope) => this.#directories[scope])
     await Promise.all(userDirectories.map((directory) => mkdir(directory, { recursive: true })))
     if (this.#stopped) return
 
     // Before the first fingerprint, so the files this writes are part of the tree the reload
-    // starts from rather than an edit the next poll mistakes for the author's.
+    // starts from rather than an edit the next poll picks up.
     await publishTypeEnvironment({
       directories: userDirectories,
       diagnose: ({ path, error }) => this.#diagnose({ phase: "config", message: `${path}: ${error.message}`, error }),
@@ -316,8 +310,8 @@ export class ExtensionKernel {
     if (this.#stopped) return
     // Armed once, here — never in `#reloadNow`, which would rearm on every hot reload.
     this.git.start()
-    // Coming back from the terminal you just ran `git` in is the moment the screen is
-    // most likely to be stale, and the least tolerable moment to wait out a poll interval.
+    // Regaining focus is when the screen is most likely to be stale, and the worst moment to
+    // wait out a poll interval.
     this.#renderer.on(CliRenderEvents.FOCUS, this.#refreshOnFocus)
     if (this.#watchEnabled) this.#startWatcher()
   }
@@ -384,14 +378,11 @@ export class ExtensionKernel {
   }
 
   /**
-   * One event per changed {@link GitState} slice, then `git.refreshed` for the cycle
-   * itself. The slice list is derived from the store's own shape, so the event vocabulary
-   * cannot drift from it, and `Object.is` is enough to detect a change because the store
-   * keeps unchanged slices referentially stable.
+   * One event per changed {@link GitState} slice, then `git.refreshed` for the cycle itself.
+   * `Object.is` suffices because the store keeps unchanged slices referentially stable.
    */
   #emitGitEvents({ previous, current }: GitPublication): void {
-    // The mapped type is what makes the vocabulary structural rather than documented: a
-    // new GitState slice is a compile error here until it has an event.
+    // The mapped type makes a new GitState slice a compile error until it has an event.
     const emitters: { readonly [K in keyof GitState]: () => void } = {
       head: () => this.#emitCoreEvent("git.head.changed", { current: current.head, previous: previous.head }),
       branches: () =>
@@ -417,9 +408,8 @@ export class ExtensionKernel {
       this.commands.register(coreOwner, spec)
     }
 
-    // Terminal-safe by construction, never `mod+` (ADR-0004): a Mac terminal that can report
-    // cmd at all is also free to keep it, and Warp keeps cmd+p for its own palette — so the
-    // one binding that opens laziergit's would be the one the terminal ate.
+    // Never `mod+` (ADR-0004): a terminal that can report cmd is also free to keep it, and
+    // Warp keeps cmd+p for its own palette.
     register({ id: "app.palette", title: "Command palette", keys: ["ctrl+p", ":"], run: () => this.openPalette() })
     register({ id: "app.cheatsheet", title: "Keybindings", keys: "?", run: () => this.openCheatSheet() })
     register({ id: "app.focus.next", title: "Focus next pane", keys: "tab", run: () => this.layout.focusStep(1) })
@@ -436,25 +426,13 @@ export class ExtensionKernel {
   }
 
   /**
-   * Rebuilds the `1`–`9` Commands so each digit names the Pane it currently jumps to.
+   * Rebuilds the `1`–`9` Commands so each digit names the Pane it currently jumps to. Core
+   * owns these rather than each Extension claiming a digit, so a Pane's number is its position
+   * in the user's Layout and a third-party Pane is reachable the moment it is placed.
    *
-   * Core owns these rather than the Extensions owning a digit each, and that is the whole
-   * point: a Pane's number is its *position* in the user's Layout, so a third-party Pane is
-   * reachable the moment it is placed instead of having to guess a free digit and collide
-   * with whoever guessed the same. It also means the number a Pane answers to follows the
-   * Layout the user wrote, which is the only place the question has an answer.
-   *
-   * Re-registered from a signature rather than on every publish: the Layout republishes on
-   * focus changes too, and disposing nine Commands per keypress would rebuild every keymap
-   * layer to arrive at the same nine. The signature is the titles, so it moves exactly when
-   * the cheat sheet's answer would move — a Pane appearing, going away, or being re-placed.
-   * A tab coming to the front is not such a moment: the numbering is over Panes, and a
-   * hidden tab has a digit of its own that reveals it.
-   *
-   * `hidden` keeps them out of the palette, where nine near-identical "Focus …" rows would
-   * sit beside the Extensions' own focus Commands saying the same thing. The cheat sheet
-   * keeps hidden Commands (§5.8), and it is the surface that has to list them: it is where
-   * a user goes to ask which digit is which.
+   * Keyed on a signature of the titles rather than rebuilt on every publish: the Layout also
+   * republishes on focus changes, and that would rebuild every keymap layer per keypress.
+   * `hidden` keeps them out of the palette; the cheat sheet still lists them (§5.8).
    */
   #syncJumpKeys(): void {
     if (this.#stopped) return
@@ -517,24 +495,11 @@ export class ExtensionKernel {
   /**
    * The cheat sheet answers "what can I press", so it shows the layers that are live.
    *
-   * While a Pane captures raw input, that is exactly one layer: its `capture: true`
-   * Commands. Listing the global and Pane keys beside them would be listing keys that
-   * currently type letters into a textarea — so a capture collapses the sheet to the one
-   * section that still does anything, named after the Pane holding the keyboard. (Even an
-   * empty one: a Pane that captures without an exit Command has trapped the user, and a
-   * bare heading says so louder than an absent section.)
+   * A capture collapses the sheet to one section — the capturing Pane's `capture: true`
+   * Commands — because every other key is typing letters into a textarea. An empty section is
+   * still drawn: a Pane that captures with no exit Command has trapped the user.
    *
-   * Otherwise the sheet is the *focused* Pane's, not the app's. Listing every live Pane's
-   * keys turned the one question it answers — "what can I press here" — into a catalogue
-   * the reader had to search, and most of it was keys that would do nothing until they had
-   * tabbed somewhere else. Capture Commands still get a section of their own, listed after
-   * the Pane's ordinary keys, because they answer a different question — not "what does this
-   * Pane do" but "what gets me back out of the editor it can show". That is worth reading
-   * *before* entering it, which is the only time this sheet can be opened anyway.
-   *
-   * The globals come last, and only last: they are the same everywhere, so they are the
-   * fallback rather than the answer — but the Pane-jump keys are global Commands and this is
-   * the only place they are written down.
+   * Otherwise: the focused Pane's keys, its capture Commands, then the globals.
    */
   #cheatSheetSections(): readonly CheatSheetSection[] {
     const entries = this.commands.getSnapshot()
@@ -545,8 +510,7 @@ export class ExtensionKernel {
     }
 
     const sections: CheatSheetSection[] = []
-    // Only a Pane that exists right now: the sheet answers "what can I press", so a Command
-    // bound into a Pane nothing registered has nothing to say here.
+    // Only a live Pane: a Command bound into one nothing registered cannot be pressed.
     if (focused !== null && this.panes.isLive(focused)) {
       const ordinary = cheatSheetEntries(entries.filter((entry) => entry.pane === focused && !entry.capture))
       if (ordinary.length > 0) sections.push({ title: focused, entries: ordinary })
@@ -657,13 +621,12 @@ export class ExtensionKernel {
 
       this.#publish(this.#snapshot.map((status) => ({ ...status, state: "loading" as const, message: undefined })))
       await this.#loadConfig()
-      // `ctx.git.state` is documented as always present, so the store is loaded before any
-      // Extension activates. Idempotent, so a hot reload does not republish and make every
-      // reactivated Extension see a change that did not happen.
+      // `ctx.git.state` is documented as always present, so the store loads before any
+      // Extension activates. Idempotent, so a reload publishes no spurious change.
       await this.git.prime()
       if (this.#stopped) return
-      // Fingerprinted before reading a single Extension: an edit that lands mid-reload
-      // then differs from what was loaded, and the next poll picks it up.
+      // Fingerprinted before reading a single Extension, so an edit landing mid-reload differs
+      // from what was loaded and the next poll picks it up.
       this.#activatedTree = await this.#treeFingerprint()
       this.#watchTree = this.#activatedTree
       const imported = await this.#importAll()
@@ -681,7 +644,7 @@ export class ExtensionKernel {
       await this.#publishSchema(selected)
       await this.#activateAll(selected)
       // Only now does "the first cell of the Layout" mean what the user wrote, rather than
-      // whichever Extension the `needs` graph happened to activate first.
+      // whichever Extension the `needs` graph activated first.
       this.layout.settleInitialFocus()
     } finally {
       this.panes.finishReload(previousOwners)
@@ -799,17 +762,15 @@ export class ExtensionKernel {
         selected.set(name, item)
         continue
       }
-      // Scopes cannot tie here — a same-scope collision was already rejected above — so the
-      // ranking alone decides, whatever order the two copies were imported in.
+      // Scopes cannot tie — a same-scope collision was rejected above — so ranking decides.
       const winner =
         extensionScopeRank(item.candidate.scope) > extensionScopeRank(current.candidate.scope) ? item : current
       selected.set(name, winner)
       shadowed.set(name, [...(shadowed.get(name) ?? []), winner === item ? current : item])
     }
 
-    // Reported only once every scope has been walked, because the answer a shadowed Extension
-    // owes its author is which copy is running instead — and with three scopes the first copy
-    // to beat it need not be the last (a bundled one loses to global, then both lose to repo).
+    // Only once every scope is walked: with three scopes the first copy to beat a shadowed one
+    // need not be the last, and the message names which copy is actually running.
     for (const [name, winner] of selected) {
       for (const loser of shadowed.get(name) ?? []) {
         this.#updateStatus(loser.candidate, "shadowed", `Shadowed by ${winner.candidate.scope} extension "${name}"`)
@@ -954,8 +915,7 @@ export class ExtensionKernel {
         })
       }
 
-      // Closing the scope already dismissed the popups this Extension opened. This
-      // catches the other direction: menus opened by someone else that are showing
+      // The other direction from scope closure: menus opened by someone else that are showing
       // this Extension's spliced items.
       try {
         this.popups.closeForExtension(name)

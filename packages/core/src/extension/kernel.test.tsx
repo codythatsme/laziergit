@@ -767,14 +767,12 @@ describe("Application shell", () => {
   it("spells no core default with `mod+`, which a terminal is free to keep for itself", async () => {
     const harness = await createHarness()
 
-    // ADR-0004, as a standing guard rather than a one-time fix: `mod+` resolves to cmd
-    // wherever the keyboard protocol can *report* it, which says nothing about whether the
-    // terminal will *deliver* it — and the binding that opens the palette is exactly the one
-    // a terminal is likeliest to have claimed.
+    // ADR-0004: `mod+` resolves to cmd wherever the keyboard protocol can *report* it, which
+    // says nothing about whether the terminal will *deliver* it.
     const modBound = harness.kernel.commands
       .getSnapshot()
-      // Every key, not any: a `mod+` spelling paired with a plain one is the sanctioned
-      // form. An unbound Command has nothing to lose, which `every` would call compliant.
+      // Every key, not any: a `mod+` spelling paired with a plain one is the sanctioned form,
+      // and an unbound Command has nothing to lose.
       .filter((entry) => entry.keys.length > 0 && entry.keys.every((key) => /(^|[+,\s])mod\s*\+/i.test(key)))
       .map((entry) => `${entry.id}: ${entry.keys.join(" / ")}`)
 
