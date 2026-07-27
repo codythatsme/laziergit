@@ -1,6 +1,6 @@
 # laziergit
 
-A lazygit-inspired git TUI: light core, everything is a TypeScript Extension. The extension API is the product. M3 is complete; M4 (the eight Bundled Extensions) is next — build order and milestone gates are in PLAN.md.
+A lazygit-inspired git TUI: light core, everything is a TypeScript Extension. The extension API is the product. M0–M4 are complete and M5 (acceptance & polish) is in progress — its acceptance test passes and is now part of `bun run test:e2e`; what remains is the daily-driver soak. Build order and milestone gates are in PLAN.md.
 
 ## Read before working
 
