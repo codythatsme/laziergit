@@ -1,6 +1,6 @@
 import type { ConfigOption, ConfigSchema } from "laziergit"
 
-import { defaultTheme } from "../extension/theme"
+import { defaultTheme, defaultThemePreset, themePresets } from "../extension/theme"
 import { defaultGitConfig, defaultLeader, gitConfigLimits } from "./config"
 
 /** What an Extension contributes to the published schema: its name and its declared options. */
@@ -81,7 +81,19 @@ const keysSchema: JsonSchema = {
 }
 
 function themeSchema(): JsonSchema {
-  const properties: JsonSchema = {}
+  const properties: JsonSchema = {
+    preset: {
+      type: "string",
+      enum: themePresets.map((entry) => entry.name),
+      default: defaultThemePreset,
+      // One line per preset, so the editor's completion list explains the choice rather than
+      // making the user try each one and look.
+      description: [
+        "The palette every token override is applied on top of.",
+        ...themePresets.map((entry) => `• ${entry.name} — ${entry.description}`),
+      ].join("\n"),
+    },
+  }
   for (const [token, color] of Object.entries(defaultTheme)) {
     properties[token] = { type: "string", default: color }
   }

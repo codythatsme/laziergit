@@ -129,20 +129,37 @@ Core's own Commands, all rebindable:
 
 The key that `<leader>` expands to in any key spec. Defaults to `space`.
 
-## `theme` — semantic color tokens
+## `theme` — a preset, and semantic color tokens
 
 ```jsonc
 {
   "theme": {
-    "accent": "#7aa2f7",
-    "selection": "#283457",
+    "preset": "ember",
+    "accent": "#f2ac6c",
   },
 }
 ```
 
-Any subset of the tokens on `Theme` ([§1.8](./extension-api.md)); unlisted tokens keep
-their default. Extensions consume tokens through `useTheme()` and never pick raw colors,
-so one override retints every Pane at once.
+`preset` names the palette everything else is built on; any other key is a token on `Theme`
+([§1.8](./extension-api.md)) overriding that palette. Both halves are optional — a `theme`
+with only tokens overrides the default palette, and no `theme` at all is the default.
+Extensions consume tokens through `useTheme()` and never pick raw colors, so one override
+retints every Pane at once.
+
+| Preset | |
+|---|---|
+| `nocturne` | The default. Violet-black, three stacked surfaces. |
+| `midnight` | Cool blue-black — laziergit's original palette. |
+| `ember` | Warm dark: umber neutrals, apricot accent. |
+| `daybreak` | Light: warm paper, deep ink-jewel semantics. |
+| `beacon` | High contrast: pure black, white text, every semantic above 9:1. |
+
+Every shipped preset is held to contrast floors by test, not by eye: body text at 7:1 on both
+the background and the selected row, every semantic color and `textMuted` at 4.5:1, a focused
+border at least twice the strength of an unfocused one, and staged-green separated from
+unstaged-red in *luminance* as well as hue — because the files Pane draws those two columns
+side by side, and hue alone is not readable to everyone. Overriding a token is not checked
+against any of that; the floors govern what laziergit ships, not what you choose.
 
 ## `git` — how the repository is watched
 

@@ -1,7 +1,7 @@
 import { expect, it } from "bun:test"
 import { option } from "laziergit"
 
-import { defaultTheme } from "../extension/theme"
+import { defaultTheme, findThemePreset } from "../extension/theme"
 import { loadConfig, resolveExtensionConfig, type ConfigDocument } from "./config"
 
 function documents(global: string | null, repo: string | null): readonly ConfigDocument[] {
@@ -138,6 +138,33 @@ it("rejects an inherited property name as a theme token", () => {
 
   expect(loaded.problems).toEqual([{ path: "theme.toString", message: "Unknown theme token" }])
   expect(Object.prototype.toString.call(loaded.core.theme)).toBe("[object Object]")
+})
+
+it("bases a theme on the named preset and applies token overrides on top of it", () => {
+  const beacon = findThemePreset("beacon")
+  if (beacon === undefined) throw new Error("the beacon preset should be registered")
+
+  const loaded = loadConfig(documents(`{ "theme": { "preset": "beacon", "accent": "#123456" } }`, null))
+
+  expect(loaded.problems).toEqual([])
+  // The preset supplies every token the user did not name...
+  expect(loaded.core.theme.background).toBe(beacon.tokens.background)
+  expect(loaded.core.theme.text).toBe(beacon.tokens.text)
+  // ...and the override wins over the preset, not merely over the default.
+  expect(loaded.core.theme.accent).toBe("#123456")
+  expect(loaded.core.theme.accent).not.toBe(beacon.tokens.accent)
+})
+
+it("falls back to the default palette when the named preset does not exist", () => {
+  const loaded = loadConfig(documents(`{ "theme": { "preset": "vaporwave", "accent": "#123456" } }`, null))
+
+  expect(loaded.problems).toHaveLength(1)
+  expect(loaded.problems[0]?.path).toBe("theme.preset")
+  expect(loaded.problems[0]?.message).toContain("nocturne")
+  // A typo in one field costs the user that field. The tokens they spelled correctly still
+  // apply, and the rest come from the default rather than from nothing at all.
+  expect(loaded.core.theme.accent).toBe("#123456")
+  expect(loaded.core.theme.background).toBe(defaultTheme.background)
 })
 
 it("reports a misspelled key in the Layout, in a Layout column, and in the status line", () => {
