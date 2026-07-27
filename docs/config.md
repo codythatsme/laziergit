@@ -109,6 +109,7 @@ The files Pane's tree Commands, for reference — all rebindable the same way:
 | `files.toggle-collapse` | `return` | Expand or collapse the folder under the cursor. Spell it `return`, never `enter` — the latter is a different, unreachable stroke name that binds cleanly and never fires |
 | `files.collapse-all` / `files.expand-all` | `-` / `=` | Fold or unfold every folder |
 | `files.toggle-view` | `` ` `` | Switch between the tree and a flat list of full paths |
+| `files.open` | `o` | Hand the row under the cursor to the OS opener. `e` is deliberately unbound: in lazygit it means *edit in `$EDITOR`*, which needs a full-screen suspend laziergit does not have yet, and binding it to something else would teach the wrong half of the pair |
 
 Core's own Commands, all rebindable:
 

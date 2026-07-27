@@ -421,10 +421,29 @@ describe("the files action menu", () => {
     expect(rendered).toContain("File: loose.txt")
     expect(rendered).toMatch(/ {2}s {2,}Stage/)
     expect(rendered).toMatch(/ {2}d {2,}Discard changes/)
+    expect(rendered).toMatch(/ {2}o {2,}Open in default application/)
     expect(rendered).toMatch(/ {2}a {2,}Stage all files/)
     // An untracked file is not in the index, and conflict items belong to conflicted rows.
     expect(rendered).not.toContain("  u  Unstage")
     expect(rendered).not.toContain("Stage resolved")
+  })
+
+  /**
+   * `o` opens, and `e` no longer does. The key is what a lazygit user reaches for, and the
+   * one it replaces is reserved for the editing this cannot do yet — so the sheet is where
+   * that promise has to be visible, and where a Command silently losing its key would show.
+   */
+  it("binds opening to o, in the pane as well as the menu", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "loose.txt", "untracked\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    await press(harness, "?")
+
+    const sheet = frame(harness)
+    expect(sheet).toMatch(/ {2}o {2,}Open file in default application/)
+    expect(sheet).not.toMatch(/ {2}e {2,}Open file/)
   })
 
   it("runs a menu item against the row it was opened for", async () => {
