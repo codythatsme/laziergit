@@ -356,6 +356,89 @@ describe("PaneHandle", () => {
   })
 })
 
+/**
+ * Three Panes and not one digit among them — which is the point. A third-party Extension
+ * cannot know which numbers are free, and under the old scheme it either guessed or went
+ * unreachable.
+ */
+const jumpSource = `
+  /** @jsxImportSource @opentui/react */
+  import { defineExtension, type PaneProps } from "laziergit"
+
+  const line = (name: string) => ({ focused }: PaneProps) =>
+    <text content={name + " " + (focused ? "focused" : "blurred")} />
+
+  export default defineExtension({
+    name: "jump",
+    activate(ctx) {
+      ctx.panes.register({ id: "jump", title: "Files", component: line("files") })
+      ctx.panes.register({ id: "jump.actions", title: "Actions", component: line("actions") })
+      ctx.panes.register({ id: "jump.detail", title: "Diff", component: line("detail") })
+    },
+  })
+`
+
+describe("pane-jump keys", () => {
+  it("numbers the Layout's cells, so a Pane that claimed no digit still has one", async () => {
+    const harness = await createHarness()
+    await withExtensions(
+      harness,
+      { "jump.tsx": jumpSource },
+      `{ "layout": { "columns": [["jump", "jump.actions"], ["jump.detail"]] } }`,
+    )
+
+    expect(frame(harness)).toContain("files focused")
+
+    // `2` is the second cell of the first column, and `3` carries on into the next column:
+    // reading order, which is the only order the numbers could mean.
+    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    expect(frame(harness)).toContain("actions focused")
+    expect(frame(harness)).toContain("files blurred")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("3"))
+    expect(frame(harness)).toContain("detail focused")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("1"))
+    expect(frame(harness)).toContain("files focused")
+
+    // A digit past the end of the Layout is a miss, not an error.
+    await press(harness, () => harness.setup.mockInput.pressKey("9"))
+    expect(frame(harness)).toContain("files focused")
+  })
+
+  it("names each digit after the Pane it reaches, in the sheet a user asks", async () => {
+    const harness = await createHarness({ height: 40 })
+    await withExtensions(
+      harness,
+      { "jump.tsx": jumpSource },
+      `{ "layout": { "columns": [["jump", "jump.actions"], ["jump.detail"]] } }`,
+    )
+
+    await press(harness, () => harness.setup.mockInput.pressKey("?"))
+    // The titles the Panes registered, not "pane 2" — this sheet is where a user goes to
+    // find out which digit is which, and a positional key can only be explained here.
+    // All three at once, on a terminal with the room for them: the jump keys trail the rest
+    // of the globals, and a sheet that had to be scrolled to reach the one thing only it can
+    // explain would answer the question by hiding the answer.
+    const sheet = frame(harness)
+    expect(sheet).toContain("Focus Files")
+    expect(sheet).toContain("Focus Actions")
+    expect(sheet).toContain("Focus Diff")
+
+    await press(harness, () => harness.setup.mockInput.pressEscape())
+  })
+
+  it("renumbers when the Layout changes under it", async () => {
+    const harness = await createHarness()
+    await withExtensions(harness, { "jump.tsx": jumpSource }, `{ "layout": { "columns": [["jump.actions"]] } }`)
+
+    // One cell in the Layout, so the two Panes it leaves out fall back to their placement
+    // hints — and `1` names whatever ended up first, not whatever registered first.
+    await press(harness, () => harness.setup.mockInput.pressKey("1"))
+    expect(frame(harness)).toContain("actions focused")
+  })
+})
+
 const copySource = `
   import { defineExtension } from "laziergit"
 

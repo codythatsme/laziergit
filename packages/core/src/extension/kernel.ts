@@ -102,6 +102,12 @@ export interface ExtensionKernelOptions {
 /** Core's own Commands. "app" is a reserved Extension name, so these ids can never collide. */
 const coreOwner = "app"
 
+/**
+ * How many Panes the number row can jump to. Nine because that is how many single digits
+ * there are above the letters; a tenth Pane is reachable with `tab` like every other.
+ */
+const maxJumpKeys = 9
+
 function candidateKey(candidate: ExtensionCandidate): string {
   return `${candidate.scope}:${candidate.rootPath}`
 }
@@ -177,6 +183,10 @@ export class ExtensionKernel {
   readonly #disposeKeymap: () => void
   /** Live `useKeyCapture` claims, most recent last — React unmounts in no particular order. */
   readonly #captureClaims: { readonly paneId: string }[] = []
+  /** The `1`–`9` Commands, in the order they number the Layout. */
+  readonly #jumpKeys: Disposable[] = []
+  /** What the live jump Commands were built from; re-registration is skipped while it holds. */
+  #jumpSignature = ""
   #config: LoadedConfig = emptyConfig
   #modalFocus: { readonly renderable: Renderable | null } | undefined
   #leader: string | undefined
@@ -261,6 +271,7 @@ export class ExtensionKernel {
     }
 
     this.panes.subscribe(() => this.layout.setPanes(this.panes.getSnapshot()))
+    this.layout.subscribe(() => this.#syncJumpKeys())
     this.git.store.onPublish((publication) => this.#emitGitEvents(publication))
     this.layout.setFocusListener((paneId, previous) => {
       this.keybindings.setFocusedPane(paneId)
@@ -422,6 +433,65 @@ export class ExtensionKernel {
     register({ id: "app.tab.previous", title: "Previous tab in pane", keys: "[", run: () => this.layout.cycleTab(-1) })
     register({ id: "app.reload", title: "Reload extensions", run: () => this.reload() })
     register({ id: "app.quit", title: "Quit", keys: "q", run: () => this.#onQuit?.() })
+  }
+
+  /**
+   * Rebuilds the `1`–`9` Commands so each digit names the Pane it currently jumps to.
+   *
+   * Core owns these rather than the Extensions owning a digit each, and that is the whole
+   * point: a Pane's number is its *position* in the user's Layout, so a third-party Pane is
+   * reachable the moment it is placed instead of having to guess a free digit and collide
+   * with whoever guessed the same. It also means the number a Pane answers to follows the
+   * Layout the user wrote, which is the only place the question has an answer.
+   *
+   * Re-registered from a signature rather than on every publish: the Layout republishes on
+   * focus changes too, and disposing nine Commands per keypress would rebuild every keymap
+   * layer to arrive at the same nine. The signature is the titles, so it moves exactly when
+   * the cheat sheet's answer would move — a Pane appearing, going away, or being re-placed.
+   * A tab coming to the front is not such a moment: the numbering is over Panes, and a
+   * hidden tab has a digit of its own that reveals it.
+   *
+   * `hidden` keeps them out of the palette, where nine near-identical "Focus …" rows would
+   * sit beside the Extensions' own focus Commands saying the same thing. The cheat sheet
+   * keeps hidden Commands (§5.8), and it is the surface that has to list them: it is where
+   * a user goes to ask which digit is which.
+   */
+  #syncJumpKeys(): void {
+    if (this.#stopped) return
+
+    const titles = this.layout
+      .liveTabs()
+      .slice(0, maxJumpKeys)
+      .map((paneId) => this.#paneTitle(paneId))
+    const signature = titles.join("\0")
+    if (signature === this.#jumpSignature) return
+    this.#jumpSignature = signature
+
+    for (const disposable of this.#jumpKeys.splice(0)) {
+      try {
+        disposable.dispose()
+      } catch (error) {
+        this.#diagnose({ phase: "command", message: "Releasing a pane-jump key", error: normalizeError(error) })
+      }
+    }
+
+    for (const [index, title] of titles.entries()) {
+      this.#jumpKeys.push(
+        this.commands.register(coreOwner, {
+          id: `app.focus.${index + 1}`,
+          title: `Focus ${title}`,
+          keys: String(index + 1),
+          hidden: true,
+          run: () => this.layout.focusAt(index),
+        }),
+      )
+    }
+  }
+
+  /** A Pane's own title, falling back to its id if it left the registry mid-walk. */
+  #paneTitle(paneId: string): string {
+    const pane = this.panes.getSnapshot().find((entry) => entry.id === paneId)
+    return pane?.title ?? paneId
   }
 
   /**

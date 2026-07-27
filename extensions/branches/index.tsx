@@ -337,10 +337,11 @@ export default defineExtension({
       placement: { column: 0, order: 30 },
     })
 
+    // Keyless by design: core binds `1`–`9` positionally over the Layout (§1.7), so this
+    // registration is the palette row and the id a user rebinds, not the jump key.
     ctx.commands.register({
       id: "branches.focus",
       title: "Focus branches",
-      keys: "2",
       run: () => pane.focus(),
     })
 

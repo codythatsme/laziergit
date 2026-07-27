@@ -913,10 +913,13 @@ export default defineExtension({
       placement: { column: 0, order: 20 },
     })
 
+    // No key of its own: core binds `1`–`9` to the Panes in Layout order, so the digit that
+    // lands here is the one this Pane's position earns rather than one it claimed. What is
+    // left is the palette row — and an id the user can bind a key of their own to, which is
+    // the thing a positional jump cannot offer.
     ctx.commands.register({
       id: "files.focus",
       title: "Focus the files pane",
-      keys: "1",
       run: () => pane.focus(),
     })
 
