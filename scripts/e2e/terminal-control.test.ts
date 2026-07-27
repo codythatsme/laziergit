@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test"
 import { TerminalControl, type Session } from "@kitlangton/terminal-control"
-import { mkdir } from "node:fs/promises"
+import { chmod, mkdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
 import { addOrigin, createTestRepo, registerRepoCleanup, type TestRepo } from "../../packages/core/src/git/test-repo"
@@ -8,6 +8,7 @@ import { addOrigin, createTestRepo, registerRepoCleanup, type TestRepo } from ".
 registerRepoCleanup()
 
 const entrypoint = resolve(import.meta.dir, "..", "..", "packages", "core", "src", "main.tsx")
+const specification = resolve(import.meta.dir, "..", "..", "docs", "extension-api.md")
 const paneTitles = ["Files", "Branches", "Commits", "Stash", "[Diff] Commit"] as const
 
 type Layout = "all-panes" | "working-panes"
@@ -34,12 +35,29 @@ async function createE2eRepo(layout: Layout = "working-panes"): Promise<TestRepo
   return repo
 }
 
-function launchEnvironment(repo: TestRepo): Readonly<Record<string, string>> {
+/**
+ * The `gh-workflows` extension exactly as §2 of the specification prints it.
+ *
+ * Extracted rather than copied so there is only one of it: a reader who types the example
+ * out gets what this test proved, and a change to the example that breaks it fails here
+ * instead of in someone's config directory.
+ */
+async function workedExample(): Promise<string> {
+  const document = await Bun.file(specification).text()
+  const heading = document.indexOf("## 2. Worked example A")
+  if (heading === -1) throw new Error("The specification no longer has a §2 worked example to run")
+  const open = document.indexOf("```tsx\n", heading)
+  const close = document.indexOf("\n```", open)
+  if (open === -1 || close === -1) throw new Error("§2's worked example is not in a tsx code fence")
+  return document.slice(open + "```tsx\n".length, close + 1)
+}
+
+function launchEnvironment(repo: TestRepo, pathPrefix?: string): Readonly<Record<string, string>> {
   const path = process.env.PATH
   if (path === undefined) throw new Error("The E2E test needs PATH so laziergit can invoke git")
   const home = join(repo.path, ".home")
   return {
-    PATH: path,
+    PATH: pathPrefix === undefined ? path : `${pathPrefix}:${path}`,
     TERM: "xterm-256color",
     HOME: home,
     XDG_CONFIG_HOME: join(home, ".config"),
@@ -89,7 +107,10 @@ async function waitForScreen(
 async function inTerminal(
   repo: TestRepo,
   run: (session: Session) => Promise<void>,
-  viewport = { cols: 140, rows: 45 },
+  {
+    viewport = { cols: 140, rows: 45 },
+    pathPrefix,
+  }: { viewport?: { cols: number; rows: number }; pathPrefix?: string } = {},
 ): Promise<void> {
   const terminal = await TerminalControl.make({ artifacts: false })
   try {
@@ -99,7 +120,7 @@ async function inTerminal(
       viewport,
       host: "opentui",
       inheritEnv: false,
-      env: launchEnvironment(repo),
+      env: launchEnvironment(repo, pathPrefix),
     })
     try {
       await run(session)
@@ -190,7 +211,7 @@ describe("laziergit through a real terminal", () => {
         await session.keyboard.type("g")
         await waitForText(session, "❯ ?? row00.txt")
       },
-      { cols: 120, rows: 24 },
+      { viewport: { cols: 120, rows: 24 } },
     )
   }, 20_000)
 
@@ -304,6 +325,81 @@ describe("laziergit through a real terminal", () => {
       expect(await repo.git("symbolic-ref", "--short", "HEAD")).toBe("topic\n")
     })
   }, 20_000)
+
+  /**
+   * The acceptance test of PLAN.md, run by machine.
+   *
+   * The gate is that a user drops a `.tsx` file into their own config directory and the
+   * feature exists — no core change, no bundled change, nothing rebuilt. Rather than keep a
+   * copy of that file here, this lifts the extension **out of the specification itself**, so
+   * §2's worked example is executed rather than merely published. An example that stops
+   * compiling, stops rendering, or drifts from the API it teaches fails this test, which is
+   * the defect it exists to prevent: the spec is what an authoring agent learns from, and it
+   * had already grown a row that wrapped where §1.8 says rows clip.
+   *
+   * `gh` is stubbed on PATH — the point under test is laziergit's loading, layout, cursor and
+   * hint machinery, not GitHub's availability or the network.
+   */
+  it("loads §2's worked example from the user's config directory and runs it", async () => {
+    const repo = await createE2eRepo()
+    const home = join(repo.path, ".home")
+    const extensions = join(home, ".config", "laziergit", "extensions")
+    await mkdir(extensions, { recursive: true })
+    await Bun.write(join(extensions, "gh-workflows.tsx"), await workedExample())
+
+    // Long enough that a row which failed to clip would visibly reflow inside the pane.
+    const clipped = `an unusually long run title that keeps going ${"and going ".repeat(8)}TAIL`
+    const runs = [
+      { databaseId: 1, displayTitle: "first run", workflowName: "verify", status: "completed", conclusion: "success" },
+      { databaseId: 2, displayTitle: "second run", workflowName: "verify", status: "completed", conclusion: "failure" },
+      { databaseId: 3, displayTitle: clipped, workflowName: "verify", status: "in_progress", conclusion: "" },
+    ].map((run) => ({ ...run, url: `https://example.invalid/${run.databaseId}` }))
+
+    const bin = join(home, "bin")
+    await mkdir(bin, { recursive: true })
+    const stub = join(bin, "gh")
+    await Bun.write(stub, `#!/bin/sh\ncat <<'LAZIERGIT_JSON'\n${JSON.stringify(runs)}\nLAZIERGIT_JSON\n`)
+    await chmod(stub, 0o755)
+
+    await inTerminal(
+      repo,
+      async (session) => {
+        // The pane the user's file registered, drawn from the stub's runs — and drawn where
+        // its `placement` hint asked, without being named in this repository's Layout.
+        await waitForText(session, "Actions")
+        const listed = await waitForScreen(
+          session,
+          "the workflow runs the stubbed gh reported",
+          (screen) => screen.includes("verify — first run") && screen.includes("verify — second run"),
+        )
+        expect(listed).toContain("✓")
+        expect(listed).toContain("✗")
+        // One row is one line (§1.8): the third title is clipped at the column edge, so its
+        // tail never reaches the screen. Without `wrapMode="none"` it reflows and TAIL shows.
+        expect(listed).not.toContain("TAIL")
+
+        // Tab reaches it, and the cursor it got from `useListCursor` walks and marks rows.
+        await session.keyboard.press("Tab")
+        await waitForText(session, "❯ ✓ verify — first run")
+        // `hint` on the user's own Command reaches the bottom row, like any bundled one.
+        await waitForText(session, "o open")
+
+        await session.keyboard.type("j")
+        await waitForText(session, "❯ ✗ verify — second run")
+        await session.keyboard.type("G")
+        await waitForText(session, "❯ ●")
+
+        // The user's Command is on the focused Pane's cheat sheet, under the extension's name.
+        await session.keyboard.type("?")
+        const keys = await waitForScreen(session, "the user extension's own keybindings", (screen) =>
+          screen.includes("Keybindings — gh-workflows"),
+        )
+        expect(keys).toContain("Open workflow run in browser")
+        expect(keys).toContain("Next run")
+      },
+      { pathPrefix: bin },
+    )
+  }, 30_000)
 
   it("saves and pops a stash through the focused panes", async () => {
     const repo = await createE2eRepo()
