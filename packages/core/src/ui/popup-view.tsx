@@ -58,6 +58,9 @@ function PopupFrame({
       titleColor={theme.accent}
       paddingLeft={1}
       paddingRight={1}
+      // The title is drawn *in* the top border, so without this the first line of a popup's
+      // body sits directly under it and the two read as one block.
+      paddingTop={1}
     >
       {children}
       <text content={footer} style={{ fg: theme.textMuted, marginTop: 1 }} />
@@ -250,13 +253,19 @@ function ActionsView({ popup, theme }: { popup: ActionsPopup; theme: Theme }) {
     [popup],
   )
 
+  // One key column for the whole menu, measured across every group: a `shift+d` beside an `s`
+  // otherwise pushes its own label six columns right and the labels stop forming a column at
+  // all. Measured over the menu rather than per group so the groups line up with each other,
+  // which is what the cheat sheet already does with its own keys.
+  const keyWidth = Math.max(0, ...popup.groups.flatMap((group) => group.items.map((item) => item.key.length)))
+
   return (
     <PopupFrame title={popup.title} footer="escape cancel" theme={theme}>
       {popup.groups.map((group, index) => (
         <box key={group.title ?? `group-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
           {group.title === undefined ? null : <text content={group.title} style={{ fg: theme.textMuted }} />}
           {group.items.map((item) => (
-            <text key={item.key} content={`  ${item.key}  ${item.label}`} style={{ fg: theme.text }} />
+            <text key={item.key} content={`  ${item.key.padEnd(keyWidth)}  ${item.label}`} style={{ fg: theme.text }} />
           ))}
         </box>
       ))}

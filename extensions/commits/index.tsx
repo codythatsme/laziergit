@@ -316,7 +316,7 @@ export default defineExtension({
         // same column, and disagreeing about it would read as one of them being wrong.
         const message =
           empty === "noRepository"
-            ? "no repository"
+            ? "no repository here"
             : empty === "unborn"
               ? "no commits yet — your first commit will appear here"
               : "no commits to show"

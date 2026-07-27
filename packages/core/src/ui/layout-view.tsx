@@ -56,9 +56,10 @@ function PaneFrame({
       paddingRight={1}
     >
       {active.state === "reloading" ? (
-        <box flexGrow={1} alignItems="center" justifyContent="center">
-          <text content="reloading…" style={{ fg: theme.info }} />
-        </box>
+        // Top-left and muted, in the slot the Pane's first row just vacated: centring it made
+        // the text jump to the middle of the frame and change colour for the half-second a
+        // reload takes, which reads as something going wrong rather than something reloading.
+        <text content="reloading…" style={{ fg: theme.textMuted }} />
       ) : (
         <Slot
           key={cell.key}
@@ -83,7 +84,9 @@ function EmptyLayout({ theme, fallback }: { theme: Theme; fallback?: ReactNode }
       border
       borderStyle="rounded"
       borderColor={theme.border}
-      padding={2}
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={1}
       flexDirection="column"
       gap={1}
     >
@@ -106,9 +109,12 @@ export function LayoutView({ layout, panes, fallback }: { layout: LayoutHost; pa
   if (view.layout.columns.length === 0) return <EmptyLayout theme={theme} fallback={fallback} />
 
   return (
-    <box flexGrow={1} flexDirection="row" gap={1}>
+    <box flexGrow={1} flexDirection="row">
       {view.layout.columns.map((column, index) => (
-        <box key={`column-${index}`} flexGrow={column.weight} flexBasis={0} flexDirection="column" gap={1}>
+        // Cells stack border-to-border. A blank row between them cost a short Pane a third of
+        // its content — at 24 rows a four-cell column spent three of them on nothing — and
+        // rounded borders already separate one Pane from the next perfectly well.
+        <box key={`column-${index}`} flexGrow={column.weight} flexBasis={0} flexDirection="column">
           {column.cells.map((cell) => {
             const entries = cell.paneIds.flatMap((paneId) => {
               const entry = registered.find((candidate) => candidate.id === paneId)

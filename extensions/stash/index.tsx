@@ -188,6 +188,7 @@ export default defineExtension({
     function StashPane({ focused }: PaneProps) {
       const theme = useTheme()
       const entries = useGit((state) => state.stash)
+      const repository = useGit((state) => state.head.kind !== "noRepository")
       const cursor = useListCursor({ items: entries, idPrefix: "stash", noun: "stash" })
       const selected = cursor.selected
 
@@ -254,7 +255,12 @@ export default defineExtension({
         },
       })
 
-      if (entries.length === 0) return <text fg={theme.textMuted}>no stashes</text>
+      // Outside a repository there is nothing that could have been stashed, and "no stashes"
+      // there claims a healthy repository with an empty stash list — the same reading the
+      // files and commits Panes were fixed for, in the one Pane that still made it.
+      if (!repository) return <text fg={theme.textMuted}>no repository here</text>
+      // Says what would fill it, the way its two neighbours in this column already do.
+      if (entries.length === 0) return <text fg={theme.textMuted}>no stashes yet — s in the files Pane saves one</text>
 
       return (
         // `flexBasis={0}` is not decoration: without it the box's flex size is its *content*
