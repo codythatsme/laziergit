@@ -2,7 +2,7 @@
 
 lazygit's workflow, pi's philosophy: a git TUI with a deliberately light core where **every feature is a TypeScript extension** — including the built-in ones. Ask a coding agent for a new pane; it writes a `.ts(x)` file; laziergit hot-reloads; the feature exists.
 
-Status: **M4 bundled extensions complete; M5 acceptance & polish is in progress**. Start here:
+Status: **M5 acceptance & polish — the acceptance test passes; daily-driver soak is what remains**. Start here:
 
 - [PLAN.md](./PLAN.md) — architecture, repository layout, v1 scope, build order
 - [docs/extension-api.md](./docs/extension-api.md) — the extension API specification (the crown jewel)
@@ -16,7 +16,13 @@ Stack: Bun · OpenTUI + React · Effect (core-internal) · system git.
 ```sh
 bun install
 bun run dev             # Ctrl+C exits
+
+# Or put `laziergit` on PATH, pointed at this working tree, and run it in any repository:
+cd packages/core && bun link && cd -
+laziergit               # from anywhere inside a git repository
+
 bun run test
+bun run test:e2e         # the bundled flows, and §2's worked example, through a real PTY
 bun run test:runtime     # focused hot-reload lifecycle fixture
 bun run typecheck
 bun run lint
