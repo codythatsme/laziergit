@@ -4,7 +4,15 @@ import { dirname, join, resolve } from "node:path"
 import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  highlighted,
+  installHarnessLifecycle,
+  renderApp,
+  settle,
+  type Harness,
+} from "../test-harness"
 
 installHarnessLifecycle()
 
@@ -186,17 +194,19 @@ describe("staging from the files pane", () => {
     await renderApp(harness)
     await focusFiles(harness)
     // Two status columns, `X` then `Y`, exactly as git spells them: the change is in the
-    // working tree, so the letter is in the second column.
-    expect(frame(harness)).toContain("❯  M tracked.txt")
+    // working tree, so the letter is in the second column. The cursor is the highlight and
+    // nothing else — there is no marker glyph to read it off any more.
+    expect(highlighted(harness)).toEqual([" M tracked.txt"])
 
     await press(harness, " ")
-    await waitFor(harness, () => frame(harness).includes("❯ M  tracked.txt"))
+    await waitFor(harness, () => frame(harness).includes("M  tracked.txt"))
     expect(await staged(harness)).toEqual(["tracked.txt"])
 
     // The row's columns flipped and the cursor never moved — a stronger claim than the
     // headings version could make, and true only because the cursor anchors on the path.
+    expect(highlighted(harness)).toEqual(["M  tracked.txt"])
     await press(harness, " ")
-    await waitFor(harness, () => frame(harness).includes("❯  M tracked.txt"))
+    await waitFor(harness, () => frame(harness).includes(" M tracked.txt"))
     expect(await staged(harness)).toEqual([])
 
     // The headings are gone for good, not merely off screen for this fixture.
@@ -217,11 +227,15 @@ describe("staging from the files pane", () => {
     const rendered = frame(harness)
     // The `XY` pair sits in the same two columns on every row and only the *name* indents,
     // so the column you scan down for "is this staged?" never moves with folder depth.
-    expect(rendered).toContain("❯ ▾  src")
-    expect(rendered).toContain("  ??   a.txt")
-    expect(rendered).toContain("  ▾    nested")
-    expect(rendered).toContain("  ??     b.txt")
-    expect(rendered).toContain("  ?? top.txt")
+    expect(rendered).toContain("▼  src")
+    expect(rendered).toContain("??   a.txt")
+    expect(rendered).toContain("▼    nested")
+    expect(rendered).toContain("??     b.txt")
+    expect(rendered).toContain("?? top.txt")
+    // Folders first, then paths: `nested` precedes its sibling file, and the root file is
+    // last rather than first.
+    expect(rendered.indexOf("nested")).toBeLessThan(rendered.indexOf("a.txt"))
+    expect(rendered.indexOf("a.txt")).toBeLessThan(rendered.indexOf("top.txt"))
   })
 
   it("compresses a single-child directory chain into one row", async () => {
@@ -231,8 +245,8 @@ describe("staging from the files pane", () => {
     await renderApp(harness)
     await focusFiles(harness)
 
-    expect(frame(harness)).toContain("❯ ▾  a/b")
-    expect(frame(harness)).toContain("  ??   c.txt")
+    expect(frame(harness)).toContain("▼  a/b")
+    expect(frame(harness)).toContain("??   c.txt")
   })
 
   it("collapses a directory with return and hides its descendants", async () => {
@@ -244,7 +258,7 @@ describe("staging from the files pane", () => {
     expect(frame(harness)).toContain("??   a.txt")
 
     await press(harness, "\r")
-    await waitFor(harness, () => frame(harness).includes("❯ ▸  src"))
+    await waitFor(harness, () => frame(harness).includes("▶  src"))
     expect(frame(harness)).not.toContain("a.txt")
 
     await press(harness, "\r")
@@ -258,16 +272,16 @@ describe("staging from the files pane", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    // Down onto `src/nested/b.txt`: src, a.txt, nested, b.txt.
+    // Down onto `src/nested/b.txt`: src, nested, b.txt — folders before files, so the
+    // nested chain comes before `a.txt` rather than after it.
     await press(harness, "j")
     await press(harness, "j")
-    await press(harness, "j")
-    await waitFor(harness, () => frame(harness).includes("❯ ??     b.txt"))
+    await waitFor(harness, () => highlighted(harness).includes("??     b.txt"))
 
     // Collapse-all removes the row the cursor was on; the deepest visible ancestor is where
     // it honestly belongs, not wherever the old index now points.
     await press(harness, "-")
-    await waitFor(harness, () => frame(harness).includes("❯ ▸  src"))
+    await waitFor(harness, () => highlighted(harness).includes("▶  src"))
   })
 
   it("stages a whole directory with space, and unstages it again", async () => {
@@ -292,11 +306,11 @@ describe("staging from the files pane", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    expect(frame(harness)).toContain("▾  src/nested")
+    expect(frame(harness)).toContain("▼  src/nested")
 
     await press(harness, "`")
     await waitFor(harness, () => frame(harness).includes("?? src/nested/b.txt"))
-    expect(frame(harness)).not.toContain("▾")
+    expect(frame(harness)).not.toContain("▼")
   })
 
   it("stages everything with a, including untracked files", async () => {
@@ -346,7 +360,7 @@ describe("discarding from the files pane", () => {
     await focusFiles(harness)
     // Staged and nothing since: the letter is in the index column, the working-tree column
     // is blank, and that pair is exactly why `d` has to unstage before it restores.
-    expect(frame(harness)).toContain("❯ M  tracked.txt")
+    expect(highlighted(harness)).toEqual(["M  tracked.txt"])
 
     await press(harness, "d")
     // The working tree already matches the index, so `git restore --worktree` on its own
@@ -534,8 +548,10 @@ describe("what the files pane publishes", () => {
     await press(harness, "\t")
     await press(harness, "j")
 
-    // `j` belongs to the files pane, so the cursor never moved and nothing was pushed.
-    expect(frame(harness)).toContain("❯ ?? first.txt")
+    // `j` belongs to the files pane, so the cursor never moved and nothing was pushed. The
+    // pane is unfocused now, so nothing on screen says where its cursor is — the diff it
+    // last published is the only witness, which is exactly the trade the marker paid for.
+    expect(highlighted(harness)).toEqual([])
     expect(frame(harness)).toContain("showing workingTree first.txt")
   })
 

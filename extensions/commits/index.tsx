@@ -256,10 +256,10 @@ export default defineExtension({
 
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
-          {/* The marker, not the highlight, is what says where the cursor is while another
-              Pane holds focus — the state in which the diff on screen is still this Pane's
-              selection and the user needs to see which row that was. */}
-          <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
+          {/* No cursor marker: the highlight says where the cursor is, and the subject is
+              what the row clips from the right — so two columns spent saying it twice come
+              straight out of the text you came to read. The trade is stated in the files
+              Pane and taken here for the same reason. */}
           <span fg={dim ? theme.textMuted : theme.accent}>{commit.shortOid}</span>
           {/* A fixed-width gutter, so the merge marker reads as a column instead of shifting
               every merge row's subject one place right. */}

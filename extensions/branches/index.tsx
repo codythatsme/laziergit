@@ -227,10 +227,10 @@ export default defineExtension({
 
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
-          {/* The marker, not the highlight, is what says where the cursor is while another
-              Pane holds focus — the state in which the diff on screen is still this Pane's
-              selection and the user needs to see which row that was. */}
-          <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
+          {/* No cursor marker: the highlight says where the cursor is, and the two columns a
+              chevron cost are two columns of branch name in the narrowest pane on screen. The
+              trade is stated in the files Pane and taken here for the same reason — with the
+              same cost, that an unfocused Pane marks nothing. */}
           <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "*" : " "}</span>
           <span fg={nameColor(branch, theme, dim)}>{` ${branch.name}`}</span>
           {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}

@@ -118,7 +118,12 @@ function statusCell(change: FileChange): StatusCell {
  * at all. First match wins, worst news first.
  */
 function directoryCell(node: DirectoryNode, folded: boolean): StatusCell {
-  const marker = folded ? "\u25b8" : "\u25be"
+  // The full-size triangles (U+25B6 / U+25BC), not the small ones beside them in the block:
+  // this glyph is the whole of a folder row's affordance, and at 6px of ink it read as a
+  // speck rather than a control. lazygit's own pair, so it is proven in the terminals a
+  // lazygit user already runs, and `Bun.stringWidth` scores both 1 \u2014 which is what keeps
+  // the status columns beside them from stepping right.
+  const marker = folded ? "\u25b6" : "\u25bc"
   const mark = node.conflicted
     ? { text: "!", token: "danger" as keyof Theme }
     : node.staged && !node.unstaged && !node.untracked
@@ -660,10 +665,11 @@ export default defineExtension({
 
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
-          {/* The marker, not the highlight, is what says where the cursor is while another
-              Pane holds focus — the state in which the diff on screen is still this Pane's
-              selection and the user needs to see which row that was. */}
-          <span fg={theme.textMuted}>{selected ? "\u276f " : "  "}</span>
+          {/* No cursor marker. The highlight already says where the cursor is, and a chevron
+              beside it said the same thing a second time in the two leftmost columns of a
+              pane that is mostly path. The cost is named rather than hidden: an unfocused
+              pane draws no highlight either, so while you drive another pane nothing marks
+              the row whose diff is still on screen. */}
           {/* The status pair sits before the indent, so `XY` pins to the same two columns on
               every row however deep it is. Indenting it too made the one column you scan down
               \u2014 is this staged? \u2014 step right with each folder, which is the column lazygit

@@ -170,10 +170,9 @@ export default defineExtension({
 
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
-          {/* The marker, not the highlight, is what says where the cursor is while another
-              Pane holds focus — the state in which the diff on screen is still this Pane's
-              selection and the user needs to see which row that was. */}
-          <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
+          {/* No cursor marker: the highlight says where the cursor is, and the message is
+              what the row clips from the right. The trade is stated in the files Pane and
+              taken here for the same reason. */}
           <span fg={dim ? theme.textMuted : theme.accent}>{stashRef(entry)}</span>
           <span fg={dim ? theme.textMuted : theme.text}>{` ${entry.message}`}</span>
           {/* Absent for a stash taken on a detached HEAD, where git recorded no branch. */}

@@ -62,16 +62,26 @@ function directoryAt(nodes: readonly TreeNode[], path: string): DirectoryNode {
 it("builds one node per path prefix, with a row for each directory above a file", () => {
   const tree = buildTree([untracked("src/a.txt"), untracked("src/nested/b.txt"), untracked("top.txt")])
 
-  expect(rows(tree)).toEqual(["0:src", "1:src/a.txt", "1:src/nested", "2:src/nested/b.txt", "0:top.txt"])
+  expect(rows(tree)).toEqual(["0:src", "1:src/nested", "2:src/nested/b.txt", "1:src/a.txt", "0:top.txt"])
 })
 
-it("orders siblings by full path, so a directory sorts against files by its own name", () => {
-  // `.` (0x2E) sorts before `/` (0x2F), so comparing full paths puts the directory `b`
-  // before the file `b.txt`. Comparing labels would not, and `b`'s rows would be split
-  // across `b.txt`.
+it("puts every directory above every file, at each level", () => {
+  // Folders first, then paths within each group — so a repository's root files land at the
+  // bottom, under the folders holding what you actually changed, rather than above them
+  // because their names happen to sort early. `a.txt` sorting before the directory `b` is
+  // exactly the case the old interleaved order got, and the one this replaces.
   const tree = buildTree([edited("b/x.txt"), untracked("b.txt"), untracked("a.txt")])
 
-  expect(rows(tree)).toEqual(["0:a.txt", "0:b", "1:b/x.txt", "0:b.txt"])
+  expect(rows(tree)).toEqual(["0:b", "1:b/x.txt", "0:a.txt", "0:b.txt"])
+})
+
+it("sinks a capitalised root file below the folders it used to sort above", () => {
+  // The complaint this order answers: code-unit comparison puts every uppercase name ahead
+  // of every lowercase one, so `README.md` opened the list of a repository whose changes
+  // were all under `packages/`.
+  const tree = buildTree([edited("README.md"), edited("packages/core/a.ts"), edited("docs/b.md")])
+
+  expect(rows(tree)).toEqual(["0:docs", "1:docs/b.md", "0:packages/core", "1:packages/core/a.ts", "0:README.md"])
 })
 
 it("compresses a single-child directory chain into one row", () => {
@@ -153,15 +163,17 @@ it("folds a directory past the threshold, and lets an explicit expand outrank it
 it("lays the same files out flat, at depth 0 with full-path labels", () => {
   const tree = buildFlatList([untracked("src/nested/b.txt"), untracked("src/a.txt"), untracked("top.txt")])
 
-  expect(rows(tree)).toEqual(["0:src/a.txt", "0:src/nested/b.txt", "0:top.txt"])
-  expect(tree.map((node) => node.label)).toEqual(["src/a.txt", "src/nested/b.txt", "top.txt"])
+  // The tree's own order, read as leaves — which is why the nested file precedes its
+  // shallower sibling here as well: flat mode is a projection, not a second ordering model.
+  expect(rows(tree)).toEqual(["0:src/nested/b.txt", "0:src/a.txt", "0:top.txt"])
+  expect(tree.map((node) => node.label)).toEqual(["src/nested/b.txt", "src/a.txt", "top.txt"])
 })
 
 it("names every directory for collapse-all, and every leaf under a row", () => {
   const tree = buildTree([untracked("src/a.txt"), untracked("src/nested/b.txt"), untracked("top.txt")])
 
   expect(directoryPaths(tree)).toEqual(["src", "src/nested"])
-  expect(filesUnder(tree[0] as TreeNode).map((change) => change.path)).toEqual(["src/a.txt", "src/nested/b.txt"])
+  expect(filesUnder(tree[0] as TreeNode).map((change) => change.path)).toEqual(["src/nested/b.txt", "src/a.txt"])
   expect(filesUnder(tree[1] as TreeNode).map((change) => change.path)).toEqual(["top.txt"])
 })
 
@@ -171,7 +183,7 @@ it("finds a path's row, falling back to its deepest visible ancestor", () => {
   const tree = buildTree([untracked("src/a.txt"), untracked("src/nested/b.txt"), untracked("top.txt")])
   const open = visibleRows(tree, noFolds, 0)
 
-  expect(rowIndexFor(open, "src/nested/b.txt")).toBe(3)
+  expect(rowIndexFor(open, "src/nested/b.txt")).toBe(2)
 
   // With `src` collapsed the row is gone, and the directory that swallowed it is where the
   // cursor honestly belongs — not wherever the old index now points.
@@ -182,7 +194,7 @@ it("finds a path's row, falling back to its deepest visible ancestor", () => {
   // The *deepest* visible ancestor, not the first: with only `src/nested` folded, the row
   // to land on is that chain, not `src`.
   const partly = visibleRows(tree, { collapsed: new Set(["src/nested"]), expanded: new Set() }, 0)
-  expect(rowIndexFor(partly, "src/nested/b.txt")).toBe(2)
+  expect(rowIndexFor(partly, "src/nested/b.txt")).toBe(1)
 })
 
 it("hands the store's own FileChange to the row, by reference", () => {
