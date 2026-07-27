@@ -664,13 +664,16 @@ export default defineExtension({
               Pane holds focus — the state in which the diff on screen is still this Pane's
               selection and the user needs to see which row that was. */}
           <span fg={theme.textMuted}>{selected ? "\u276f " : "  "}</span>
+          {/* The status pair sits before the indent, so `XY` pins to the same two columns on
+              every row however deep it is. Indenting it too made the one column you scan down
+              \u2014 is this staged? \u2014 step right with each folder, which is the column lazygit
+              keeps fixed for exactly this reason. */}
+          <span fg={dim ? theme.textMuted : theme[cell.indexToken]}>{cell.index}</span>
+          <span fg={dim ? theme.textMuted : theme[cell.worktreeToken]}>{cell.worktree}</span>
           {/* Indent is spaces inside the one `<text>`, not nested boxes: `scrollChildIntoView`
               finds a row by id, and a per-depth box tree would put every row at a different
               place in the layout for no gain. */}
-          <span>{"  ".repeat(depth)}</span>
-          <span fg={dim ? theme.textMuted : theme[cell.indexToken]}>{cell.index}</span>
-          <span fg={dim ? theme.textMuted : theme[cell.worktreeToken]}>{cell.worktree}</span>
-          <span fg={dim ? theme.textMuted : theme.text}>{` ${label}`}</span>
+          <span fg={dim ? theme.textMuted : theme.text}>{` ${"  ".repeat(depth)}${label}`}</span>
           <span fg={toneColor(theme, decoration?.tone)}>{badge === undefined ? "" : ` ${badge}`}</span>
         </text>
       )
@@ -861,7 +864,7 @@ export default defineExtension({
 
       // Outside a repository there is no working tree to be clean, and saying it is clean
       // would report a healthy, fully committed repository where there is none at all.
-      if (!repository) return <text fg={theme.textMuted} content="no repository" />
+      if (!repository) return <text fg={theme.textMuted} content="no repository here" />
 
       // A clean tree is an answer, not an absence: an empty box would read as a Pane that
       // failed to load. Measured on the file count rather than the row count, which is the

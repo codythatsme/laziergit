@@ -215,10 +215,12 @@ describe("staging from the files pane", () => {
     await focusFiles(harness)
 
     const rendered = frame(harness)
+    // The `XY` pair sits in the same two columns on every row and only the *name* indents,
+    // so the column you scan down for "is this staged?" never moves with folder depth.
     expect(rendered).toContain("❯ ▾  src")
-    expect(rendered).toContain("    ?? a.txt")
-    expect(rendered).toContain("  ▾  nested")
-    expect(rendered).toContain("      ?? b.txt")
+    expect(rendered).toContain("  ??   a.txt")
+    expect(rendered).toContain("  ▾    nested")
+    expect(rendered).toContain("  ??     b.txt")
     expect(rendered).toContain("  ?? top.txt")
   })
 
@@ -230,7 +232,7 @@ describe("staging from the files pane", () => {
     await focusFiles(harness)
 
     expect(frame(harness)).toContain("❯ ▾  a/b")
-    expect(frame(harness)).toContain("  ?? c.txt")
+    expect(frame(harness)).toContain("  ??   c.txt")
   })
 
   it("collapses a directory with return and hides its descendants", async () => {
@@ -239,14 +241,14 @@ describe("staging from the files pane", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    expect(frame(harness)).toContain("?? a.txt")
+    expect(frame(harness)).toContain("??   a.txt")
 
     await press(harness, "\r")
     await waitFor(harness, () => frame(harness).includes("❯ ▸  src"))
     expect(frame(harness)).not.toContain("a.txt")
 
     await press(harness, "\r")
-    await waitFor(harness, () => frame(harness).includes("?? a.txt"))
+    await waitFor(harness, () => frame(harness).includes("??   a.txt"))
   })
 
   it("keeps the cursor on the same node when a directory above it collapses", async () => {
@@ -260,7 +262,7 @@ describe("staging from the files pane", () => {
     await press(harness, "j")
     await press(harness, "j")
     await press(harness, "j")
-    await waitFor(harness, () => frame(harness).includes("❯     ?? b.txt"))
+    await waitFor(harness, () => frame(harness).includes("❯ ??     b.txt"))
 
     // Collapse-all removes the row the cursor was on; the deepest visible ancestor is where
     // it honestly belongs, not wherever the old index now points.
@@ -403,9 +405,9 @@ describe("the files action menu", () => {
 
     const rendered = frame(harness)
     expect(rendered).toContain("File: loose.txt")
-    expect(rendered).toContain("  s  Stage")
-    expect(rendered).toContain("  d  Discard changes")
-    expect(rendered).toContain("  a  Stage all files")
+    expect(rendered).toMatch(/ {2}s {2,}Stage/)
+    expect(rendered).toMatch(/ {2}d {2,}Discard changes/)
+    expect(rendered).toMatch(/ {2}a {2,}Stage all files/)
     // An untracked file is not in the index, and conflict items belong to conflicted rows.
     expect(rendered).not.toContain("  u  Unstage")
     expect(rendered).not.toContain("Stage resolved")
@@ -465,11 +467,11 @@ describe("conflicts, shown and delegated", () => {
     const rendered = frame(harness)
     expect(rendered).toContain("File: shared.txt")
     expect(rendered).toContain("Conflict")
-    expect(rendered).toContain("  o  Open in default application")
-    expect(rendered).toContain("  m  Stage resolved")
+    expect(rendered).toMatch(/ {2}o {2,}Open in default application/)
+    expect(rendered).toMatch(/ {2}m {2,}Stage resolved/)
     // Hidden, not greyed: half-resolving a conflict is not on offer here at all.
-    expect(rendered).not.toContain("  s  Stage")
-    expect(rendered).not.toContain("  d  Discard changes")
+    expect(rendered).not.toMatch(/ {2}s {2,}Stage/)
+    expect(rendered).not.toMatch(/ {2}d {2,}Discard changes/)
   })
 
   it("records a resolution when the menu's stage-resolved runs", async () => {
@@ -498,7 +500,7 @@ describe("conflicts, shown and delegated", () => {
     // `d` is "Discard changes", hidden on this row — so it does nothing at all.
     await press(harness, "d")
 
-    expect(frame(harness)).toContain("  m  Stage resolved")
+    expect(frame(harness)).toMatch(/ {2}m {2,}Stage resolved/)
     expect(frame(harness)).not.toContain("Discard changes?")
   })
 })

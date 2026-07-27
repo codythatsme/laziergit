@@ -54,11 +54,22 @@ function hintedColumn(requested: number | undefined): number {
   return Math.min(Math.max(0, Math.trunc(requested)), maxHintedColumn)
 }
 
+/**
+ * Column 0 is the lists, everything right of it is the detail. A user with no `layout` in
+ * their config got equal columns, which made the diff — the one Pane whose whole job is to be
+ * read — exactly as narrow as a column of branch names. This is the same 1:2 proportion
+ * laziergit's own shipped config uses, applied as the fallback rather than left to be
+ * discovered; `layout.columns[].weight` still overrides it outright.
+ */
+function hintedWeight(index: number): number {
+  return index === 0 ? 1 : 2
+}
+
 function columnAt(columns: DraftColumn[], index: number): DraftColumn {
-  while (columns.length <= index) columns.push(draftColumn())
+  while (columns.length <= index) columns.push(draftColumn(hintedWeight(columns.length)))
   const column = columns[index]
   if (column) return column
-  const created = draftColumn()
+  const created = draftColumn(hintedWeight(index))
   columns[index] = created
   return created
 }

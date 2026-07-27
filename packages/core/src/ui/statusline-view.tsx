@@ -91,7 +91,11 @@ export function StatuslineView({
   const pending = usePendingSequence()
 
   return (
-    <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
+    // `paddingLeft={2}` is a Pane's border plus its own left padding, so the hint bar starts
+    // on exactly the column every row of every Pane starts on. `gap={2}` is what keeps the
+    // two halves apart: `space-between` alone lets a long hint run touch the branch name,
+    // and the row is one line with nothing to elide against (§1.10).
+    <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={2} paddingRight={2} gap={2}>
       <box flexDirection="row" gap={2} flexShrink={1}>
         <HintBar keys={keys} />
         <Segments panes={panes} segments={segments.left} />
@@ -127,10 +131,12 @@ function toastLines(message: string): readonly string[] {
 /**
  * Transient notifications, stacked above the status line and never taking focus.
  *
- * `bottom={3}` clears that row rather than landing on it. At `2` a toast sat exactly on the
- * status line and blanked whatever was there for as long as it lasted — survivable when the
+ * `bottom={2}` clears that row rather than landing on it. At `1` a toast would sit exactly on
+ * the status line and blank whatever was there for as long as it lasted — survivable when the
  * row held a branch name, not once it also holds the keys you can press, since the moment a
- * toast appears is the moment you are deciding what to do next.
+ * toast appears is the moment you are deciding what to do next. `right={0}` docks the toast's
+ * border to the column the Pane frames end on, now that the shell adds no inset of its own;
+ * both numbers dropped by one when that padding went.
  */
 export function ToastLayer({ notifications }: { notifications: NotificationHost }) {
   const theme = useTheme()
@@ -138,7 +144,7 @@ export function ToastLayer({ notifications }: { notifications: NotificationHost 
   if (toasts.length === 0) return null
 
   return (
-    <box position="absolute" right={2} bottom={3} zIndex={10} flexDirection="column" alignItems="flex-end" gap={1}>
+    <box position="absolute" right={0} bottom={2} zIndex={10} flexDirection="column" alignItems="flex-end" gap={1}>
       {toasts.map((toast) => (
         <box
           key={toast.id}
