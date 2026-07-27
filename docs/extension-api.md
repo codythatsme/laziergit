@@ -2228,10 +2228,10 @@ export default defineExtension({
                 wrapMode="none"
                 bg={selected && focused ? theme.selection : undefined}
               >
-                {/* The marker, not the highlight, is what says where the cursor is once
-                    another Pane takes focus — and the highlight is the half a no-color
-                    terminal loses. Every bundled list Pane draws both for that reason. */}
-                <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
+                {/* The highlight is the whole of the cursor — no `❯` beside it. Every
+                    bundled list Pane made the same trade: a marker said a second time what
+                    the bar already says, in the two columns a narrow pane can least spare.
+                    It buys a real cost, which is that an unfocused pane marks nothing. */}
                 <span fg={color}>{glyph}</span> {run.workflowName} — {run.displayTitle}
               </text>
             );
@@ -2560,7 +2560,6 @@ export default defineExtension({
                 wrapMode="none"
                 bg={i === cursor.index && focused ? theme.selection : undefined}
               >
-                <span fg={theme.textMuted}>{i === cursor.index ? "❯ " : "  "}</span>
                 {`stash@{${s.index}} ${s.message}`}
               </text>
             ))}

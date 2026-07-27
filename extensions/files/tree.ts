@@ -65,17 +65,23 @@ function segmentsOf(path: string): readonly string[] {
 }
 
 /**
- * Sibling order: by full node path, code-unit, case-sensitive, files and directories
- * interleaved — lazygit's default.
+ * Sibling order: every directory first, then every file, each group by full node path,
+ * code-unit, case-sensitive.
  *
- * Comparing full paths rather than labels is what gets `b` before `b.txt`: `/` (0x2F) sorts
- * after `.` (0x2E), so the *file* `b.txt` would otherwise be emitted before the *directory*
- * `b` whose own rows are `b/…`, and a directory's rows would not be contiguous with it.
- * The parser already sorts its entries this way, but insertion order alone cannot produce
- * sibling order — the directory `b` is created when `b/a.txt` arrives, which is after
- * `b.txt`.
+ * Folders-first is lazygit's `fileTreeSortOrder: foldersFirst`, not its default — the
+ * default interleaves them, which puts a repository's root files (`README.md`, `package.json`)
+ * above the folders holding everything you actually changed. Splitting on kind is what puts
+ * the shallow rows at the bottom, where the eye lands after walking the tree.
+ *
+ * Comparing full paths rather than labels still matters within each group: two directories
+ * sharing a parent compare the same either way, but `b/` and `b.txt` do not — `/` (0x2F)
+ * sorts after `.` (0x2E) — and the kind split is what decides that pair now anyway. The
+ * parser already sorts its entries by path, but insertion order alone cannot produce sibling
+ * order: the directory `b` is created when `b/a.txt` arrives, which is after `b.txt`.
  */
 function byPath(left: TreeNode, right: TreeNode): number {
+  const leftIsDirectory = left.kind === "directory"
+  if (leftIsDirectory !== (right.kind === "directory")) return leftIsDirectory ? -1 : 1
   return left.path < right.path ? -1 : left.path > right.path ? 1 : 0
 }
 

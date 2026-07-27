@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll } from "bun:test"
+import { RGBA } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createRoot, type Root } from "@opentui/react"
 import { ensureRuntimePluginSupport } from "@opentui/react/runtime-plugin-support/configure"
@@ -206,4 +207,36 @@ export async function writeExtension(directory: string, name: string, source: st
 
 export function frame(harness: Harness): string {
   return harness.setup.captureCharFrame()
+}
+
+/**
+ * The rows currently painted with the selection colour, trimmed, in screen order.
+ *
+ * The list Panes draw no cursor marker any more — the highlight *is* the cursor — so
+ * `captureCharFrame` cannot see where the cursor is, and a test that asserted on a `❯`
+ * would be asserting on a glyph nothing draws. This reads the same fact off the styled
+ * capture instead, which is a stronger claim than the marker ever was: it proves the row
+ * the user actually sees lit, in the colour the theme says lights it.
+ *
+ * A list, not a single row, because "exactly one row is lit" is itself worth asserting —
+ * two Panes lighting a row at once is the bug this would catch.
+ *
+ * Only the spans carrying the selection colour are joined, not the whole terminal line: a
+ * screen line crosses every column, so taking the line would append whatever the diff Pane
+ * happens to be drawing beside the row.
+ */
+export function highlighted(harness: Harness): readonly string[] {
+  const selection = RGBA.fromHex(harness.kernel.theme.getSnapshot().selection)
+  return harness.setup
+    .captureSpans()
+    .lines.map((line) =>
+      line.spans
+        .filter((span) => span.bg?.equals(selection) === true)
+        .map((span) => span.text)
+        .join("")
+        // Trailing only. The leading columns are a row's status pair, and `" M x"` versus
+        // `"M  x"` is the difference between an unstaged and a staged file.
+        .replace(/\s+$/, ""),
+    )
+    .filter((text) => text.trim().length > 0)
 }

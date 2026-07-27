@@ -3,9 +3,17 @@ import { TerminalControl, type Session } from "@kitlangton/terminal-control"
 import { chmod, mkdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
+import { defaultTheme } from "../../packages/core/src/extension/theme"
 import { addOrigin, createTestRepo, registerRepoCleanup, type TestRepo } from "../../packages/core/src/git/test-repo"
 
 registerRepoCleanup()
+
+/** The selection colour the app is actually running with — no config here overrides it. */
+const selection = {
+  r: Number.parseInt(defaultTheme.selection.slice(1, 3), 16),
+  g: Number.parseInt(defaultTheme.selection.slice(3, 5), 16),
+  b: Number.parseInt(defaultTheme.selection.slice(5, 7), 16),
+}
 
 const entrypoint = resolve(import.meta.dir, "..", "..", "packages", "core", "src", "main.tsx")
 const specification = resolve(import.meta.dir, "..", "..", "docs", "extension-api.md")
@@ -104,6 +112,53 @@ async function waitForScreen(
   }
 }
 
+/**
+ * The row the focused Pane has lit, read off the terminal's own cells.
+ *
+ * The list Panes draw no cursor marker: the selection highlight *is* the cursor, and a
+ * screen-text assertion cannot see a colour. This is the only place that highlight is
+ * checked against a real terminal — a unit test reads OpenTUI's buffer, which is one layer
+ * above the escape sequences a terminal has to receive and reassemble.
+ *
+ * Matched on the default preset's own `selection` token, byte for byte. That is the second
+ * thing this proves: laziergit writes 24-bit colour, and a terminal that quantised it on the
+ * way through — or a preset whose selection stopped being distinguishable — fails here
+ * rather than in someone's eyes.
+ */
+async function selectedRow(session: Session): Promise<string> {
+  const frame = await session.screen.frame()
+  const rows = new Map<number, { x: number; text: string }[]>()
+  for (const cell of frame.cells) {
+    if (cell.background.r !== selection.r) continue
+    if (cell.background.g !== selection.g || cell.background.b !== selection.b) continue
+    const row = rows.get(cell.y) ?? []
+    row.push({ x: cell.x, text: cell.text })
+    rows.set(cell.y, row)
+  }
+
+  // The widest run wins: only one Pane has focus, so only one row is lit — but a popup's
+  // own selected line is drawn in the same colour, and it is the shorter of the two.
+  const widest = [...rows.values()].sort((left, right) => right.length - left.length)[0] ?? []
+  return widest
+    .sort((left, right) => left.x - right.x)
+    .map((cell) => cell.text)
+    .join("")
+    .trim()
+}
+
+async function waitForSelectedRow(session: Session, text: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let last = ""
+  for (;;) {
+    last = await selectedRow(session)
+    if (last.includes(text)) return
+    if (Date.now() > deadline) {
+      throw await terminalFailure(session, `the highlighted row to be "${text}" (it was "${last}")`, undefined)
+    }
+    await Bun.sleep(100)
+  }
+}
+
 async function inTerminal(
   repo: TestRepo,
   run: (session: Session) => Promise<void>,
@@ -188,28 +243,29 @@ describe("laziergit through a real terminal", () => {
     await inTerminal(
       repo,
       async (session) => {
-        await waitForText(session, "❯ ?? row00.txt")
+        await waitForSelectedRow(session, "?? row00.txt")
 
         await session.keyboard.press("ArrowDown")
-        await waitForText(session, "❯ ?? row01.txt")
+        await waitForSelectedRow(session, "?? row01.txt")
         await session.keyboard.press("ArrowUp")
-        await waitForText(session, "❯ ?? row00.txt")
+        await waitForSelectedRow(session, "?? row00.txt")
 
         await session.keyboard.type("j")
-        await waitForText(session, "❯ ?? row01.txt")
+        await waitForSelectedRow(session, "?? row01.txt")
         await session.keyboard.type("k")
-        await waitForText(session, "❯ ?? row00.txt")
+        await waitForSelectedRow(session, "?? row00.txt")
 
         await session.keyboard.type("G")
         const last = await waitForScreen(
           session,
           "the last file and its diff to be visible",
-          (screen) => screen.includes("❯ ?? row29.txt") && screen.includes("working tree row29.txt"),
+          (screen) => screen.includes("?? row29.txt") && screen.includes("working tree row29.txt"),
         )
         expect(last).not.toContain("row00.txt")
+        await waitForSelectedRow(session, "?? row29.txt")
 
         await session.keyboard.type("g")
-        await waitForText(session, "❯ ?? row00.txt")
+        await waitForSelectedRow(session, "?? row00.txt")
       },
       { viewport: { cols: 120, rows: 24 } },
     )
@@ -229,7 +285,9 @@ describe("laziergit through a real terminal", () => {
     await repo.write("pkg/sub/b.txt", "b\n")
 
     await inTerminal(repo, async (session) => {
-      await waitForText(session, "❯ ▾  pkg")
+      // Also the only check that the full-size triangles are one cell wide in a real
+      // terminal: at two they would push the status columns beside them off their grid.
+      await waitForText(session, "▼  pkg")
       expect(await session.screen.text()).toContain("a.txt")
 
       // The descendants go with it, the compressed `sub` chain included.
@@ -237,12 +295,12 @@ describe("laziergit through a real terminal", () => {
       const folded = await waitForScreen(
         session,
         "the folder to collapse and take its files with it",
-        (screen) => screen.includes("❯ ▸  pkg") && !screen.includes("a.txt"),
+        (screen) => screen.includes("▶  pkg") && !screen.includes("a.txt"),
       )
       expect(folded).not.toContain("b.txt")
 
       await session.keyboard.press("Enter")
-      await waitForText(session, "❯ ▾  pkg")
+      await waitForText(session, "▼  pkg")
     })
   }, 20_000)
 
@@ -378,16 +436,17 @@ describe("laziergit through a real terminal", () => {
         // tail never reaches the screen. Without `wrapMode="none"` it reflows and TAIL shows.
         expect(listed).not.toContain("TAIL")
 
-        // Tab reaches it, and the cursor it got from `useListCursor` walks and marks rows.
+        // Tab reaches it, and the cursor it got from `useListCursor` walks and lights rows —
+        // the example draws the highlight and nothing else, exactly as the bundled Panes do.
         await session.keyboard.press("Tab")
-        await waitForText(session, "❯ ✓ verify — first run")
+        await waitForSelectedRow(session, "✓ verify — first run")
         // `hint` on the user's own Command reaches the bottom row, like any bundled one.
         await waitForText(session, "o open")
 
         await session.keyboard.type("j")
-        await waitForText(session, "❯ ✗ verify — second run")
+        await waitForSelectedRow(session, "✗ verify — second run")
         await session.keyboard.type("G")
-        await waitForText(session, "❯ ●")
+        await waitForSelectedRow(session, "●")
 
         // The user's Command is on the focused Pane's cheat sheet, under the extension's name.
         await session.keyboard.type("?")
