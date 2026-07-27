@@ -1149,6 +1149,20 @@ tagged with the extension name, and routed to the log file / debug pane.
   }
 ```
 
+**The number row belongs to core.** `1`–`9` focus the first nine Panes of the Layout in
+reading order — columns left to right, cells top to bottom, tabs in the order their cell
+lists them — and a Pane behind a tab is reached the same way, with the jump bringing it to
+the front. Nothing an Extension does earns or claims a digit, which is the point: your Pane
+is reachable the moment a Layout places it, and cannot collide with another Extension that
+guessed the same number. The commands are `app.focus.1` … `app.focus.9` and rebindable like
+any other; their titles follow the Panes they currently point at, so the cheat sheet reads
+`1 Focus Files`, `2 Focus Branches`, and so on.
+
+Register a focus command of your own anyway, without `keys` — the bundled Panes all do
+(`files.focus`, `branches.focus`, …). It costs nothing, gives the palette a row that names
+your Pane, and gives a user an id to bind a key they chose to a Pane they chose, which a
+positional jump cannot.
+
 ### 1.8 Panes and the React surface
 
 ```ts
@@ -2791,7 +2805,11 @@ keys are global commands and this is the only place they are written down.
 
 Unlike the palette, the sheet keeps `hidden` commands: `j`/`k`/`g` are exactly what someone
 opening it wants confirmed, and the compact answer for everything else is now the hint bar
-(§1.7), which leaves the sheet free to be the complete one.
+(§1.7), which leaves the sheet free to be the complete one. The pane-jump keys are the other
+reason that rule earns its keep — they are `hidden`, because nine "Focus …" rows beside every
+pane's own focus command would drown the palette, and the sheet is where they have to be
+legible. The sheet sizes its window to the terminal for the same reason: an answer you have
+to scroll to reach is only half an answer.
 
 ### 5.9 Error containment
 

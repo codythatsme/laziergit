@@ -545,6 +545,8 @@ describe("what the files pane publishes", () => {
     await write(harness, "loose.txt", "untracked\n")
 
     await renderApp(harness)
+    // The jump key reaches this Pane even though it starts behind the diff tab — a hidden
+    // tab has a digit like any other Pane, and using it brings the tab to the front.
     await focusFiles(harness)
     await press(harness, "V")
     expect(frame(harness)).toContain("selected loose.txt")

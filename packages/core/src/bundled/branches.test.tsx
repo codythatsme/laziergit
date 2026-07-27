@@ -104,8 +104,9 @@ async function press(harness: Harness, action: () => void): Promise<void> {
  *
  * Startup focus is the Layout's first cell — not whichever Extension activated first — so
  * a test that needs the branches Pane *unfocused* writes a Layout that puts the diff Pane
- * in front of it. The branches case still presses `2`: it is the key a user reaches for,
- * and one of the things under test.
+ * in front of it. The branches case still presses a jump key: it is what a user reaches for,
+ * and one of the things under test. `1`, not the `2` this Pane used to claim for itself —
+ * core numbers the cells of the Layout now, and here the branches Pane is the first of them.
  *
  * `"tabbed"` puts both Panes in one cell, where `]` hides — and therefore unmounts — the one
  * that was showing. That is the only way a user makes this Pane go away without quitting.
@@ -123,7 +124,7 @@ async function start(harness: Harness, focus: "branches" | "diff" | "tabbed" = "
     writeFile(harness.configFiles.repo, `{ "layout": { "columns": ${columns} } }`),
   ])
   await renderApp(harness)
-  if (focus === "branches") await press(harness, () => harness.setup.mockInput.pressKey("2"))
+  if (focus === "branches") await press(harness, () => harness.setup.mockInput.pressKey("1"))
 }
 
 /** Waits for work a keypress started — a git write, then the refresh and render behind it. */

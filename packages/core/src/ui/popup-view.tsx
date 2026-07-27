@@ -1,3 +1,4 @@
+import { useTerminalDimensions } from "@opentui/react"
 import { useBindings } from "@opentui/keymap/react"
 import { useMemo, useRef, useState, type ReactNode } from "react"
 import { useTheme, type Theme } from "laziergit"
@@ -17,6 +18,26 @@ import { useStore } from "./use-store"
 
 const popupWidth = 64
 const visibleRows = 10
+
+/**
+ * The rows a popup frame spends on itself: two borders, the padding line under the title,
+ * and the footer with its margin. Subtracted from the terminal height, plus a little air, to
+ * size a list that would otherwise scroll for no reason.
+ */
+const popupChrome = 5
+
+/**
+ * How many rows the cheat sheet may draw, given the terminal it is drawn in.
+ *
+ * A fixed window was fine while the globals were seven lines; it stopped being fine the
+ * moment the pane-jump keys joined them, because the sheet's whole job is to answer "what
+ * can I press" and the answer had grown past the window. A floor of six keeps it a popup
+ * rather than a full-screen takeover on a very short terminal, where scrolling is the
+ * honest fallback.
+ */
+function sheetRows(height: number): number {
+  return Math.max(6, height - popupChrome - 4)
+}
 
 /** Keeps the cursor inside a scrolling window without moving it more than it must. */
 function windowStart(count: number, cursor: number, size: number): number {
@@ -275,6 +296,7 @@ function ActionsView({ popup, theme }: { popup: ActionsPopup; theme: Theme }) {
 
 function CheatSheetView({ popup, theme }: { popup: CheatSheetPopup; theme: Theme }) {
   const [offset, setOffset] = useState(0)
+  const window = sheetRows(useTerminalDimensions().height)
   const rows = popup.sections.flatMap((section) => [
     { kind: "section" as const, text: section.title },
     ...section.entries.map((entry) => ({
@@ -282,8 +304,10 @@ function CheatSheetView({ popup, theme }: { popup: CheatSheetPopup; theme: Theme
       text: `  ${entry.keys.join(" / ").padEnd(12)} ${entry.title}`,
     })),
   ])
-  const state = useRef({ rows: rows.length, offset })
-  state.current = { rows: rows.length, offset }
+  // The window is read through a ref rather than closed over, so a resize while the sheet is
+  // open cannot leave the down key scrolling against the height the terminal used to have.
+  const state = useRef({ rows: rows.length, window, offset })
+  state.current = { rows: rows.length, window, offset }
 
   useBindings(
     () => ({
@@ -294,7 +318,8 @@ function CheatSheetView({ popup, theme }: { popup: CheatSheetPopup; theme: Theme
         { key: "up", cmd: () => setOffset((current) => Math.max(0, current - 1)) },
         {
           key: "down",
-          cmd: () => setOffset((current) => Math.min(Math.max(0, state.current.rows - visibleRows), current + 1)),
+          cmd: () =>
+            setOffset((current) => Math.min(Math.max(0, state.current.rows - state.current.window), current + 1)),
         },
       ],
     }),
@@ -303,7 +328,7 @@ function CheatSheetView({ popup, theme }: { popup: CheatSheetPopup; theme: Theme
 
   return (
     <PopupFrame title={popup.title} footer="↑↓ scroll  ·  escape close" theme={theme}>
-      {rows.slice(offset, offset + visibleRows).map((row, index) => (
+      {rows.slice(offset, offset + window).map((row, index) => (
         <text
           key={offset + index}
           content={row.text}

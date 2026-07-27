@@ -201,6 +201,23 @@ export class LayoutHost {
     return this.#cells().flatMap((cell) => cell.paneIds.filter((paneId) => this.#isLive(paneId)))
   }
 
+  /**
+   * Focuses the nth Pane of {@link liveTabs}, 0-based — the Pane the nth jump key names.
+   *
+   * Panes rather than cells, and the difference is a whole Layout: a cell holding four tabs
+   * would be *one* jump target showing whichever tab it last had, leaving the other three
+   * with no key at all. Numbering Panes gives every one of them exactly one digit, and
+   * {@link focus} already brings a hidden tab to the front on the way.
+   *
+   * An index past the end does nothing rather than throwing: the Command carrying it can
+   * outlive the Pane it was registered for by the width of a reload, and a stale keypress is
+   * a miss, not a programming error.
+   */
+  focusAt(index: number): void {
+    const paneId = this.liveTabs()[index]
+    if (paneId !== undefined) this.focus(paneId)
+  }
+
   focus(paneId: string): void {
     if (!this.#isLive(paneId)) throw new Error(`Pane "${paneId}" has no live instance`)
     const cell = this.#cells().find((candidate) => candidate.paneIds.includes(paneId))
