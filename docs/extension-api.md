@@ -24,7 +24,7 @@ same shape, shipped inside the distribution rather than these directories.)
 | Entry point | `defineExtension()` — one function, six fields |
 | `ctx` | eleven members — `config` · `git` · `events` · `commands` · `panes` · `menus` · `popups` · `statusline` · `extensions` · `effect` · `signal` — plus four methods: `exec()`, `open()`, `copy()`, `onDispose()` |
 | React hooks | `useGit`, `useGitActivity`, `useEvent`, `useCommand`, `useTheme`, and the pane-building `useListCursor`, `useScrollView`, `useKeyCapture` — 8 hooks (plus `createCell` for activate → component data) |
-| Pure helpers | `option` (config), `toneColor` + `createRowSource` (row decorations), `literalPathspec` (pathspec safety), `describeGitFailure` (what to show when git says no) — plain functions, no runtime |
+| Pure helpers | `option` (config), `toneColor` + `createRowSource` (row decorations), `literalPathspec` (pathspec safety), `describeGitFailure` (what to show when git says no), `remoteWebUrl` (a remote's browsable page) — plain functions, no runtime |
 | Augmentable registries | `ExtensionApis`, `EventMap`, `MenuMap` — 3 interfaces, one pattern |
 | Everything else | plain data types |
 
@@ -68,7 +68,7 @@ The smallest complete extension (a palette command that opens the repo on GitHub
 
 ```ts
 // ~/.config/laziergit/extensions/open-remote.ts
-import { defineExtension } from "laziergit";
+import { defineExtension, remoteWebUrl } from "laziergit";
 
 export default defineExtension({
   name: "open-remote",
@@ -79,9 +79,11 @@ export default defineExtension({
       title: "Open repository in browser",
       keys: "go",
       run: async () => {
-        const url = ctx.git.state.remotes[0]?.fetchUrl
-          .replace(/^git@(.+?):/, "https://$1/")
-          .replace(/\.git$/, "");
+        // `remoteWebUrl` prefers `origin` and knows the ssh, `ssh://` and HTTP(S) spellings;
+        // it returns null for a remote with no web page at all (§1.5). Reaching for
+        // `remotes[0]` and rewriting the URL by hand is the wrong answer the moment a fork
+        // is added — which is exactly why this is public API rather than a snippet.
+        const url = remoteWebUrl(ctx.git.state.remotes);
         if (url) await ctx.open(url); // cross-platform: open / xdg-open / start
         else ctx.popups.notify("No remote configured", "warning");
       },
@@ -965,6 +967,31 @@ tagged with the extension name, and routed to the log file / debug pane.
    * ```
    */
   export function literalPathspec(path: string): string;
+
+  /**
+   * The web page a repository's remotes point at, or `null` if they point at
+   * nothing browsable.
+   *
+   * The `git@host:path` → `https://host/path` transform, plus the `ssh://` and
+   * HTTP(S) spellings of the same remote. `origin` is preferred over whatever git
+   * listed first, because "the repository" means the canonical remote and
+   * `remotes[0]` is the wrong answer the moment a fork is added.
+   *
+   * Returning `null` is the point: a `file://` remote, a `git://` daemon, a bare
+   * directory or a sibling clone has no page, and `null` is what lets an "open on
+   * remote" menu item hide itself with `when` rather than hand {@link
+   * ExtensionContext.open} a directory to open in a file manager.
+   *
+   * ```ts
+   * const url = remoteWebUrl(ctx.git.state.remotes);
+   * // a commit page: `${url}/commit/${oid}`
+   * ```
+   *
+   * Public API rather than a snippet each Extension copies: two Bundled
+   * Extensions carried this transform, one menu apart, and had already diverged
+   * on the port case by the time anyone compared them (§5.11).
+   */
+  export function remoteWebUrl(remotes: readonly Remote[]): string | null;
 ```
 
 ### 1.6 Events
@@ -2153,6 +2180,9 @@ export default defineExtension({
       useCommand({
         id: "gh-workflows.open-run",
         title: "Open workflow run in browser",
+        // One registration, three surfaces: the key, the cheat sheet row, and — because it
+        // carries a `hint` — the hint bar while this pane is focused (§1.10).
+        hint: "open",
         keys: "o",
         run: async () => {
           const run = cursor.selected;
@@ -2174,12 +2204,20 @@ export default defineExtension({
         <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
           {runs.map((run, i) => {
             const { glyph, color } = icon(run, theme);
+            const selected = i === cursor.index;
             return (
+              // `wrapMode="none"` is not optional decoration: without it a long run title
+              // reflows over two lines and the list stops being a list (§1.8).
               <text
                 key={run.databaseId}
                 id={cursor.rowId(i)}
-                bg={i === cursor.index && focused ? theme.selection : undefined}
+                wrapMode="none"
+                bg={selected && focused ? theme.selection : undefined}
               >
+                {/* The marker, not the highlight, is what says where the cursor is once
+                    another Pane takes focus — and the highlight is the half a no-color
+                    terminal loses. Every bundled list Pane draws both for that reason. */}
+                <span fg={theme.textMuted}>{selected ? "❯ " : "  "}</span>
                 <span fg={color}>{glyph}</span> {run.workflowName} — {run.displayTitle}
               </text>
             );
@@ -2460,7 +2498,7 @@ export default defineExtension({
 
 ```tsx
 /** @jsxImportSource @opentui/react */
-import { defineExtension, useCommand, useGit, useTheme, type PaneProps } from "laziergit";
+import { defineExtension, useCommand, useGit, useListCursor, useTheme, type PaneProps } from "laziergit";
 import { useEffect, useState } from "react";
 
 export default defineExtension({
@@ -2470,33 +2508,52 @@ export default defineExtension({
     function StashPane({ focused }: PaneProps) {
       const theme = useTheme();
       const stash = useGit((s) => s.stash);
-      const [cursor, setCursor] = useState(0);
       const [diff, setDiff] = useState("");
-
-      const entry = stash[Math.min(cursor, stash.length - 1)];
+      // j/k/g/G, the clamp, and the scroll-into-view, in one line. This example originally
+      // hand-rolled the first two out of `useState` and two `hidden` Commands — which is
+      // exactly the duplication that made the cursor API rather than four copies (§5.11).
+      const cursor = useListCursor({ items: stash, idPrefix: "stash-preview", noun: "stash" });
+      const entry = cursor.selected;
 
       useEffect(() => {
         if (!entry) return setDiff("");
+        // `cancelled` is the async tail (§5.3): move the cursor twice quickly and two reads
+        // are in flight, so without this the slower one can land last and show the wrong
+        // stash's patch. `ctx` stays valid across the await; the *component* may not.
+        let cancelled = false;
         void ctx.git.raw(["stash", "show", "-p", `stash@{${entry.index}}`])
-          .then((out) => setDiff(out.stdout));
+          .then((out) => { if (!cancelled) setDiff(out.stdout); });
+        return () => { cancelled = true; };
       }, [entry?.oid]);
 
-      useCommand({ id: "stash-preview.next", title: "Next stash", keys: "j", hidden: true,
-        run: () => setCursor((c) => Math.min(c + 1, stash.length - 1)) });
-      useCommand({ id: "stash-preview.prev", title: "Previous stash", keys: "k", hidden: true,
-        run: () => setCursor((c) => Math.max(c - 1, 0)) });
-      useCommand({ id: "stash-preview.pop", title: "Pop stash", keys: "p",
+      // One `<diff>` renders one file (§5.11): handed a patch spanning several it draws the
+      // first and says nothing about the rest — and a stash almost always spans several. The
+      // boundary is unambiguous because `diff --git` can only begin a line at column 0 in a
+      // header; every line inside a hunk starts with ` `, `+`, `-` or `\`.
+      const files = diff.split(/^(?=diff --git )/m).filter((section) => section.trim() !== "");
+
+      useCommand({ id: "stash-preview.pop", title: "Pop stash", hint: "pop", keys: "p",
         run: async () => { if (entry) await ctx.git.stash.pop(entry.index); } });
 
       if (stash.length === 0) return <text fg={theme.textMuted}>no stashes</text>;
       return (
         <box flexDirection="column">
-          {stash.map((s, i) => (
-            <text key={s.oid} bg={i === cursor && focused ? theme.selection : undefined}>
-              {`stash@{${s.index}} ${s.message}`}
-            </text>
+          <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
+            {stash.map((s, i) => (
+              <text
+                key={s.oid}
+                id={cursor.rowId(i)}
+                wrapMode="none"
+                bg={i === cursor.index && focused ? theme.selection : undefined}
+              >
+                <span fg={theme.textMuted}>{i === cursor.index ? "❯ " : "  "}</span>
+                {`stash@{${s.index}} ${s.message}`}
+              </text>
+            ))}
+          </scrollbox>
+          {files.map((patch, i) => (
+            <diff key={i} diff={patch} view="unified" />
           ))}
-          <diff diff={diff} view="unified" />
         </box>
       );
     }

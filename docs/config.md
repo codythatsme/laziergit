@@ -160,10 +160,14 @@ so one override retints every Pane at once.
 | `refreshIntervalMs` | `2000` | How often laziergit looks for changes made outside it. 250–60000. |
 | `commitLimit` | `200` | How much of HEAD's history the git store holds. 1–5000. |
 
-laziergit does not watch `.git` for file events. Every `refreshIntervalMs` it reads the
-working-tree status and the list of every ref, and re-reads the repository only when one of
-them differs — so a `git commit`, `git checkout`, or a file edited in another terminal all
-show up within one interval. Both reads take no locks, so the poll never contends with
+laziergit does not watch `.git` for file events. Every `refreshIntervalMs` it takes a
+four-part fingerprint — the working-tree status, the list of every ref, the stash list, and
+the remote and branch configuration — and re-reads the repository only when one of them
+differs. The last two are what make the cheap checks honest: without the stash list a `git
+stash` in another terminal would leave a stale stash Pane until something else changed, and
+without the config a newly added remote or a re-pointed upstream would never show. So a `git
+commit`, `git checkout`, a `git stash`, a `git remote add`, or a file edited in another
+terminal all show up within one interval. Both reads take no locks, so the poll never contends with
 your own `git` and never triggers itself. Raising the interval on a very large repository
 trades promptness for fewer reads; the screen still refreshes immediately after anything
 laziergit itself does.
