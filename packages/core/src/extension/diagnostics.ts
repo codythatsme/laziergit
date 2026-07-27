@@ -72,9 +72,9 @@ export function normalizeError(error: unknown): Error {
 }
 
 /**
- * The `code` an operating-system failure carries, narrowed structurally. `NodeJS.ErrnoException`
- * describes what a syscall promises to throw, not what actually arrives in a `catch`, so asserting
- * a caught value to it would report a `code` for values that never had one.
+ * The `code` an operating-system failure carries, narrowed structurally.
+ * `NodeJS.ErrnoException` describes what a syscall promises to throw, not what actually
+ * arrives in a `catch`, so asserting to it would report a `code` for values that never had one.
  */
 export function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined

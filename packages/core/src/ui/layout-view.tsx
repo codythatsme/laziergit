@@ -57,8 +57,7 @@ function PaneFrame({
     >
       {active.state === "reloading" ? (
         // Top-left and muted, in the slot the Pane's first row just vacated: centring it made
-        // the text jump to the middle of the frame and change colour for the half-second a
-        // reload takes, which reads as something going wrong rather than something reloading.
+        // the text jump and change colour for the half-second a reload takes.
         <text content="reloading…" style={{ fg: theme.textMuted }} />
       ) : (
         <Slot
@@ -111,9 +110,8 @@ export function LayoutView({ layout, panes, fallback }: { layout: LayoutHost; pa
   return (
     <box flexGrow={1} flexDirection="row">
       {view.layout.columns.map((column, index) => (
-        // Cells stack border-to-border. A blank row between them cost a short Pane a third of
-        // its content — at 24 rows a four-cell column spent three of them on nothing — and
-        // rounded borders already separate one Pane from the next perfectly well.
+        // Cells stack border-to-border: a blank row between them cost a short Pane a third of
+        // its content, and rounded borders already separate one Pane from the next.
         <box key={`column-${index}`} flexGrow={column.weight} flexBasis={0} flexDirection="column">
           {column.cells.map((cell) => {
             const entries = cell.paneIds.flatMap((paneId) => {

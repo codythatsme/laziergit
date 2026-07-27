@@ -53,12 +53,7 @@ function state(service: GitService): GitState {
   return service.getSnapshot()
 }
 
-/**
- * The four questions the status's old four arrays answered, over the one list that replaced
- * them (ADR-0005). A path both staged and edited since appears in `stagedPaths` *and*
- * `unstagedPaths`, which is the same file counted twice — that is what the model now says
- * out loud rather than encoding as two objects in two arrays.
- */
+/** A path both staged and edited since appears in `stagedPaths` *and* `unstagedPaths`. */
 function pathsWhere(service: GitService, predicate: (change: FileChange) => boolean): readonly string[] {
   return state(service)
     .status.files.filter(predicate)
@@ -75,10 +70,7 @@ function fileAt(service: GitService, path: string): FileChange | undefined {
   return state(service).status.files.find((file) => file.path === path)
 }
 
-/**
- * Narrows HEAD to the branch-with-commits variant, so a test asserting on an oid or an
- * upstream fails on the wrong variant instead of never compiling.
- */
+/** Narrows HEAD, so a test asserting on an oid fails on the wrong variant rather than not compiling. */
 function onBranch(head: Head): Extract<Head, { kind: "onBranch" }> {
   if (head.kind !== "onBranch") throw new Error(`Expected HEAD on a branch, got "${head.kind}"`)
   return head
@@ -107,7 +99,6 @@ it("reads a repository with no commits without failing on `git log`", async () =
   const service = await open(repo.path)
 
   // git reports `(initial)` where the oid would be, and `git log` exits 128 outright.
-  // HEAD is still symbolic here, which is why the unborn variant carries a branch name.
   expect(state(service).head).toEqual({ kind: "unborn", branch: "main" })
   expect(state(service).commits).toEqual([])
   expect(untrackedPaths(service)).toEqual(["untracked.txt"])
@@ -152,8 +143,7 @@ it("classifies staged, unstaged, untracked, and renamed paths", async () => {
     index: "added",
     worktree: null,
   })
-  // Staged and then edited again: one entry, both columns filled. This is the shape the
-  // four-array model had to express as two objects in two arrays.
+  // Staged and then edited again: one entry, both columns filled.
   expect(fileAt(service, "seed.txt")).toEqual({
     kind: "changed",
     path: "seed.txt",
@@ -188,8 +178,7 @@ it("records conflicted paths without also staging them", async () => {
   await repo.git("merge", "other").catch(() => undefined)
 
   const service = await open(repo.path)
-  // Both sides modified the file, and the entry says so — which side did what is the whole
-  // content of a conflicted row, and it survives the parse now.
+  // Which side did what is the whole content of a conflicted row.
   expect(fileAt(service, "seed.txt")).toEqual({
     kind: "conflicted",
     path: "seed.txt",
@@ -223,9 +212,7 @@ it("tells an unborn HEAD apart from the branch it used to be indistinguishable f
   const unborn = state(await open((await createTestRepo()).path)).head
   const born = state(await open((await createSeededRepo()).path)).head
 
-  // Both are on `main`, and the old encoding said so identically — same shape, same
-  // `detached: false`, an oid of `""` that a consumer could still hand to git. The variant
-  // is now the difference, and there is no oid on the unborn one to misread.
+  // Both are on `main`; the variant is the only difference, and the unborn one has no oid.
   expect(unborn).toEqual({ kind: "unborn", branch: "main" })
   expect("oid" in unborn).toBe(false)
   expect(born.kind).toBe("onBranch")
@@ -243,9 +230,8 @@ it("tells an upstream deleted on the remote apart from one that is in sync", asy
   const service = await open(repo.path)
   const upstreamOf = (name: string) => state(service).branches.find((branch) => branch.name === name)?.upstream
 
-  // git reports `gone` instead of a divergence, so both branches read as zero ahead and
-  // zero behind — `gone` is the entire difference between "the remote deleted this" and
-  // "nothing to do", which is the distinction a branches Pane most needs to draw.
+  // git reports `gone` instead of a divergence, so both branches read as zero ahead and zero
+  // behind, and the flag is the entire difference.
   expect(upstreamOf("feature")).toEqual({ remote: "origin", branch: "feature", gone: true, ahead: 0, behind: 0 })
   expect(upstreamOf("main")).toEqual({ remote: "origin", branch: "main", gone: false, ahead: 0, behind: 0 })
 })
@@ -329,9 +315,8 @@ it("republishes after a write that failed, because a failed write still moved th
   const failure = await service.stash.pop().catch((error: unknown) => error)
   if (!(failure instanceof GitError)) throw new Error(`Expected a GitError, got ${String(failure)}`)
 
-  // The pop rejected, but it wrote conflict markers and recorded the conflict on the way
-  // out. Refreshing on the success channel alone would leave the store reporting a clean
-  // tree over a repository mid-conflict.
+  // The pop rejected, but wrote conflict markers on the way out. Refreshing on the success
+  // channel alone would leave the store reporting a clean tree over a mid-conflict repository.
   expect(conflictedPaths(service)).toEqual(["seed.txt"])
   expect(state(service).status.isClean).toBe(false)
 })
@@ -511,8 +496,8 @@ it("classifies a read that is only a read in combination, and one behind a globa
 it("resolves a write's own refresh against reads taken after the write", async () => {
   const repo = await createSeededRepo()
   const service = await open(repo.path)
-  // Hold a refresh open so the write below lands mid-pass, where a coalescing bug would
-  // hand it the in-flight pass whose reads predate it.
+  // Hold a refresh open so the write lands mid-pass, where a coalescing bug would hand it the
+  // in-flight pass whose reads predate it.
   const inFlight = service.refresh()
   await repo.write("late.txt", "late\n")
   await service.stage(["late.txt"])
@@ -546,10 +531,9 @@ it("passes stdin through to git", async () => {
 })
 
 /**
- * The diff Pane reads the file a patch section is about out of its `+++ b/` header, so any of
- * git's prefix settings would rename every file in a multi-file diff to "(unnamed)". All four
- * are set at once because each pin is what defeats the setting of the same name: drop any one
- * of them and this repository's config renames the prefixes again.
+ * The diff Pane reads a section's filename out of its `+++ b/` header, so any of git's prefix
+ * settings would rename every file in a multi-file diff to "(unnamed)". All four are set at
+ * once because each pin defeats the setting of the same name.
  */
 it("keeps the a/ and b/ patch prefixes whatever the repository's own diff config says", async () => {
   const repo = await createSeededRepo()
@@ -569,10 +553,8 @@ it("keeps the a/ and b/ patch prefixes whatever the repository's own diff config
 // ---- activity -------------------------------------------------------------------------
 
 /**
- * The reason activity is tracked here rather than by whoever called: every route to git passes
- * through this class, so a commit held open by a hook is reported whether it came from
- * `commit-flow`, from the branches menu, or from an Extension nobody has written yet. No
- * Extension opts in, and none can forget.
+ * Every route to git passes through this class, so a commit held open by a hook is reported
+ * whichever Extension started it, and none has to opt in.
  */
 it("announces a write while it runs, whichever caller started it", async () => {
   const repo = await createSeededRepo()

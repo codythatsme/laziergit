@@ -7,13 +7,9 @@ type Finalizer = () => void | Promise<void>
 
 /**
  * How far through its life one tracked finalizer is, as one shape per phase: the callback
- * exists exactly while it is still owed a call, and the completion promise exactly while
- * there is a run for a second caller to wait on. Carrying them as independent fields would
- * make "running with nothing to await" and "pending with nothing to run" expressible, and
- * every reader would then owe them a fallback. `detached` (the supervised promise settled
- * first, so the cleanup is moot) and `done` (the finalizer ran) are the two ways of being
- * over; nothing branches on which, but they are kept apart because they say different
- * things about how a record got here.
+ * exists exactly while it is still owed a call, and the completion promise exactly while there
+ * is a run for a second caller to wait on. Independent fields would make "running with nothing
+ * to await" expressible, and every reader would owe it a fallback.
  */
 type FinalizerPhase =
   | { readonly kind: "pending"; readonly finalizer: Finalizer }
@@ -103,18 +99,16 @@ export class ActivationScope {
   }
 
   /**
-   * Runs a fully-provided Effect under this activation's lifetime — the one door behind
-   * `ctx.effect.runPromise`. The scope's AbortSignal is handed to the runtime, so closing
-   * the scope interrupts the fiber for real (finalizers included) rather than merely
-   * abandoning its result; {@link supervise} then parks the promise, so the interruption
-   * never surfaces as a rejection in Extension code.
+   * Runs a fully-provided Effect under this activation's lifetime — the door behind
+   * `ctx.effect.runPromise`. The scope's AbortSignal goes to the runtime, so closing the scope
+   * interrupts the fiber for real; {@link supervise} then parks the promise, so the
+   * interruption never surfaces as a rejection in Extension code.
    */
   runEffect<A, E>(effect: Effect.Effect<A, E, never>): Promise<A> {
     this.assertActive()
     const running = Effect.runPromise(effect, { signal: this.#controller.signal })
-    // Tracked as a finalizer as well as supervised, so `close()` waits for the fiber to
-    // finish unwinding — an interrupted fiber's own finalizers (a killed child process,
-    // a released resource) must complete before the extension is declared torn down.
+    // Tracked as a finalizer as well as supervised, so `close()` waits for the fiber's own
+    // finalizers — a killed child process, a released resource — to finish unwinding.
     const settled = this.track(() => running.then(undefined, () => undefined))
     return this.supervise(running.finally(() => settled.dispose()))
   }
@@ -183,8 +177,7 @@ export class ActivationScope {
     const completion = new Promise<void>((resolve) => {
       resolveCompletion = resolve
     })
-    // Only now is the record running: the phase and the promise a second caller awaits are
-    // published together, so no window exists in which one is set without the other.
+    // Phase and promise are published together, so no window exists with one but not the other.
     record.phase = { kind: "running", completion }
 
     const finish = () => {

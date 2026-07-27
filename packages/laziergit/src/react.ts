@@ -4,13 +4,8 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncE
 import type { HostRuntime, PaneRuntime } from "./host"
 import type { Cell, CommandSpec, EventMap, GitActivity, GitState, Theme } from "./types"
 
-/**
- * The two React contexts carry `unknown` — they live in the bridge package precisely so
- * this package and the host never import each other's types — so this file is the boundary
- * where they become typed, and a boundary is parsed rather than asserted. The guards check
- * only what these hooks actually reach for: a lie about anything deeper would be a lie the
- * host told itself, not one an Extension can construct.
- */
+// The bridge's contexts carry `unknown`, so this file is where they become typed — parsed
+// rather than asserted. The guards check only what these hooks reach for.
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
@@ -63,16 +58,10 @@ function useEnclosingPane(hook: string): { readonly extension: string; readonly 
 /**
  * Selector-aware `useSyncExternalStore`.
  *
- * Two layers of memoization, and both are load-bearing. Within one selector identity the
- * selection is computed once per store snapshot — React calls `getSnapshot` several times
- * per render, and the store guarantees a stable snapshot object between publishes, so the
- * selector runs once. Across renders, `committed` carries the value React last rendered,
- * which is what `isEqual` compares against: that is what keeps a derived object (`(s) =>
- * s.status.staged.map(...)`) from re-rendering forever, even though an inline selector has
- * a fresh identity on every render and resets the inner memo.
- *
- * Keying the memo on `selector` is what makes a selector that closes over props correct —
- * a changed selector must not keep returning the previous one's value.
+ * Two layers of memoization. The inner one runs the selector once per store snapshot, since
+ * React calls `getSnapshot` several times a render. The outer one — `committed`, the value
+ * React last rendered — is what `isEqual` compares against, which is what stops a selector
+ * deriving a fresh object from re-rendering forever.
  */
 export function useGit<T>(selector: (state: GitState) => T, isEqual: (a: T, b: T) => boolean = Object.is): T {
   const runtime = useRuntime()
@@ -87,8 +76,6 @@ export function useGit<T>(selector: (state: GitState) => T, isEqual: (a: T, b: T
 
       const next = selector(state)
       const previous = committed.current
-      // Reuse the rendered value when the selection is equivalent, so the identity React
-      // compares against stays put.
       const value = previous !== null && isEqual(previous.value, next) ? previous.value : next
       memoized = { state, value }
       return value
@@ -103,17 +90,9 @@ export function useGit<T>(selector: (state: GitState) => T, isEqual: (a: T, b: T
 }
 
 /**
- * The git writes in flight right now, oldest first — so `.at(-1)` is the one that started most
- * recently, which is what a one-line surface should name when two overlap.
- *
- * Every write goes through core, so this sees all of them wherever they were invoked from: a
- * `push` from the sync Command, the one buried in the branches menu, a `commit` held up by a
- * pre-commit hook, a `raw(["merge", …])` an Extension built itself. Nothing has to opt in, and
- * an Extension cannot leave its own work unreported.
- *
- * Reads never appear, and neither does the background poll. An operation that settles inside
- * ~120ms never appears either, which is what makes this safe to render directly — no debounce
- * of your own, no spinner blinking once per staged hunk.
+ * The git writes in flight right now, oldest first, wherever they were invoked from. Reads,
+ * the background poll, and anything settling inside ~120ms never appear — so this is safe to
+ * render directly, with no debounce of your own.
  *
  * ```tsx
  * const [busy] = useGitActivity().slice(-1);
@@ -122,9 +101,6 @@ export function useGit<T>(selector: (state: GitState) => T, isEqual: (a: T, b: T
  */
 export function useGitActivity(): readonly GitActivity[] {
   const runtime = useRuntime()
-  // Passed through unwrapped: the store returns the same frozen array between publishes, so
-  // React sees a stable identity and a fresh closure per render would only churn the
-  // subscription — the same reason `useTheme` hands over bound methods.
   return useSyncExternalStore(runtime.activity.subscribe, runtime.activity.getSnapshot, runtime.activity.getSnapshot)
 }
 
@@ -148,18 +124,10 @@ export function useEvent<K extends keyof EventMap & string>(
 /**
  * Registers a Pane-scoped Command for as long as the component is mounted.
  *
- * Only `run` is live: it is read through a ref, so it always sees the current render's
- * closure and a Command never acts on stale state. The rest of the spec — `title`, `hint`,
- * `keys`, `hidden`, `capture` — is read once, at registration, and a later render changing
- * one of them does not re-register.
- *
- * That is deliberate rather than pending. Re-registering on every spec change would reorder
- * {@link CommandSpec.keys} conflict resolution, which is insertion-ordered, so a Pane that
- * recomputed a title would be able to take a key away from another Pane mid-session —
- * trading a stale cheat-sheet label for nondeterministic key ownership. `keys` is a default
- * the user's config overrides anyway (§1.7), and dynamic capture belongs to
- * {@link useKeyCapture} (§5.8). A Command whose *identity* changes should change its `id`,
- * which does re-register.
+ * Only `run` is live, read through a ref so it never acts on stale state. The rest of the spec
+ * is read once at registration: re-registering would reorder {@link CommandSpec.keys} conflict
+ * resolution, which is insertion-ordered, letting a recomputed title take a key from another
+ * Pane mid-session. A Command whose identity changes should change its `id`.
  */
 export function useCommand(spec: Omit<CommandSpec, "pane">): void {
   const runtime = useRuntime()
@@ -177,16 +145,12 @@ export function useCommand(spec: Omit<CommandSpec, "pane">): void {
 }
 
 /**
- * Claim raw keyboard input for the enclosing Pane while `active` — for a Pane that renders
- * its own `<textarea>` or `<input>`, where every ordinary keybinding is a typo waiting to
- * happen (`q` quits, `?` opens the cheat sheet).
+ * Claim raw keyboard input for the enclosing Pane while `active` — for a Pane rendering its
+ * own `<textarea>`, where every ordinary keybinding is a typo waiting to happen.
  *
- * The same mechanism a popup uses, one band lower: while a Pane captures, the global layer
- * and every Pane layer go inert, and only this Pane's Commands registered with
- * `capture: true` stay live. That keeps the exit keys Commands — rebindable, in the
- * catalog, in the cheat sheet — instead of a second raw key-handler API beside the Command
- * unit (§5.8). A popup still outranks a capture, so `confirm` mid-edit behaves normally.
- * Claims nest: the most recent one is in force and disposing it restores the previous.
+ * While a Pane captures, only its own `capture: true` Commands stay live; every other layer
+ * goes inert. A popup still outranks a capture. Claims nest: disposing one restores the
+ * previous.
  */
 export function useKeyCapture(active: boolean): void {
   const runtime = useRuntime()
@@ -200,12 +164,8 @@ export function useKeyCapture(active: boolean): void {
 }
 
 /**
- * The slice of OpenTUI's `<scrollbox>` the scrolling seam drives.
- *
- * Declared structurally rather than imported, for the same reason `commit-flow` declares
- * its textarea that way: an Extension may import only `"laziergit"`, `"react"` and
- * `"@opentui/react"` (ADR-0001), and `ScrollBoxRenderable` lives in `@opentui/core`. A
- * callback ref still checks the shape against the real renderable on assignment.
+ * The slice of OpenTUI's `<scrollbox>` the scrolling seam drives. Declared structurally
+ * because an Extension may not import `@opentui/core` (ADR-0001).
  */
 export interface ScrollSurface {
   scrollTop: number
@@ -213,15 +173,9 @@ export interface ScrollSurface {
   readonly scrollHeight: number
   readonly viewport: { readonly height: number }
   /**
-   * Scroll the descendant carrying `childId` just far enough to be visible, or do nothing if
-   * it already is — OpenTUI's own `scrollIntoView({ block: "nearest" })`, which measures the
-   * element where it was actually laid out.
-   *
-   * This is what lets {@link ListCursor} follow a cursor without anyone computing a row
-   * number. Group headers, multi-line rows and a collapsed tree all change where a row lands
-   * on screen, and layout already knows where that is; arithmetic agreeing with layout is a
-   * second model to keep in step, and the one place it was tried it had to be undone by a
-   * proxy over this very interface.
+   * Scroll the descendant carrying `childId` just far enough to be visible — OpenTUI's own
+   * `scrollIntoView({ block: "nearest" })`, measured where the element was actually laid out.
+   * This is what lets {@link ListCursor} follow a cursor without computing a row number.
    */
   scrollChildIntoView(childId: string): void
 }
@@ -230,12 +184,11 @@ export interface ScrollSurface {
 export interface ScrollView {
   /**
    * Callback ref for the `<scrollbox>` this view drives. Give the box
-   * `flexGrow={1} flexBasis={0}`: without the basis its flex size is its *content* height,
-   * so a long document makes the box taller than the Pane and paints over the Pane's own
-   * header instead of scrolling inside it.
+   * `flexGrow={1} flexBasis={0}`: without the basis the box is sized by its content and
+   * overflows the Pane instead of scrolling inside it.
    */
   readonly ref: (surface: ScrollSurface | null) => void
-  /** Rows the viewport shows, or 0 before the first layout. The measurement page-wise motions need. */
+  /** Rows the viewport shows, or 0 before the first layout. */
   viewportRows(): number
   /** Scroll by whole rows; negative is up. Clamped to the content. */
   scrollBy(rows: number): void
@@ -244,13 +197,9 @@ export interface ScrollView {
 }
 
 /**
- * Imperative scrolling for a Pane that shows more than fits and has no cursor to follow —
- * the bundled diff Pane, whose `<diff>` renders a whole patch and clips the rest.
- *
- * The `<scrollbox>` OpenTUI ships is focusable and handles its own keys, but nothing in
- * laziergit ever gives it renderer focus (keys arrive as Commands, and focus belongs to the
- * Layout), so its key handling never runs. This is the seam that reaches it instead — the
- * scroll half of what §5.11 declines to ship as a component kit.
+ * Imperative scrolling for a Pane that shows more than fits and has no cursor to follow.
+ * OpenTUI's `<scrollbox>` handles its own keys, but laziergit never gives it renderer focus,
+ * so this seam reaches it instead.
  *
  * ```tsx
  * const scroll = useScrollView();
@@ -262,8 +211,7 @@ export interface ScrollView {
 export function useScrollView(): ScrollView {
   const surface = useRef<ScrollSurface | null>(null)
 
-  // Stable identity, so the callback ref does not detach and reattach on every render and
-  // a Command closing over the view keeps working across renders.
+  // Stable identity, so the callback ref does not detach and reattach on every render.
   return useMemo<ScrollView>(
     () => ({
       ref: (node) => {
@@ -277,8 +225,7 @@ export function useScrollView(): ScrollView {
       scrollTo: (row) => {
         const node = surface.current
         if (!node) return
-        // `scrollHeight` for "end" rather than `scrollHeight - viewportRows`: the setter
-        // clamps, and doing the arithmetic here would only be a second place to get it wrong.
+        // `scrollHeight` for "end", not `scrollHeight - viewportRows`: the setter clamps.
         node.scrollTop = row === "start" ? 0 : row === "end" ? node.scrollHeight : Math.trunc(row)
       },
     }),
@@ -291,10 +238,8 @@ export interface ListCursorOptions<T> {
   /** The rows the cursor walks, newest snapshot each render. */
   items: readonly T[]
   /**
-   * Your Extension's name: the Commands are registered as `${idPrefix}.cursor.*`, and the
-   * prefix is checked at runtime like every other {@link useCommand} id (§1.8). It also
-   * names the rows — see {@link ListCursor.rowId} — so an Extension with two list Panes
-   * gives them different prefixes, exactly as their Command ids already require.
+   * Your Extension's name: the Commands register as `${idPrefix}.cursor.*` and the rows as
+   * `${idPrefix}.row.*`, so an Extension with two list Panes gives them different prefixes.
    */
   idPrefix: string
   /** Singular noun for the cheat-sheet titles, e.g. `"file"` → "Next file". */
@@ -310,78 +255,53 @@ export interface ListCursor<T> {
   setIndex(index: number): void
   /**
    * Callback ref for the Pane's `<scrollbox>`: attach it, put {@link rowId} on each row, and
-   * the selected row is scrolled into view whenever the cursor moves past the edge of the
-   * viewport. Give the box `flexGrow={1} flexBasis={0}` — see {@link ScrollView.ref}.
+   * the selected row is scrolled into view whenever the cursor leaves the viewport. Give the
+   * box `flexGrow={1} flexBasis={0}` — see {@link ScrollView.ref}.
    *
    * ```tsx
    * <scrollbox ref={cursor.scrollRef} flexGrow={1} flexBasis={0}>{rows}</scrollbox>
    * ```
-   * Optional only in the sense that a Pane short enough never to overflow does not need
-   * it; every list Pane that can overflow does, because the cursor is what every key acts
-   * on and an invisible cursor is worse than no cursor.
    */
   readonly scrollRef: (surface: ScrollSurface | null) => void
   /**
    * The `id` to put on the element drawn for `items[index]`, so the cursor can find that row
-   * and scroll it into view.
+   * and scroll it into view. An id rather than a row number, because a Pane may draw headers
+   * or multi-line rows between them.
    *
    * ```tsx
    * {items.map((item, index) => (
    *   <box key={item.id} id={cursor.rowId(index)}>…</box>
    * ))}
    * ```
-   *
-   * An id rather than a row number because the two are not the same thing the moment a Pane
-   * draws anything between its rows — a group header, a blank line, a second line of detail.
-   * Layout already knows where the row landed, so revealing asks it (see
-   * {@link ScrollSurface.scrollChildIntoView}) instead of keeping a parallel height model
-   * that has to agree with it.
    */
   rowId(index: number): string
 }
 
 /**
- * Cursor state for a list Pane, with `j` / `k` / `g` / `G` registered as hidden
- * Pane-scoped Commands.
+ * Cursor state for a list Pane, with `j` / `k` / `g` / `G` registered as hidden Pane-scoped
+ * Commands. Attach {@link ListCursor.scrollRef} to the Pane's `<scrollbox>`, or the cursor
+ * walks off the bottom of it.
  *
- * Four Bundled list Panes want the identical thing, and ADR-0001 gives them no sibling
- * package to share it from, so it is public API rather than the same 30 lines four times.
- * Attach {@link ListCursor.scrollRef} to the Pane's `<scrollbox>`, or the cursor walks off
- * the bottom of it and the selection — still what every key acts on — becomes invisible.
- *
- * Half-page motions (`ctrl+d` / `ctrl+u`) stay absent, but they are no longer impossible:
- * a Pane that wants them measures with {@link ScrollView.viewportRows} and moves the cursor
- * with {@link ListCursor.setIndex}. Nothing here guesses a constant on its behalf.
+ * Half-page motions are left out: a Pane that wants them measures with
+ * {@link ScrollView.viewportRows} and moves with {@link ListCursor.setIndex}.
  */
 export function useListCursor<T>({ items, idPrefix, noun }: ListCursorOptions<T>): ListCursor<T> {
   const [requested, setRequested] = useState(0)
   const surface = useRef<ScrollSurface | null>(null)
   const last = items.length - 1
-  // Clamped on read, so the render where the list shrank already draws a valid cursor
-  // rather than a highlight on a row that is gone.
+  // Clamped on read, so the render where the list shrank already draws a valid cursor.
   const index = last < 0 ? 0 : Math.min(Math.max(requested, 0), last)
 
-  // ...and written back, because a clamp that lived only in the read would resurrect the
-  // old position the moment the list grew again. Replacing a list with an equal-length one
-  // touches neither, which is what keeps the cursor still across a refresh.
-  //
-  // Revealing rides along here rather than in an effect of its own, because this one
-  // already runs on exactly the renders that can move the cursor away from the window it
-  // was in: a keypress (which moves `requested`) and a clamp (which moves `index` on its
-  // own, so the row the cursor lands on after a delete can be above the window the old one
-  // left behind).
+  // ...and written back, or the clamp would resurrect the old position once the list grew
+  // again. Revealing rides along here because this effect runs on exactly the renders that can
+  // move the cursor out of the viewport: a keypress, and a clamp.
   useEffect(() => {
     if (requested !== index) setRequested(index)
-    // Layout has resolved by the time an effect runs, so the row is where OpenTUI will draw
-    // it and this needs no deferral — the reveal is a plain call, not a hook that schedules
-    // a frame and re-renders itself.
     surface.current?.scrollChildIntoView(`${idPrefix}.row.${index}`)
   }, [requested, index, idPrefix])
 
-  // Each motion binds the vim key and the arrow/nav key that means the same thing, so muscle
-  // memory from either reaches the same Command. A user rebinding one of these in config
-  // replaces the whole list for that Command (config keys win outright, §1.7), which is the
-  // escape hatch for anyone who wants only one of the two.
+  // Each motion binds the vim key and its arrow/nav twin. A config rebind replaces the whole
+  // list for that Command (§1.7), which is the way to get only one of the two.
   useCommand({
     id: `${idPrefix}.cursor.down`,
     title: `Next ${noun}`,
@@ -406,8 +326,7 @@ export function useListCursor<T>({ items, idPrefix, noun }: ListCursorOptions<T>
   useCommand({
     id: `${idPrefix}.cursor.last`,
     title: `Last ${noun}`,
-    // `shift+g`, not `G`: the binding parser lowercases a bare letter, so `"G"` would bind
-    // the same stroke as the `g` above and one of them would silently never fire (§1.1).
+    // `shift+g`, not `G`: the parser lowercases a bare letter, colliding with `g` above.
     keys: ["shift+g", "end"],
     hidden: true,
     run: () => setRequested(Math.max(last, 0)),
@@ -426,9 +345,8 @@ export function createCell<T>(initial: T): Cell<T> {
   let current = initial
   const listeners = new Set<() => void>()
 
-  // Hoisted out of `use()` so their identities are stable across renders: a fresh
-  // `subscribe` closure per render makes React tear the subscription down and rebuild it
-  // on every render, which is exactly the churn `useTheme` passes bound methods to avoid.
+  // Hoisted out of `use()` for a stable identity: a fresh closure per render would make React
+  // tear the subscription down and rebuild it every time.
   const subscribe = (listener: () => void): (() => void) => {
     listeners.add(listener)
     return () => {
@@ -454,7 +372,5 @@ export function createCell<T>(initial: T): Cell<T> {
 
 export function useTheme(): Theme {
   const runtime = useRuntime()
-  // Passed through rather than wrapped: a fresh closure per render would make React tear
-  // down and re-establish the subscription on every render.
   return useSyncExternalStore(runtime.theme.subscribe, runtime.theme.getSnapshot, runtime.theme.getSnapshot)
 }

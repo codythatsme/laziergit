@@ -19,12 +19,8 @@ export interface LayoutColumn {
 export interface LayoutConfig {
   readonly columns: readonly LayoutColumn[]
   /**
-   * The Pane focused when laziergit starts, or null to take the first cell.
-   *
-   * Reading order and working order are not the same question. A Layout puts first what
-   * you want to read first, which is not always what you want to act on first — a summary
-   * Pane with no rows to walk is the clearest case, but any column has one. Without this
-   * the only way to start anywhere else is to press a key every launch.
+   * The Pane focused when laziergit starts, or null to take the first cell. Reading order and
+   * working order are not the same question: a Layout puts first what you want to read first.
    */
   readonly focus: string | null
 }
@@ -38,9 +34,8 @@ export interface StatuslineConfig {
 
 export interface GitConfig {
   /**
-   * How often to look for changes made outside laziergit. Each tick reads the working
-   * tree status and every ref — two small commands that take no locks — and only refreshes
-   * when one of them differs.
+   * How often to look for changes made outside laziergit. Each tick reads a cheap fingerprint
+   * and only refreshes when it differs.
    */
   readonly refreshIntervalMs: number
   /** How much of HEAD's history the store holds. Page deeper with `ctx.git.raw(["log", ...])`. */
@@ -250,9 +245,8 @@ function readTheme(value: unknown, log: ProblemLog): Theme {
     return defaultTheme
   }
 
-  // The preset is resolved first because it is the base every token override lands on. A name
-  // nobody registered falls back to the default rather than to nothing: a typo in one field
-  // should cost the user that field, not leave the app with no colors at all.
+  // The preset resolves first, since it is the base every token override lands on. An
+  // unregistered name falls back to the default rather than to nothing.
   let base = defaultTheme
   const { preset, ...tokens } = value
   if (preset !== undefined) {
@@ -286,8 +280,8 @@ function readStatusline(value: unknown, log: ProblemLog): StatuslineConfig {
     return emptyConfig.core.statusline
   }
 
-  // Keyed off the default section rather than a second list of names, as `git` and `theme` are:
-  // a new statusline setting cannot ship without a default, so it can never be missed here.
+  // Keyed off the default section rather than a second list of names: a new statusline
+  // setting cannot ship without a default, so it can never be missed here.
   for (const key of Object.keys(value)) {
     if (!Object.hasOwn(emptyConfig.core.statusline, key)) log.reject(`statusline.${key}`, "Unknown statusline setting")
   }
@@ -374,9 +368,8 @@ function readExtensionSections(
       continue
     }
     // The copy must not hand back the prototype the parser deliberately left off:
-    // `resolveExtensionConfig` reads every declared option by name, so an Extension with an
-    // option called `toString` or `constructor` would find `Object.prototype`'s and reject it
-    // as a bad value the user never wrote.
+    // `resolveExtensionConfig` reads every declared option by name, so an option called
+    // `toString` would find `Object.prototype`'s and reject it as a value nobody wrote.
     const isolated: Record<string, unknown> = Object.assign(Object.create(null), section)
     sections.set(name, Object.freeze(isolated))
   }
@@ -492,9 +485,8 @@ export interface ConfigDocument {
 }
 
 /**
- * Reads both config files without parsing, so change detection never depends on
- * validity. Every failure is per file: an unreadable global config must not take the
- * repo's settings — or the running Layout — down with it.
+ * Reads both config files without parsing, so change detection never depends on validity.
+ * Every failure is per file: an unreadable global config must not take the repo's down too.
  */
 export async function readConfigDocuments(files: ConfigFiles): Promise<readonly ConfigDocument[]> {
   return Promise.all(

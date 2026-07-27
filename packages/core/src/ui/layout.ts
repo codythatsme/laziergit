@@ -55,11 +55,9 @@ function hintedColumn(requested: number | undefined): number {
 }
 
 /**
- * Column 0 is the lists, everything right of it is the detail. A user with no `layout` in
- * their config got equal columns, which made the diff — the one Pane whose whole job is to be
- * read — exactly as narrow as a column of branch names. This is the same 1:2 proportion
- * laziergit's own shipped config uses, applied as the fallback rather than left to be
- * discovered; `layout.columns[].weight` still overrides it outright.
+ * Column 0 is the lists, everything right of it is the detail. Equal columns made the diff —
+ * the one Pane whose whole job is to be read — as narrow as a column of branch names. The same
+ * 1:2 proportion the shipped config uses; `layout.columns[].weight` still overrides it.
  */
 function hintedWeight(index: number): number {
   return index === 0 ? 1 : 2
@@ -101,7 +99,7 @@ export function resolveLayout(config: LayoutConfig | null, panes: readonly PaneE
   }
 
   // Companions are resolved after the Panes that can host them, and then repeatedly, so
-  // `tabWith` works no matter which of the pair registered — or sorted — first.
+  // `tabWith` works whichever of the pair registered first.
   const unplaced = panes.filter((pane) => !placed.has(pane.id)).sort(comparePlacement)
   const companions = unplaced.filter((pane) => pane.placement?.tabWith !== undefined)
   for (const pane of unplaced) {
@@ -204,14 +202,12 @@ export class LayoutHost {
   /**
    * Focuses the nth Pane of {@link liveTabs}, 0-based — the Pane the nth jump key names.
    *
-   * Panes rather than cells, and the difference is a whole Layout: a cell holding four tabs
-   * would be *one* jump target showing whichever tab it last had, leaving the other three
-   * with no key at all. Numbering Panes gives every one of them exactly one digit, and
-   * {@link focus} already brings a hidden tab to the front on the way.
+   * Panes rather than cells: a cell holding four tabs would be one jump target showing
+   * whichever tab it last had, leaving the other three with no key at all. {@link focus}
+   * already brings a hidden tab to the front on the way.
    *
    * An index past the end does nothing rather than throwing: the Command carrying it can
-   * outlive the Pane it was registered for by the width of a reload, and a stale keypress is
-   * a miss, not a programming error.
+   * outlive the Pane it was registered for by the width of a reload.
    */
   focusAt(index: number): void {
     const paneId = this.liveTabs()[index]
@@ -230,18 +226,13 @@ export class LayoutHost {
   }
 
   /**
-   * Makes `paneId` the visible tab of its cell, without moving the keyboard.
+   * Makes `paneId` the visible tab of its cell, without moving the keyboard — the half a Pane
+   * that follows someone else's selection needs. The diff Pane is tab-grouped with
+   * `commit-flow`, so after a commit it would otherwise sit stranded behind the Commit tab
+   * while every cursor move updated something nobody can see.
    *
-   * The other half of {@link focus}, and the half a Pane that follows someone else's
-   * selection needs: the diff Pane is tab-grouped with `commit-flow`, so after a commit it
-   * is stranded behind the Commit tab while every cursor move in the files Pane goes on
-   * updating something nobody can see. Focusing it instead would take the keyboard away
-   * from the Pane the user is driving, on every keystroke.
-   *
-   * Silent where `focus` throws. Revealing runs on cursor movement rather than on a user's
-   * deliberate command, so "that Pane is not on screen right now" — a Layout the user
-   * chose, or a Pane mid-reload — is an ordinary condition to do nothing about, not a
-   * programming error worth an exception per keypress.
+   * Silent where {@link focus} throws: revealing runs on cursor movement, so "that Pane is not
+   * on screen right now" is an ordinary condition rather than a programming error.
    */
   reveal(paneId: string): void {
     if (!this.#isLive(paneId)) return
@@ -252,14 +243,10 @@ export class LayoutHost {
   }
 
   /**
-   * Puts focus on the Layout's first cell, unless something has already chosen one.
-   *
-   * Called once, when activation has finished. Panes register one at a time and every
-   * registration re-lays-out, so *during* startup "the first cell" is whichever Extension
-   * has got there so far — with `needs: ["diff"]` on four of the eight Bundled Extensions,
-   * reliably the diff Pane. Deciding after the last Pane has registered is the only moment
-   * the question has the answer the user's Layout actually gives; leaving it to run
-   * continuously instead would drag focus across Panes mid-startup and fire their
+   * Puts focus on the Layout's first cell, unless something has already chosen one. Called
+   * once, when activation has finished: Panes register one at a time and every registration
+   * re-lays-out, so during startup "the first cell" is whichever Extension has got there so
+   * far. Running continuously instead would drag focus across Panes mid-startup and fire their
    * focus-gated effects on the way past.
    */
   settleInitialFocus(): void {

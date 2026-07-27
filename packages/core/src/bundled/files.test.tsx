@@ -20,10 +20,8 @@ installHarnessLifecycle()
 const bundledExtensionDirectory = resolve(import.meta.dir, "..", "..", "..", "..", "extensions")
 
 /**
- * `files` declares `needs: ["diff"]`, and a bundled Extension being rewritten in a sibling
- * commit is no basis for this file's assertions. A repo-scope Extension named `diff`
- * shadows the bundled one (§0) and satisfies the need with a `DiffApi` that prints what it
- * was shown — which is exactly the fact under test when the cursor moves.
+ * `files` declares `needs: ["diff"]`. A repo-scope Extension named `diff` shadows the bundled
+ * one (§0) and satisfies the need with a `DiffApi` that prints what it was shown.
  */
 const diffStub = `
   /** @jsxImportSource @opentui/react */
@@ -103,19 +101,17 @@ const columnsLayout = `[["files"], ["diff"]]`
 const tabbedLayout = `[[["files", "diff"]]]`
 
 /**
- * The poll is disabled outright: every change these tests make either predates the first
- * read or goes through laziergit, which refreshes after its own writes. A tick landing
- * mid-test would only republish the same state from outside React's `act`.
+ * The poll is disabled: every change these tests make either predates the first read or goes
+ * through laziergit, and a tick would only republish the same state outside React's `act`.
  */
 function configOf(layout: string): string {
   return `{ "layout": { "columns": ${layout} }, "git": { "refreshIntervalMs": 60000 } }`
 }
 
 /**
- * A harness whose repository root is the harness directory, with the real
- * `extensions/files` linked into the bundled scope. The `.gitignore` is committed first
- * because that directory is also the Extension and config home — its own scaffolding would
- * otherwise be untracked noise in the very Pane under test.
+ * A harness whose repository root is the harness directory, with the real `extensions/files`
+ * linked into the bundled scope. The `.gitignore` is committed first because that directory
+ * is also the Extension and config home.
  */
 async function createFilesHarness(layout: string = columnsLayout): Promise<Harness> {
   const harness = await createHarness({ git: true })
@@ -137,11 +133,9 @@ async function commitTracked(harness: Harness, ...paths: readonly string[]): Pro
 }
 
 /**
- * A key press, and the real time that has to pass before its consequences are over: the
- * terminal parser only settles a lone escape byte into a key once it has waited for the
- * sequence it could start, and a Command that writes returns long before git and the store
- * refresh behind it. The wait is inside `act`, so the render that lands mid-write is one
- * React knows about rather than a warning.
+ * A key press, and the real time its consequences take: the terminal parser only settles a
+ * lone escape byte once it has waited for the sequence it could start, and a Command that
+ * writes returns long before git does. The wait is inside `act`.
  */
 async function press(harness: Harness, key: string): Promise<void> {
   await act(async () => {
@@ -152,18 +146,16 @@ async function press(harness: Harness, key: string): Promise<void> {
 }
 
 /**
- * Renders until `condition` holds. A Command that writes to the repository returns long
- * before git, the store refresh, and React have caught up, and a fixed sleep would either
- * be flaky or slow. Timing out returns quietly, so the test's own `expect` reports the
- * failure with its own message.
+ * Renders until `condition` holds, since a Command that writes returns long before git, the
+ * store, and React have caught up. Timing out returns quietly, leaving the test's own
+ * `expect` to report the failure.
  */
 async function waitFor(harness: Harness, condition: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 5_000
   for (;;) {
     await settle(harness)
-    // Both the probe and the wait run inside `act`, because the store publish that ends
-    // this loop lands while one of them is awaiting — outside `act` it is a React warning
-    // and a render this loop then fails to see.
+    // Both the probe and the wait run inside `act`: the store publish that ends this loop
+    // lands while one of them is awaiting.
     let satisfied = false
     await act(async () => {
       satisfied = await condition()
@@ -174,11 +166,8 @@ async function waitFor(harness: Harness, condition: () => boolean | Promise<bool
 }
 
 /**
- * Focuses the files Pane — which is also the `files.focus` binding under test.
- *
- * It is already the Layout's first cell and therefore already focused at startup; pressing
- * `2` anyway is what keeps the binding exercised, and keeps every Pane-scoped keypress
- * below reading the same whether or not the default ever changes.
+ * Focuses the files Pane — which is also the `files.focus` binding under test. It is already
+ * the Layout's first cell, so pressing `2` is what keeps the binding exercised.
  */
 async function focusFiles(harness: Harness): Promise<void> {
   await press(harness, "1")
@@ -193,23 +182,20 @@ describe("staging from the files pane", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    // Two status columns, `X` then `Y`, exactly as git spells them: the change is in the
-    // working tree, so the letter is in the second column. The cursor is the highlight and
-    // nothing else — there is no marker glyph to read it off any more.
+    // Two status columns, `X` then `Y`, as git spells them: the change is in the working
+    // tree, so the letter is in the second column.
     expect(highlighted(harness)).toEqual([" M tracked.txt"])
 
     await press(harness, " ")
     await waitFor(harness, () => frame(harness).includes("M  tracked.txt"))
     expect(await staged(harness)).toEqual(["tracked.txt"])
 
-    // The row's columns flipped and the cursor never moved — a stronger claim than the
-    // headings version could make, and true only because the cursor anchors on the path.
+    // The row's columns flipped and the cursor never moved, because it anchors on the path.
     expect(highlighted(harness)).toEqual(["M  tracked.txt"])
     await press(harness, " ")
     await waitFor(harness, () => frame(harness).includes(" M tracked.txt"))
     expect(await staged(harness)).toEqual([])
 
-    // The headings are gone for good, not merely off screen for this fixture.
     for (const heading of ["Conflicted", "Staged", "Unstaged", "Untracked"]) {
       expect(frame(harness)).not.toContain(heading)
     }
@@ -225,8 +211,8 @@ describe("staging from the files pane", () => {
     await focusFiles(harness)
 
     const rendered = frame(harness)
-    // The `XY` pair sits in the same two columns on every row and only the *name* indents,
-    // so the column you scan down for "is this staged?" never moves with folder depth.
+    // The `XY` pair sits in the same two columns on every row and only the name indents, so
+    // the column you scan for "is this staged?" never moves with folder depth.
     expect(rendered).toContain("▼  src")
     expect(rendered).toContain("??   a.txt")
     expect(rendered).toContain("▼    nested")
@@ -272,14 +258,13 @@ describe("staging from the files pane", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    // Down onto `src/nested/b.txt`: src, nested, b.txt — folders before files, so the
-    // nested chain comes before `a.txt` rather than after it.
+    // Folders before files, so the nested chain comes before `a.txt` rather than after it.
     await press(harness, "j")
     await press(harness, "j")
     await waitFor(harness, () => highlighted(harness).includes("??     b.txt"))
 
-    // Collapse-all removes the row the cursor was on; the deepest visible ancestor is where
-    // it honestly belongs, not wherever the old index now points.
+    // Collapse-all removes the row the cursor was on, so it lands on the deepest visible
+    // ancestor rather than wherever the old index now points.
     await press(harness, "-")
     await waitFor(harness, () => highlighted(harness).includes("▶  src"))
   })
@@ -358,13 +343,12 @@ describe("discarding from the files pane", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    // Staged and nothing since: the letter is in the index column, the working-tree column
-    // is blank, and that pair is exactly why `d` has to unstage before it restores.
+    // Staged and nothing since, which is why `d` has to unstage before it restores.
     expect(highlighted(harness)).toEqual(["M  tracked.txt"])
 
     await press(harness, "d")
-    // The working tree already matches the index, so `git restore --worktree` on its own
-    // changes nothing at all: a danger confirmation followed by silence.
+    // The working tree already matches the index, so `git restore --worktree` alone would
+    // change nothing: a danger confirmation followed by silence.
     expect(frame(harness)).toContain("Unstage tracked.txt and throw away its changes")
 
     await press(harness, "y")
@@ -428,11 +412,7 @@ describe("the files action menu", () => {
     expect(rendered).not.toContain("Stage resolved")
   })
 
-  /**
-   * `o` opens, and `e` no longer does. The key is what a lazygit user reaches for, and the
-   * one it replaces is reserved for the editing this cannot do yet — so the sheet is where
-   * that promise has to be visible, and where a Command silently losing its key would show.
-   */
+  /** `o` is what a lazygit user reaches for; `e` stays reserved for editing in `$EDITOR`. */
   it("binds opening to o, in the pane as well as the menu", async () => {
     const harness = await createFilesHarness()
     await write(harness, "loose.txt", "untracked\n")
@@ -484,8 +464,7 @@ describe("conflicts, shown and delegated", () => {
 
     await renderApp(harness)
 
-    // `UU` — both sides modified — rather than a single invented glyph. On a conflicted row
-    // which side did what is the whole content of the row.
+    // `UU` — both sides modified. Which side did what is the whole content of the row.
     expect(frame(harness)).toContain("UU shared.txt")
   })
 
@@ -567,9 +546,8 @@ describe("what the files pane publishes", () => {
     await press(harness, "\t")
     await press(harness, "j")
 
-    // `j` belongs to the files pane, so the cursor never moved and nothing was pushed. The
-    // pane is unfocused now, so nothing on screen says where its cursor is — the diff it
-    // last published is the only witness, which is exactly the trade the marker paid for.
+    // `j` belongs to the files pane, so the cursor never moved. The pane is unfocused now,
+    // so the diff it last published is the only witness.
     expect(highlighted(harness)).toEqual([])
     expect(frame(harness)).toContain("showing workingTree first.txt")
   })
@@ -586,9 +564,8 @@ describe("what the files pane publishes", () => {
     await press(harness, "V")
     expect(frame(harness)).toContain("selected loose.txt")
 
-    // `]` brings the diff tab up, which unmounts this Pane. A Pane that is not on screen
-    // has no selection, and `FilesApi.selected()` must not keep naming the row it had —
-    // the same window a hot reload opens between unmount and scope disposal.
+    // `]` brings the diff tab up, which unmounts this Pane. A Pane that is not on screen has
+    // no selection, and `FilesApi.selected()` must not keep naming the row it had.
     await press(harness, "]")
     await press(harness, "V")
 
@@ -608,8 +585,7 @@ describe("what the files pane publishes", () => {
     expect(frame(harness)).toContain("?? loose.txt new!")
     expect(frame(harness)).not.toContain("tracked.txt new!")
 
-    // Rows are in path order now, not group order, so `loose.txt` is first — it used to sit
-    // under a trailing "Untracked" heading regardless of its name.
+    // Rows are in path order, not group order, so `loose.txt` is first.
     await press(harness, "V")
     expect(frame(harness)).toContain("selected loose.txt")
   })
@@ -622,8 +598,8 @@ describe("what the files pane publishes", () => {
     await renderApp(harness)
     await focusFiles(harness)
 
-    // A directory is not a `FileChange`, so `FilesApi.selected()` has nothing honest to
-    // return for one — and a `decorateRows` provider is never handed a folder.
+    // A directory is not a `FileChange`, so `FilesApi.selected()` has nothing to return for
+    // one — and a `decorateRows` provider is never handed a folder.
     await press(harness, "V")
     expect(frame(harness)).toContain("selected none")
 

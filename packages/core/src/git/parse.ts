@@ -13,12 +13,9 @@ import type {
 } from "laziergit"
 
 /**
- * Porcelain readers. Every function here is pure: argv in one place, bytes to model in
- * another, so every format quirk below is testable without a repository.
- *
- * `%00` is the field separator throughout. Git forbids NUL in refnames, oids, author
- * fields, and single-line subjects, so no value can ever contain one — which is what
- * makes these splits total rather than heuristic.
+ * Porcelain readers. Every function here is pure, so every format quirk below is testable
+ * without a repository. `%00` is the field separator throughout: git forbids NUL in refnames,
+ * oids, author fields and single-line subjects, which is what makes these splits total.
  */
 
 const nul = "\0"
@@ -39,9 +36,8 @@ function chunk(fields: readonly string[], size: number): readonly (readonly stri
 }
 
 /**
- * The rest of a record after `count` space-separated tokens. Written as an index scan
- * rather than `split(" ", count)` because JS's split limit *discards* the tail instead
- * of keeping it — and the tail is the path, which may itself contain spaces.
+ * The rest of a record after `count` space-separated tokens. An index scan, because JS's split
+ * limit discards the tail — and the tail is the path, which may contain spaces.
  */
 function afterTokens(record: string, count: number): string | null {
   let index = 0
@@ -82,11 +78,7 @@ function changed(code: string): ChangeKind | null {
   return changeKinds[code] ?? null
 }
 
-/**
- * The unmerged `XY`, which spells which side did what: `UU` both modified, `AA` both added,
- * `DU` we deleted and they modified, and so on. A total record over the three letters git
- * can put in either column, so an unmerged record can never fall through to a default.
- */
+/** The unmerged `XY`: `UU` both modified, `AA` both added, `DU` we deleted and they modified. */
 const conflictSides: Readonly<Record<string, ConflictSide>> = Object.freeze({
   A: "added",
   D: "deleted",
@@ -108,16 +100,12 @@ function draft(): Draft {
 /**
  * Parses `--porcelain=v2 -z` into one {@link FileChange} per path.
  *
- * The one format trap is the `2` (rename/copy) record: under `-z` it consumes **two** NUL
- * fields, the second being the original path, so the read has to advance the cursor itself
- * rather than iterate.
+ * The format trap is the `2` (rename/copy) record: under `-z` it consumes *two* NUL fields,
+ * the second being the original path, so the read advances the cursor itself.
  *
- * The modelling decision is the accumulator. `XY` is two independent columns — `X` is
- * HEAD→index, `Y` is index→working tree — and git may describe one path across more than
- * one record: `git rm --cached` on a file still on disk emits `1 D. … x` *and* `? x`. Both
- * halves land on one draft keyed by path, so `MM` is one entry with two sides rather than
- * the two entries in two lists this used to produce. The merge is total because the sides
- * cannot contradict each other — each record writes a column the other leaves alone.
+ * Records accumulate into one draft per path, because git may describe a path across more than
+ * one: `git rm --cached` on a file still on disk emits `1 D. … x` *and* `? x`. The merge is
+ * total, since each record writes a column the other leaves alone.
  */
 export function parseStatus(stdout: string): ParsedStatus {
   const records = nulRecords(stdout)
@@ -147,15 +135,13 @@ export function parseStatus(stdout: string): ParsedStatus {
 
     const kind = record.slice(0, 2)
     if (kind === "? ") {
-      // Only if nothing has claimed the working-tree column yet: a `1 D.` record for the
-      // same path arrives with `Y` = `.`, so the two agree, but a future git that filled
-      // both in should not have its more specific answer overwritten by `?`.
+      // Only if nothing has claimed the working-tree column: a more specific answer wins.
       const entry = at(record.slice(2))
       entry.worktree ??= "untracked"
       continue
     }
-    // Only emitted under `--ignored`, which we never pass. Consumed defensively so a
-    // future flag change cannot silently reinterpret the record as a path.
+    // Only emitted under `--ignored`, which we never pass. Consumed so a future flag change
+    // cannot reinterpret the record as a path.
     if (kind === "! ") continue
 
     const marker = record.slice(0, 1)
@@ -164,8 +150,7 @@ export function parseStatus(stdout: string): ParsedStatus {
       if (path === null) continue
       const ours = conflictSides[record.slice(2, 3)]
       const theirs = conflictSides[record.slice(3, 4)]
-      // A letter outside `A`/`D`/`U` is not an unmerged record we understand, and inventing
-      // a side would put a wrong claim on the one row where the sides are the whole point.
+      // A letter outside `A`/`D`/`U` is not an unmerged record we understand.
       if (ours === undefined || theirs === undefined) continue
       at(path).conflict = { ours, theirs }
       continue
@@ -188,16 +173,11 @@ export function parseStatus(stdout: string): ParsedStatus {
     const entry = at(path)
     entry.index = changed(index)
     entry.worktree = changed(worktree)
-    // Recorded on the entry rather than on a side, now that a path has only one entry. The
-    // rename is a fact about the index — the working tree is measured against the index,
-    // where the file already lives under its new name — and readers that care ask
-    // `index === "renamed"`.
     if (previousPath !== null) entry.previousPath = previousPath
   }
 
-  // Sorted here so every consumer inherits one order rather than each imposing its own.
   // Code-unit order, which is what a tree of these paths wants: `/` (0x2F) sorts after `.`
-  // (0x2E), so `b.txt` precedes `b/x.txt` and a directory's own rows stay contiguous.
+  // (0x2E), so `b.txt` precedes `b/x.txt` and a directory's rows stay contiguous.
   const files = [...drafts.entries()]
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(
@@ -219,26 +199,16 @@ export function parseStatus(stdout: string): ParsedStatus {
  */
 export const symbolicRefArgs = ["symbolic-ref", "-q", "--short", "HEAD"] as const
 
-/**
- * The branch HEAD symbolically points at, or null when it points at a raw commit. Null
- * *is* "detached" — a second boolean saying so would be the same fact twice, and two
- * copies of one fact can disagree.
- */
+/** The branch HEAD symbolically points at, or null when it points at a raw commit. */
 export function parseHeadRef(stdout: string, exitCode: number): string | null {
   const branch = stdout.trim()
   return exitCode !== 0 || branch.length === 0 ? null : branch
 }
 
 /**
- * The one place a {@link Head} variant is decided, because deciding it needs all three
- * reads: `symbolic-ref` says whether HEAD is a branch at all, status says whether that
- * branch has a commit yet, and the branch rows already carry the upstream — HEAD's
- * upstream is *the same object* its row holds, so the two can never disagree.
- *
- * Unborn is decided by the missing oid and detached by the missing branch. They cannot
- * both hold: a detached HEAD *is* an oid, so it always has one. Git reporting neither is
- * only reachable from empty output — nothing answered — which is `noRepository`, the
- * variant that claims the least and the one the empty store already serves.
+ * The one place a {@link Head} variant is decided, because deciding it needs all three reads.
+ * Unborn is the missing oid and detached is the missing branch; neither, which only happens
+ * when nothing answered at all, is `noRepository`.
  */
 export function readHead(status: ParsedStatus, headBranch: string | null, branches: readonly Branch[]): Head {
   if (status.oid === null) {
@@ -277,11 +247,8 @@ const behindPattern = /(?:^|, )behind (\d+)/
 
 /**
  * `,nobracket` strips the surrounding `[...]`, leaving `ahead 1`, `behind 2`,
- * `ahead 1, behind 2`, `gone`, or the empty string.
- *
- * `gone` is reported *instead of* a divergence, never alongside one — git has no
- * remote-tracking ref left to compare against — so the counts stay zero and the flag is
- * the only thing that separates a deleted upstream from a perfectly in-sync one.
+ * `ahead 1, behind 2`, `gone`, or the empty string. `gone` is reported *instead of* a
+ * divergence, so the counts stay zero and the flag is all that separates it from in-sync.
  */
 function readTrack(track: string): { readonly gone: boolean; readonly ahead: number; readonly behind: number } {
   return {
@@ -302,11 +269,7 @@ function readUpstream(remote: string, remoteRef: string, track: string): Upstrea
   return { remote, branch: withoutPrefix(remoteRef, "refs/heads/"), ...readTrack(track) }
 }
 
-/**
- * `headBranch` decides `isHead`, not `%(HEAD)`: while HEAD is detached git marks no row
- * at all, and the marker adds a field that would have to agree with the status output
- * anyway.
- */
+/** `headBranch` decides `isHead`, not `%(HEAD)`: a detached HEAD marks no row at all. */
 export function parseBranches(stdout: string, headBranch: string | null): readonly Branch[] {
   const branches: Branch[] = []
   for (const line of lines(stdout)) {
@@ -332,15 +295,11 @@ export function parseBranches(stdout: string, headBranch: string | null): readon
 
 /**
  * Read from config rather than `git remote -v`, whose `name<TAB>url (fetch)` shape is
- * ambiguous for a URL containing a tab, and rather than `git remote get-url`, which
- * costs two subprocesses per remote. `--null` makes even a URL containing a newline
+ * ambiguous for a URL containing a tab. `--null` makes even a URL containing a newline
  * unambiguous: entries are NUL-terminated and `key\nvalue` inside each.
- */
-/**
- * Deliberately wider than `parseRemotes` needs. `branch.*` is where a branch's upstream
- * lives, and both it and `remote.*` are invisible to the refs snapshot the poll compares —
- * so this same read is also the poll's fingerprint for everything that is configured
- * rather than committed.
+ *
+ * Wider than `parseRemotes` needs: `branch.*` and `remote.*` are both invisible to the refs
+ * snapshot, so this read doubles as the poll's fingerprint for configured-not-committed state.
  */
 export const configArgs = ["config", "--null", "--get-regexp", "^(remote|branch)\\."] as const
 
@@ -395,8 +354,6 @@ export function parseTags(stdout: string): readonly Tag[] {
   for (const line of lines(stdout)) {
     const [refname, oid] = line.split(nul)
     if (refname === undefined || oid === undefined) continue
-    // Full refname stripped here for the same reason as branches: `:short` disambiguates,
-    // and a disambiguated name is no longer the name git will accept back.
     tags.push({ name: withoutPrefix(refname, "refs/tags/"), oid })
   }
   return tags
@@ -408,11 +365,8 @@ const commitFormat = ["%H", "%h", "%at", "%an", "%ae", "%P", "%s"].join("%x00")
 
 /**
  * `-z` NUL-terminates each record and the format ends in `%s`, so the output is one flat
- * NUL-separated field stream with no newlines at all — `%s` folds a multi-line first
- * paragraph onto one line and emits any `%H` inside the message literally.
- *
- * The trailing `--` stops a ref that shares a name with a file from being reinterpreted
- * as a pathspec.
+ * NUL-separated field stream with no newlines. The trailing `--` stops a ref that shares a
+ * name with a file from being read as a pathspec.
  */
 export function commitArgs(limit: number): readonly string[] {
   return ["log", "-z", "--no-show-signature", `--max-count=${limit}`, `--format=${commitFormat}`, "HEAD", "--"]
@@ -455,13 +409,12 @@ export function parseStash(stdout: string): readonly StashEntry[] {
     const parsed = stashSubject.exec(subject ?? "")
     const branch = parsed?.[1]
     entries.push({
-      // Position is the fallback: `stash@{N}` is what `%gd` reports under default config,
-      // but ref-shortening settings can reshape it, and the list is always in order.
+      // Position is the fallback: ref-shortening settings can reshape `%gd`, and the list is
+      // always in order.
       index: matched ? Number(matched[1]) : entries.length,
       oid,
-      // Git writes the literal `(no branch)` for a stash taken while detached, so there
-      // is no branch to name. A subject with no `On`/`WIP on` prefix (plumbing wrote it)
-      // keeps its whole text as the message.
+      // A subject with no `On`/`WIP on` prefix keeps its whole text; git writes the literal
+      // `(no branch)` for a stash taken while detached.
       message: parsed?.[2] ?? subject ?? "",
       branch: branch === undefined || branch === "(no branch)" ? null : branch,
       createdAt: epochSecondsToMs(createdAt ?? "0"),
@@ -473,7 +426,7 @@ export function parseStash(stdout: string): readonly StashEntry[] {
 // ---- fingerprint ------------------------------------------------------------------
 
 /**
- * Every ref plus HEAD in one process. Exits 1 with empty stderr on a repository that
- * has no refs at all, which {@link execGitAllowingEmpty} reads as an empty snapshot.
+ * Every ref plus HEAD in one process. Exits 1 with empty stderr on a repository with no refs,
+ * which {@link execGitAllowingEmpty} reads as an empty snapshot.
  */
 export const refSnapshotArgs = ["show-ref", "--head"] as const

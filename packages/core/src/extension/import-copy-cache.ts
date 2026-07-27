@@ -83,9 +83,9 @@ async function linkDirectoryEntries(
 }
 
 /**
- * Where a package laziergit itself depends on sits on disk. Resolved through its `package.json`
- * rather than its entry point because the two need not share a directory — `laziergit`'s entry
- * is `src/index.ts` — and a types-only package has no entry to resolve at all.
+ * Where a package laziergit itself depends on sits on disk. Resolved through its
+ * `package.json` rather than its entry point, because the two need not share a directory and
+ * a types-only package has no entry at all.
  */
 export function hostPackageRoot(specifier: string): string {
   return dirname(fileURLToPath(import.meta.resolve(`${specifier}/package.json`)))
@@ -251,9 +251,8 @@ export class ImportCopyCache {
       this.#directories.map(async (directory) => {
         const container = join(directory, importCopyContainerName)
         try {
-          // Our own ignore file must not be what keeps the container alive, but it is dropped
-          // only once it is alone: while another laziergit still holds copies here, those copies
-          // are what the ignore file is for.
+          // Dropped only once it is alone: while another laziergit still holds copies here,
+          // those copies are what the ignore file is for.
           const entries = await fs.readdir(container)
           if (entries.length === 1 && entries[0] === importCopyIgnoreName) {
             await fs.rm(join(container, importCopyIgnoreName))
@@ -267,11 +266,10 @@ export class ImportCopyCache {
   }
 
   /**
-   * Inside the Extension directory's cache container, not beside the Extension: a sibling
-   * copy is a directory the Extension directory's owner did not put there, and a package
-   * manager globbing `extensions/*` would read one as a second workspace of the same name.
-   * One level deeper costs nothing — module resolution still walks up to the same
-   * `node_modules` the original would have found.
+   * Inside the Extension directory's cache container, not beside the Extension: a package
+   * manager globbing `extensions/*` would read a sibling copy as a second workspace of the
+   * same name. One level deeper costs nothing — module resolution still walks up to the same
+   * `node_modules`.
    */
   #copyRoot(candidate: ExtensionCandidate, generation: number): string {
     this.#sequence += 1
@@ -280,11 +278,10 @@ export class ImportCopyCache {
   }
 
   /**
-   * The container is written into somebody else's working tree — most repositories reach here
-   * through their own `.laziergit/extensions` — so laziergit's scratch copies would otherwise
-   * surface as untracked files in that repository's status, and discarding them would delete a
-   * copy out from under a running Extension. Rewritten on every acquire because that is both
-   * idempotent and free of the stat-then-write race a conditional check would introduce.
+   * The container is written into somebody else's working tree, so without this laziergit's
+   * scratch copies would surface as untracked files there — and discarding them would delete a
+   * copy out from under a running Extension. Rewritten on every acquire, which is idempotent
+   * and free of a stat-then-write race.
    */
   async #writeContainerIgnore(container: string): Promise<void> {
     try {

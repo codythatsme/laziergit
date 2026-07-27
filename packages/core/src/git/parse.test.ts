@@ -38,10 +38,8 @@ it("reads every porcelain v2 record kind, including a path that is both staged a
   )
 
   expect(parsed.oid).toBe("a7838d82f36266ecad362141e496fae1b0338f60")
-  // One entry per path, in path order, each carrying both of git's columns. `both.txt` is
-  // the case the four-array model could not express: it appears once, saying `MM`.
-  // `ignored.txt` is absent — `!` records are only emitted under --ignored, which we never
-  // pass, and they must never be mistaken for a path belonging to the preceding record.
+  // One entry per path, in path order, each carrying both of git's columns. `ignored.txt` is
+  // absent: `!` records are only emitted under --ignored, which we never pass.
   expect(parsed.files).toEqual([
     { kind: "changed", path: "added.txt", previousPath: null, index: "added", worktree: null },
     { kind: "changed", path: "base.txt", previousPath: null, index: null, worktree: "modified" },
@@ -53,9 +51,8 @@ it("reads every porcelain v2 record kind, including a path that is both staged a
 })
 
 it("merges the `1 D.` and `?` records git emits for one path into a single entry", () => {
-  // `git rm --cached` on a file still on disk: the index is dropping a path the working
-  // tree still holds, so git describes it twice. One entry that is both staged and
-  // untracked is the honest answer — the four-array model made it two files.
+  // `git rm --cached` on a file still on disk: the index is dropping a path the working tree
+  // still holds, so git describes it twice and one entry is both staged and untracked.
   const parsed = parseStatus(
     nulTerminated(
       "# branch.oid a7838d82",
@@ -98,9 +95,8 @@ it("consumes the second NUL field of a rename record, and keeps a path containin
   expect(parsed.files).toEqual([
     // Proves the cursor advanced past the original path rather than parsing it as a record.
     { kind: "changed", path: "after.txt", previousPath: null, index: null, worktree: "modified" },
-    // One entry carries the rename and the later edit together. `previousPath` is a fact
-    // about the index — the working tree is measured against the index, where the file
-    // already lives under its new name — so it hangs off the entry, not off a side.
+    // One entry carries the rename and the later edit together. `previousPath` is a fact about
+    // the index, where the file already lives under its new name.
     {
       kind: "changed",
       path: "dir/renamed spacé.txt",
@@ -121,8 +117,7 @@ it("reads unmerged records as conflicts, keeping which side did what", () => {
     ),
   )
 
-  // The unmerged `XY` is the one place a row's whole meaning is which side did what, so it
-  // is carried rather than flattened to a single "conflicted".
+  // The unmerged `XY` is the one place a row's whole meaning is which side did what.
   expect(parsed.files).toEqual([
     { kind: "conflicted", path: "both-added.txt", previousPath: null, ours: "added", theirs: "added" },
     { kind: "conflicted", path: "conflict.txt", previousPath: null, ours: "modified", theirs: "modified" },
@@ -131,8 +126,8 @@ it("reads unmerged records as conflicts, keeping which side did what", () => {
 })
 
 it("reports an unborn HEAD as no oid at all", () => {
-  // git writes the literal `(initial)` where the oid would be; null keeps the "there is no
-  // commit" answer out of the same type as "here is the commit".
+  // git writes the literal `(initial)` where the oid would be; null keeps "there is no commit"
+  // out of the same type as "here is the commit".
   expect(parseStatus(nulTerminated("# branch.oid (initial)", "# branch.head main", "? u.txt")).oid).toBeNull()
 })
 
@@ -159,8 +154,7 @@ it("picks HEAD's variant from the oid and the branch together, and reuses the br
     branch: "main",
     upstream: { remote: "origin", branch: "main", gone: false, ahead: 1, behind: 0 },
   })
-  // No commit yet, but HEAD is still a symbolic ref — which is why unborn carries a branch
-  // and not an oid. The branch row is ignored: `main` does not exist, so it cannot be here.
+  // No commit yet, but HEAD is still a symbolic ref, which is why unborn carries a branch.
   expect(readHead({ ...noChanges, oid: null }, "main", [])).toEqual({
     kind: "unborn",
     branch: "main",
@@ -191,8 +185,8 @@ it("reads every upstream tracking shape, and separates 'no upstream' from 'in sy
     { remote: "origin", branch: "ahead1", gone: false, ahead: 1, behind: 0 },
     { remote: "origin", branch: "behindb", gone: false, ahead: 0, behind: 2 },
     { remote: "origin", branch: "other", gone: false, ahead: 1, behind: 2 },
-    // A deleted upstream reports no divergence, so `gone` is all that separates this row
-    // from `main` above it.
+    // A deleted upstream reports no divergence, so `gone` is all that separates this row from
+    // `main` above it.
     { remote: "origin", branch: "gonebr", gone: true, ahead: 0, behind: 0 },
     null,
   ])
@@ -292,8 +286,8 @@ it("splits a stash subject on the branch, not on the first colon in its message"
   )
 
   expect(parsed).toEqual([
-    // A branch name cannot contain `:`, so the first `": "` always ends it — a greedy
-    // capture would report the branch as `main: msg`.
+    // A branch name cannot contain `:`, so the first `": "` always ends it — a greedy capture
+    // would report the branch as `main: msg`.
     { index: 0, oid: "03baeb9a", message: "msg: with colon and WIP on fake", branch: "main", createdAt: 1784800114000 },
     // Stashed while detached: git writes `(no branch)`, and there is no branch to name.
     { index: 1, oid: "6acf5650", message: "08309ec subject", branch: null, createdAt: 1784800113000 },

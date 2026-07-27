@@ -6,11 +6,10 @@ import { act, Component, type ReactNode } from "react"
 import { useCommand, useGit } from "laziergit"
 
 /**
- * The two React contexts the `"laziergit"` hooks read carry `unknown` — the bridge package
- * exists so the host and the public package never import each other's types — so the hooks
- * are the boundary where that `unknown` becomes a typed runtime. These tests are what makes
- * "parse, don't assert" observable: a value that is present but not laziergit's must be
- * refused by name, not discovered three frames later as `undefined is not an object`.
+ * The two React contexts the `"laziergit"` hooks read carry `unknown`, so the hooks are the
+ * boundary where that becomes a typed runtime. These tests make "parse, don't assert"
+ * observable: a value that is present but not laziergit's is refused by name, not discovered
+ * three frames later as `undefined is not an object`.
  */
 const actGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
 
@@ -38,8 +37,7 @@ function Probe() {
 
 /**
  * Enough of a runtime to satisfy the guard, so the *pane* runtime is the only thing under
- * test — and a record of what it was asked to register, since the failure this guards
- * against is a malformed pane runtime being passed straight through as if it were one.
+ * test, plus a record of what it was asked to register.
  */
 function fakeRuntime(registrations: unknown[][]) {
   const store = { getSnapshot: () => undefined, subscribe: () => () => undefined }
@@ -103,9 +101,8 @@ async function renderThrowing(children: ReactNode): Promise<unknown> {
   // React re-reports a caught render error on `console.error`, complete with a component
   // stack. That is the error this test is asking for, so it is noise, not a result.
   const quiet = spyOn(console, "error").mockImplementation(() => undefined)
-  // One `act`, covering the draw as well as the render: the reconciler commits on a
-  // scheduled task, so the boundary's own state update lands during the frame, not inside
-  // `render`.
+  // One `act`, covering the draw as well as the render: the reconciler commits on a scheduled
+  // task, so the boundary's own state update lands during the frame.
   await act(async () => {
     created.render(
       <Boundary

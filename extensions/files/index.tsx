@@ -43,16 +43,7 @@ import {
   type VisibleRow,
 } from "./tree"
 
-/**
- * One glyph per state a side of the index can be in, as a total record rather than a switch:
- * a kind added to the model is a compile error here instead of a row that draws a blank
- * status column.
- *
- * There is no matching colour table any more. Colour now comes from the *column* a letter
- * sits in — green for the index, red for the working tree — which is lazygit's scheme and
- * the reason the pair reads at a glance: `M ` and ` M` are different colours as well as
- * different positions.
- */
+/** A total record rather than a switch: a new kind is a compile error, not a blank column. */
 const kindGlyphs: { readonly [K in ChangeKind | "untracked"]: string } = {
   added: "A",
   modified: "M",
@@ -70,13 +61,7 @@ const conflictGlyphs: { readonly [K in ConflictSide]: string } = {
   modified: "U",
 }
 
-/**
- * A row's two status columns: `X` then `Y`, exactly as git spells them.
- *
- * This is what replaced the group headings. A heading could only say one thing about a row,
- * so an `MM` file had to be drawn twice under two of them; two columns say both things in
- * one row, and the pair is the same `XY` a user already reads in `git status`.
- */
+/** A row's two status columns: `X` then `Y`, the same pair `git status` prints. */
 interface StatusCell {
   readonly index: string
   readonly worktree: string
@@ -93,36 +78,25 @@ function statusCell(change: FileChange): StatusCell {
       worktreeToken: "danger",
     }
   }
-  // Untracked fills both columns, because git does: porcelain spells it `??`, and a lone
-  // `?` in the working-tree column would read as "something happened to the index" — the
-  // one thing that has not happened to a file git has never been told about.
+  // Both columns, because porcelain spells untracked `??`.
   if (change.index === null && change.worktree === "untracked") {
     return { index: "?", worktree: "?", indexToken: "info", worktreeToken: "info" }
   }
   return {
     index: change.index === null ? " " : kindGlyphs[change.index],
     worktree: change.worktree === null ? " " : kindGlyphs[change.worktree],
-    // Staged content is green and unstaged content is red on the side it lives on, so the
-    // column a letter sits in carries as much meaning as the letter.
     indexToken: change.index === null ? "text" : "success",
     worktreeToken: change.worktree === null ? "text" : change.worktree === "untracked" ? "info" : "danger",
   }
 }
 
 /**
- * A directory's own two columns: the expand marker, then one character summarising what is
- * underneath it.
- *
- * A character as well as a colour, because a folded directory is the only row whose whole
- * content is its subtree — and in a no-colour terminal a colour-only summary says nothing
- * at all. First match wins, worst news first.
+ * A directory's two columns: the expand marker, then one character summarising the subtree.
+ * A character as well as a colour, so the summary survives a no-colour terminal. First match
+ * wins, worst news first.
  */
 function directoryCell(node: DirectoryNode, folded: boolean): StatusCell {
-  // The full-size triangles (U+25B6 / U+25BC), not the small ones beside them in the block:
-  // this glyph is the whole of a folder row's affordance, and at 6px of ink it read as a
-  // speck rather than a control. lazygit's own pair, so it is proven in the terminals a
-  // lazygit user already runs, and `Bun.stringWidth` scores both 1 \u2014 which is what keeps
-  // the status columns beside them from stepping right.
+  // U+25B6 / U+25BC, lazygit's own pair, both one column wide.
   const marker = folded ? "\u25b6" : "\u25bc"
   const mark = node.conflicted
     ? { text: "!", token: "danger" as keyof Theme }
@@ -134,19 +108,11 @@ function directoryCell(node: DirectoryNode, folded: boolean): StatusCell {
   return { index: marker, worktree: mark.text, indexToken: "textMuted", worktreeToken: mark.token }
 }
 
-/**
- * A decoration slot per path.
- *
- * The model gives a path exactly one entry (ADR-0005), so the path *is* the identity and
- * there is nothing else to join into the key. Keying on the state as well would move the
- * slot every time a row's status changed \u2014 staging a file would evict a decoration its
- * provider would only recompute to the same answer.
- */
+/** A path holds exactly one entry (ADR-0005), so the path alone identifies a decoration slot. */
 function changeKey(change: FileChange): string {
   return change.path
 }
 
-/** Renames read as the move they are; every other kind is just its path. */
 function labelOf(change: FileChange): string {
   return change.previousPath === null ? change.path : `${change.previousPath} → ${change.path}`
 }
@@ -156,25 +122,14 @@ function pathsOf(change: FileChange): readonly string[] {
   return change.previousPath === null ? [change.path] : [change.path, change.previousPath]
 }
 
-/**
- * Whether there is a repository at all. Without this check an empty status reads as "working
- * tree clean", which claims a healthy, fully committed repository in the one place where
- * there is no repository to be clean.
- */
 function inRepository(head: Head): boolean {
   return head.kind !== "noRepository"
 }
 
 /**
- * What discarding a row has to undo — decided against the status the store is serving
- * rather than against the group the row was drawn under, because the action menu hands its
- * items a {@link FileChange} and no group, and one key must not mean two things.
- *
- * `ctx.git.discard` is `git restore --worktree` (plus `clean` for an untracked path), so on
- * a path whose change lives only in the index it restores the file from the index onto
- * itself: a danger confirmation followed by nothing at all. Staged content therefore has to
- * leave the index first, after which `d` means what a lazygit user reads it to mean — this
- * file goes back to what HEAD has.
+ * What discarding a row has to undo. `ctx.git.discard` is `git restore --worktree` (plus
+ * `clean` for an untracked path), so it restores *from the index* — staged content has to
+ * leave the index first or the discard is a confirmation followed by nothing.
  */
 type DiscardOutcome =
   /** Untracked: no HEAD version to come back to, so the file goes. */
@@ -192,16 +147,7 @@ interface DiscardPlan {
   readonly paths: readonly string[]
 }
 
-/**
- * No `status` argument any more, and that is the whole point of the model change: the
- * entry itself says which side of the index holds it, so this reads the row it was handed
- * instead of searching the staged array for a path that might also be in it. The old
- * version had to, because the row carried one `kind` and the group it came from was not
- * available here.
- *
- * Null on a conflicted path: resolving one belongs to the user's editor (§5.12), and
- * "discard" has no meaning for a file with two recorded sides and neither chosen.
- */
+/** Null on a conflicted path: resolving one belongs to the user's editor (§5.12). */
 function discardPlan(change: FileChange): DiscardPlan | null {
   if (change.kind === "conflicted") return null
   if (change.index === null) {
@@ -209,8 +155,6 @@ function discardPlan(change: FileChange): DiscardPlan | null {
       ? { outcome: "delete", paths: [change.path] }
       : { outcome: "restore", paths: pathsOf(change) }
   }
-  // `pathsOf` carries the previous path too: unstaging one half of a staged rename would
-  // leave the other half in the index and the file looking half-moved.
   return { outcome: change.index === "added" ? "unstageAndDelete" : "unstageAndRestore", paths: pathsOf(change) }
 }
 
@@ -220,12 +164,7 @@ interface Confirmation {
   readonly confirmLabel: string
 }
 
-/**
- * Spelled out per outcome rather than shared, because the four are not comparable: one loses
- * edits to a file that still exists, two remove the file from the disk, and one drops work
- * that was already staged. A danger confirmation whose text does not match what happens is
- * worse than none — it teaches the user to trust a sentence that is not true.
- */
+/** One wording per outcome: two of the four delete the file, and the text has to say so. */
 function discardConfirmation(plan: DiscardPlan, change: FileChange): Confirmation {
   const label = labelOf(change)
   switch (plan.outcome) {
@@ -258,7 +197,6 @@ function discardConfirmation(plan: DiscardPlan, change: FileChange): Confirmatio
 
 const isNotConflicted = (change: FileChange): boolean => !isConflicted(change)
 
-/** "1 file" / "3 files", so a confirmation reads as a sentence rather than as `1 file(s)`. */
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`
 }
@@ -285,29 +223,17 @@ export default defineExtension({
     const host = createRowSource<FileChange>({ key: changeKey })
     const diff = ctx.extensions.get("diff")
 
-    /**
-     * Which folders are folded, and which layout is on screen.
-     *
-     * Cells in `activate`, not `useState` in the Pane: the Layout unmounts a Pane it has
-     * tabbed away, and a tree that forgot every fold each time the user glanced at another
-     * tab would be worse than no tree at all. Neither survives a hot reload — the same
-     * lifetime the diff Pane's view cell has, and the same reason: reload rebuilds the
-     * Extension's whole scope.
-     *
-     * `viewMode` is seeded from config and never written back. `ctx.config` is an
-     * activation-constant snapshot, so a session toggle is a layer over the configured
-     * default rather than an edit to it.
-     */
+    // Cells in `activate`, not `useState`: the Layout unmounts a Pane it has tabbed away, and
+    // the folds have to outlive that. `viewMode` is seeded from the activation-constant config
+    // snapshot and never written back, so a toggle is a session layer over the default.
     const fold = createCell<FoldState>(noFolds)
     const viewMode = createCell<"tree" | "flat">(ctx.config.view)
     const threshold = ctx.config.collapseThreshold
 
     /**
-     * Folds or unfolds one directory, writing to *both* sets.
-     *
-     * A single collapsed set cannot express "keep this open": the fold threshold folds a
-     * big directory on first draw, and without an explicit `expanded` entry the ~2s poll
-     * would re-fold it under the user every time the status object changed.
+     * Folds or unfolds one directory, writing to *both* sets. A collapsed set alone cannot
+     * express "keep this open", so the fold threshold would re-fold a big directory on the
+     * next poll.
      */
     function setFolded(node: DirectoryNode, folded: boolean): void {
       const current = fold.get()
@@ -324,13 +250,8 @@ export default defineExtension({
     }
 
     /**
-     * What the diff Pane should show for a row.
-     *
-     * The side used to come from the group heading the row was drawn under. It comes from
-     * the entry now: a change that lives only in the index has nothing in the working tree
-     * to diff, so `staged` is the only reading that shows anything at all. A directory
-     * diffs as a pathspec, which git answers against the index — so a folder of purely
-     * untracked files renders an empty patch, and the diff Pane already says "no changes".
+     * What the diff Pane should show for a row. A change living only in the index has nothing
+     * in the working tree to diff, so `staged` is the only side that shows anything.
      */
     function diffTarget(node: TreeNode): DiffTarget {
       if (node.kind === "directory") {
@@ -352,11 +273,8 @@ export default defineExtension({
       }
     }
 
-    /**
-     * A staged rename is two index entries — the new path added and the old one deleted —
-     * and `unstage` resets exactly the paths it is handed, so dropping the previous path
-     * would leave the deletion staged and the file still looking half-renamed.
-     */
+    // A staged rename is two index entries, and `unstage` resets exactly the paths it is
+    // handed: dropping the previous path would leave the file looking half-renamed.
     async function unstage(change: FileChange): Promise<void> {
       try {
         await ctx.git.unstage(pathsOf(change))
@@ -374,14 +292,8 @@ export default defineExtension({
     }
 
     /**
-     * `space` on a file: stage it unless there is nothing left to stage, in which case
-     * unstage it.
-     *
-     * The old version read the group the row was drawn under, which no longer exists — and
-     * the entry says it better anyway. A path with anything on the working-tree side is a
-     * path with something to stage, so the same key walks `M` → `M ` → ` M` without ever
-     * needing to know which heading the row came from. Staging a conflicted file is how git
-     * records a resolution, which is the whole of v1's conflict write path (§5.12).
+     * `space` on a file: stage it unless there is nothing left to stage. Staging a conflicted
+     * file is how git records a resolution, which is v1's whole conflict write path (§5.12).
      */
     async function toggleFile(change: FileChange): Promise<void> {
       if (isUnstaged(change) || isUntracked(change) || isConflicted(change)) await stage([change.path])
@@ -389,18 +301,13 @@ export default defineExtension({
     }
 
     /**
-     * `space` on a directory: the same rule, read over the subtree.
-     *
-     * Staging passes the **directory pathspec** rather than a file list — git recurses, and
-     * a pathspec is one argv no matter how many files are under it. Unstaging additionally
-     * names every descendant's previous path, or a rename *into* this directory from
-     * outside leaves its other half staged and the file looking half-moved.
+     * `space` on a directory: the same rule over the subtree. Staging passes the directory
+     * pathspec and lets git recurse; unstaging also names every descendant's previous path, or
+     * a rename into this directory leaves its other half staged.
      */
     async function toggleDirectory(node: DirectoryNode): Promise<void> {
-      // Refused rather than staged: `git add` on a directory holding an unmerged file marks
-      // that conflict resolved on the way past, with the markers still in the file. Doing
-      // that as a side effect of a keypress aimed at a folder is not a decision the user
-      // made — the same reasoning §5.12 gives for keeping resolution explicit.
+      // Refused rather than staged: `git add` on an unmerged file marks the conflict resolved
+      // with the markers still in it, which is not what a keypress aimed at a folder asked for.
       if (node.conflicted) {
         ctx.popups.notify(`${node.path} holds a conflict — resolve it before staging the folder`, "warning")
         return
@@ -430,9 +337,8 @@ export default defineExtension({
       if (!confirmed) return
 
       try {
-        // Unstaging first is the whole of it: `ctx.git.discard` restores the working tree
-        // *from the index*, so anything still in the index is exactly what survives, and a
-        // change that lives only there survives untouched.
+        // Unstage first: `discard` restores from the index, so whatever is still in the index
+        // is exactly what survives.
         if (plan.outcome === "unstageAndRestore" || plan.outcome === "unstageAndDelete") {
           await ctx.git.unstage(plan.paths)
         }
@@ -443,13 +349,9 @@ export default defineExtension({
     }
 
     /**
-     * `d` on a directory, expanded to the files underneath it.
-     *
-     * Deliberately **not** the directory pathspec, unlike staging. `ctx.git.discard`
-     * partitions the paths it is given by exact membership in the untracked set, so a
-     * directory always lands in `git restore --worktree` — which fails outright on a folder
-     * holding only untracked files, and silently skips them when it holds a tracked one.
-     * Expanding to leaves is what makes the confirmation's promise true.
+     * `d` on a directory, expanded to leaves rather than passed as a pathspec: `ctx.git.discard`
+     * partitions paths by exact membership in the untracked set, so a directory would always
+     * land in `git restore --worktree` and skip the untracked files under it.
      */
     async function discardDirectory(node: DirectoryNode): Promise<void> {
       const plans = filesUnder(node).flatMap((change) => {
@@ -487,15 +389,11 @@ export default defineExtension({
     }
 
     /**
-     * Working-tree changes only. `ctx.git.discard` restores a tracked file *from the
-     * index*, so staged content is exactly what survives; unstaging first would be a
-     * bigger and differently destructive operation than the label promises. Conflicted
-     * paths are left out because resolving them belongs to the user's editor (§5.12).
+     * Working-tree changes only: staged content survives, since `discard` restores from the
+     * index. Conflicted paths are left out — resolving them belongs to the editor (§5.12).
      */
     async function discardAll(): Promise<void> {
       const status = ctx.git.state.status
-      // One pass, one entry per path: a file both edited and untracked-in-part cannot be
-      // named twice here, so the count in the confirmation is the number of files.
       const affected = status.files.filter((change) => isUnstaged(change) || isUntracked(change))
       const paths = affected.map((change) => change.path)
       if (paths.length === 0) {
@@ -523,14 +421,9 @@ export default defineExtension({
     }
 
     /**
-     * `ctx.open`, not `ctx.exec`: `exec` pipes the child's stdio, so a terminal editor —
-     * or `git mergetool` — has no terminal to draw on and cannot run inside the TUI at
-     * all. The full-screen suspend/resume that would give it one is post-v1 (PLAN.md risk
-     * table), so handing the file to the OS opener is the version that works today.
-     *
-     * The root is joined by hand because an Extension may import only `"laziergit"`,
-     * `"react"` and `"@opentui/react"` (ADR-0001) — there is no `node:path` here. Git
-     * reports paths relative to the root with `/` separators, which is the separator used.
+     * `ctx.open`, not `ctx.exec`: `exec` pipes the child's stdio, so a terminal editor would
+     * have no terminal to draw on. The root is joined by hand because an Extension has no
+     * `node:path` (ADR-0001); git reports paths relative to the root with `/` separators.
      */
     async function openPath(path: string): Promise<void> {
       try {
@@ -543,14 +436,10 @@ export default defineExtension({
     const openFile = (change: FileChange): Promise<void> => openPath(change.path)
 
     /**
-     * `x` on a file opens the registered `files.actions` menu; on a directory it opens an
-     * ad-hoc one.
-     *
-     * A directory row is not a `FileChange`, and `files.actions` is declared as taking one.
-     * Widening that payload to a union would make every third-party splice into the menu
-     * handle a case it never asked for, so the folder menu is built here instead. The cost
-     * is real and named in §5.12: nothing can splice into it. The fix, when something needs
-     * to, is a row-type union in the public API — and that belongs with its first consumer.
+     * `x` opens the registered `files.actions` menu on a file, and an ad-hoc one on a folder:
+     * a directory row is not a `FileChange`, and widening that payload would push the union
+     * onto every third-party splice. The cost, named in §5.12, is that nothing can splice into
+     * the folder menu.
      */
     async function openMenu(node: TreeNode | undefined): Promise<void> {
       if (node === undefined) return
@@ -591,27 +480,18 @@ export default defineExtension({
             {
               key: "u",
               label: "Unstage",
-              // Exactly the rows with something in the index to take out — which now hides
-              // it on a purely-unstaged row too, not just an untracked one.
               when: isStaged,
               run: unstage,
             },
             { key: "d", label: "Discard changes", when: isNotConflicted, run: discard },
-            // The same `o` the conflict group below offers, and safe because the two `when`s
-            // are exact opposites: a menu is one keyspace, but visibility is settled before
-            // conflicts and an item `when` hides never contests a key (§5.7). So the key the
-            // pane uses is the key the menu shows, whichever kind of row you opened it on.
+            // Shares `o` with the conflict group below: visibility is settled before key
+            // conflicts, and these two `when`s are exact opposites (§5.7).
             { key: "o", label: "Open in default application", when: isNotConflicted, run: openFile },
           ],
         },
         {
-          /**
-           * Shown and delegated (§5.12): a conflicted row is offered the editor and a way
-           * to record the result, and nothing else — no pick-ours/pick-theirs, which needs
-           * both the conflict-kind variant `FileChange` does not carry and the patch-level
-           * staging v1 leaves out. `when` hides these rather than greying them, so on an
-           * ordinary row the keys are inert instead of disappointing.
-           */
+          // Delegated to the editor (§5.12): no pick-ours/pick-theirs, which needs both a
+          // conflict-kind variant `FileChange` does not carry and patch-level staging.
           id: "conflict",
           title: "Conflict",
           items: [
@@ -626,9 +506,7 @@ export default defineExtension({
             { key: "a", label: "Stage all files", run: () => stage("all") },
             { key: "r", label: "Unstage all files", run: unstageAll },
             {
-              // `shift+d`, not `D`: the binding parser lowercases a bare letter, so `D`
-              // would claim the same stroke as the `d` above and one of them would
-              // silently never fire.
+              // `shift+d`, not `D`: the parser lowercases a bare letter, colliding with `d`.
               key: "shift+d",
               label: "Discard all working-tree changes",
               run: discardAll,
@@ -639,12 +517,8 @@ export default defineExtension({
     })
 
     /**
-     * The shared shape of every row: marker, indent, two status columns, label, badge.
-     *
-     * Split from the two wrappers below because `useDecoration` is a hook and a directory
-     * has no `FileChange` to look one up by — a single component would have to call it
-     * conditionally. The split is also what keeps `decorateRows`' contract honest: a
-     * provider is only ever handed a file.
+     * The shared shape of every row. Split from the two wrappers below because `useDecoration`
+     * is a hook and a directory has no `FileChange` to look one up by.
      */
     function Line({
       id,
@@ -669,20 +543,12 @@ export default defineExtension({
 
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
-          {/* No cursor marker. The highlight already says where the cursor is, and a chevron
-              beside it said the same thing a second time in the two leftmost columns of a
-              pane that is mostly path. The cost is named rather than hidden: an unfocused
-              pane draws no highlight either, so while you drive another pane nothing marks
-              the row whose diff is still on screen. */}
-          {/* The status pair sits before the indent, so `XY` pins to the same two columns on
-              every row however deep it is. Indenting it too made the one column you scan down
-              \u2014 is this staged? \u2014 step right with each folder, which is the column lazygit
-              keeps fixed for exactly this reason. */}
+          {/* The status pair sits before the indent, so `XY` pins to the same two columns
+              however deep the row is. */}
           <span fg={dim ? theme.textMuted : theme[cell.indexToken]}>{cell.index}</span>
           <span fg={dim ? theme.textMuted : theme[cell.worktreeToken]}>{cell.worktree}</span>
           {/* Indent is spaces inside the one `<text>`, not nested boxes: `scrollChildIntoView`
-              finds a row by id, and a per-depth box tree would put every row at a different
-              place in the layout for no gain. */}
+              finds a row by id. */}
           <span fg={dim ? theme.textMuted : theme.text}>{` ${"  ".repeat(depth)}${label}`}</span>
           <span fg={toneColor(theme, decoration?.tone)}>{badge === undefined ? "" : ` ${badge}`}</span>
         </text>
@@ -738,9 +604,8 @@ export default defineExtension({
       const view = viewMode.use()
       const folds = fold.use()
 
-      // Memoised on the store slice's own identity: a refresh that changed nothing hands
-      // back the same object, so the tree — and with it every decoration cache hit — survives
-      // the poll untouched. Build and flatten are separate memos so expanding a directory
+      // Memoised on the store slice's identity: a refresh that changed nothing hands back the
+      // same object, so the tree survives the poll. Separate memos so expanding a directory
       // re-walks the tree without rebuilding it.
       const nodes = useMemo(
         () => (view === "tree" ? buildTree(status.files) : buildFlatList(status.files)),
@@ -750,18 +615,9 @@ export default defineExtension({
       const cursor = useListCursor({ items: rows, idPrefix: "files", noun: "file" })
 
       /**
-       * The cursor follows the *node* it was on, not the index.
-       *
-       * `useListCursor` clamps only against the end of the list, which is the right rule for
-       * a flat list that only ever grows and shrinks at the bottom. A tree moves rows out
-       * from under the cursor: collapsing a directory above it deletes several rows at once,
-       * and the index that used to name the selected file silently comes to name a different
-       * one. Anchoring on the path fixes that, and `rowIndexFor`'s deepest-visible-ancestor
-       * fallback decides where to land when the anchored row is the one that just went away.
-       *
-       * Resolved during render rather than in an effect, the same discipline
-       * `useListCursor` uses for its own clamp: the render that draws the collapse already
-       * draws the corrected highlight, so there is no frame where the wrong row is lit.
+       * The cursor follows the node it was on, not the index: collapsing a directory above the
+       * cursor deletes several rows at once, and `useListCursor` only clamps against the end of
+       * the list. Resolved during render, so no frame lights the wrong row.
        */
       const anchor = useRef<{ rows: readonly VisibleRow[]; path: string | null }>({ rows, path: null })
       const anchored =
@@ -776,28 +632,15 @@ export default defineExtension({
 
       useEffect(() => {
         host.setSelected(selected?.node.kind === "file" ? selected.node.change : undefined)
-        // Cleared on unmount, not merely replaced on the next move: a Pane the Layout has
-        // tabbed away has no selection, and `FilesApi.selected()` must not keep naming the
-        // row it had when it went off screen — least of all in the window between unmount
-        // and scope disposal during a hot reload.
         return () => host.setSelected(undefined)
       }, [selected])
 
-      /**
-       * The diff follows this Pane only while it is focused: every list Pane pushes its
-       * selection into the one diff Pane, and the focused one is the only one whose
-       * selection the user is actually moving.
-       */
       useEffect(() => {
+        // Only while focused: the diff belongs to whichever list the user is driving.
         if (!focused) return
-        // A tree that just went clean has nothing to diff, and saying so is the whole point
-        // of `show(null)`: leaving the last file's patch up would claim it is still there.
         diff.show(selected === undefined ? null : diffTarget(selected.node))
       }, [focused, selected])
 
-      // A selection is empty only when the list is, and the empty state below already says so
-      // — a toast would repeat it, so every key with nothing to act on is a silent no-op. The
-      // same rule in the branches, commits and stash Panes.
       useCommand({
         id: "files.toggle-stage",
         title: "Stage / unstage file",
@@ -826,10 +669,8 @@ export default defineExtension({
       useCommand({
         id: "files.open",
         title: "Open file in default application",
-        // `o`, lazygit's key for exactly this, rather than the `e` it was: in lazygit `e`
-        // means *edit* — hand the file to `$EDITOR` inside the TUI — and binding it to the
-        // OS opener would teach the wrong half of a pair we intend to complete. `e` is left
-        // free for the day the full-screen suspend that makes editing possible lands.
+        // `o` as in lazygit; `e` stays free for editing in `$EDITOR`, which needs the
+        // full-screen suspend laziergit does not have yet.
         keys: "o",
         run: () => (selected === undefined ? undefined : openPath(selected.node.path)),
       })
@@ -841,9 +682,8 @@ export default defineExtension({
         run: () => openMenu(selected?.node),
       })
 
-      // `return`, not `"enter"`: OpenTUI names the Enter key `return`, and core does not
-      // install the keymap's alias field, so `"enter"` would parse, register, appear in the
-      // cheat sheet, and never fire.
+      // `return`, not `"enter"`: OpenTUI's name for the key, and core installs no aliases, so
+      // `"enter"` would register, appear in the cheat sheet, and never fire.
       useCommand({
         id: "files.toggle-collapse",
         title: "Expand / collapse folder",
@@ -863,9 +703,8 @@ export default defineExtension({
       useCommand({
         id: "files.expand-all",
         title: "Expand every folder",
-        // Expanding has to name every directory too, rather than clearing both sets: an
-        // empty `expanded` would let the fold threshold immediately re-fold the big ones,
-        // and "expand all" that leaves something folded is a lie.
+        // Names every directory rather than clearing both sets, or the fold threshold would
+        // immediately re-fold the big ones.
         keys: "=",
         run: () => fold.set({ collapsed: new Set(), expanded: new Set(directoryPaths(nodes)) }),
       })
@@ -876,23 +715,16 @@ export default defineExtension({
         run: () => viewMode.set(viewMode.get() === "tree" ? "flat" : "tree"),
       })
 
-      // Outside a repository there is no working tree to be clean, and saying it is clean
-      // would report a healthy, fully committed repository where there is none at all.
       if (!repository) return <text fg={theme.textMuted} content="no repository here" />
 
-      // A clean tree is an answer, not an absence: an empty box would read as a Pane that
-      // failed to load. Measured on the file count rather than the row count, which is the
-      // same number only when nothing is folded.
+      // Measured on the file count, not the row count: they differ once something is folded.
       if (status.files.length === 0) return <text fg={theme.textMuted} content="working tree clean" />
 
       return (
         // Not focusable: OpenTUI has a single focus slot, and laziergit's own focus model
-        // decides which Pane's keys are live, so a Pane claiming the renderer's focus would
-        // only take it away from the popup layer's inputs.
-        //
-        // `flexBasis={0}` alongside `flexGrow`, or the box's flex size is its *content*
-        // height: a list longer than the Pane makes the box taller than the Pane, which
-        // paints over the Pane above it instead of scrolling inside its own frame.
+        // decides which Pane's keys are live — claiming it would starve the popup inputs.
+        // `flexBasis={0}` sizes the box to the Pane rather than to its content, so a long list
+        // scrolls instead of overflowing the frame.
         <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
           {rows.map((row) =>
             row.node.kind === "file" ? (
@@ -927,10 +759,7 @@ export default defineExtension({
       placement: { column: 0, order: 20 },
     })
 
-    // No key of its own: core binds `1`–`9` to the Panes in Layout order, so the digit that
-    // lands here is the one this Pane's position earns rather than one it claimed. What is
-    // left is the palette row — and an id the user can bind a key of their own to, which is
-    // the thing a positional jump cannot offer.
+    // Keyless: core binds `1`–`9` positionally over the Layout (§1.7).
     ctx.commands.register({
       id: "files.focus",
       title: "Focus the files pane",

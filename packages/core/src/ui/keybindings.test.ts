@@ -50,17 +50,12 @@ it("runs the Command a global key is bound to", async () => {
 })
 
 /**
- * The Enter key, both directions.
+ * The Enter key, both directions. OpenTUI's parser names it `return` on every path it can
+ * arrive by, and `installKeymap` does not register the keymap's alias field, so `"enter"` is a
+ * real, parseable, unreachable stroke name: a Command bound to it registers cleanly and shows
+ * up in the cheat sheet with a key that can never fire.
  *
- * OpenTUI's parser names it `return` on every path it can arrive by (`key.name = "return"`
- * for both the bare `\r` and the kitty-protocol form), and `installKeymap` deliberately
- * does not register the keymap's alias field. `"enter"` is therefore a real, parseable,
- * *unreachable* stroke name: a Command bound to it registers cleanly, typechecks, and
- * shows up in the cheat sheet with a key that can never fire.
- *
- * Both halves are pinned because only the pair is the bug. The first test alone would
- * still pass if someone later installed the alias field and made `"enter"` work — and the
- * second alone would pass against a keymap that had dropped Enter support entirely.
+ * Both halves are pinned because only the pair is the bug.
  */
 it("fires a Command bound to return when Enter arrives", async () => {
   const test = harness()
@@ -180,8 +175,8 @@ it("stops enforcing a capture the moment its Pane loses focus", async () => {
   test.bindings.setCapturingPane("files")
   await test.flush()
 
-  // Nothing can leave a capturing Pane by keyboard, so this is the other door: an
-  // Extension focusing elsewhere must not leave a background Pane holding the keyboard.
+  // Nothing can leave a capturing Pane by keyboard, so this is the other door: an Extension
+  // focusing elsewhere must not leave a background Pane holding the keyboard.
   test.bindings.setFocusedPane("branches")
   test.host.press("s", { ctrl: true })
   test.host.press("q")
@@ -287,10 +282,8 @@ it("publishes the focused Pane's keys, then the globals it did not shadow", () =
   expect(live(test.bindings)).toEqual(["p sync.pull", "q app.quit"])
 
   test.bindings.setFocusedPane("stash")
-  // `p` is the stash Pane's, because its layer outranks the global one — so the bar must
-  // say "pop" rather than the "pull" the same key means everywhere else. `q` is claimed by
-  // nobody else and stays: focusing a Pane narrows the bar, it does not empty it of
-  // everything the app can still do.
+  // `p` is the stash Pane's, because its layer outranks the global one. `q` is claimed by
+  // nobody else and stays: focusing a Pane narrows the bar, it does not empty it.
   expect(live(test.bindings)).toEqual(["p stash.pop", "d stash.drop", "q app.quit"])
   test.cleanup()
 })
@@ -301,8 +294,7 @@ it("keeps the layer matchers and the live set answering with one voice", async (
   test.bindings.setFocusedPane("stash")
   await test.flush()
 
-  // The bar says the stash Pane owns `p`; pressing it must run what the bar named. The two
-  // read one rule, and this is the assertion that would catch them drifting apart.
+  // The bar says the stash Pane owns `p`, and pressing it must run what the bar named.
   expect(live(test.bindings)[0]).toBe("p stash.pop")
   test.host.press("p")
   await test.flush()

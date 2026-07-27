@@ -41,7 +41,7 @@ const rowsSource = `
         }, [cursor.selected])
 
         // Shrinking keeps the surviving rows' identity, the way the git store does; the
-        // replacement is a fresh object per row, so the decoration cache is exercised both ways.
+        // replacement is a fresh object per row, so the cache is exercised both ways.
         useCommand({ id: "rows.shrink", title: "Shrink", keys: "s", run: () => setItems(items.slice(0, 1)) })
         useCommand({ id: "rows.grow", title: "Grow", keys: "w",
           run: () => setItems([{ name: "one" }, { name: "two" }, { name: "three" }]) })
@@ -153,9 +153,8 @@ async function press(harness: Harness, action: () => void): Promise<void> {
 }
 
 /**
- * Renders until the frame says `text`. A Command that spawns a child process returns long
- * after the keypress does, and a fixed sleep would be flaky or slow. Times out quietly, so
- * the test's own `expect` reports the failure with its own message and its own frame.
+ * Renders until the frame says `text`, since a Command that spawns a child process returns
+ * long after the keypress. Times out quietly, so the test's own `expect` reports the failure.
  */
 async function waitForFrame(harness: Harness, text: string, timeoutMs = 4_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -229,7 +228,7 @@ describe("createRowSource", () => {
     expect(frame(harness)).toContain("two [second/warning]")
 
     // Disposal is how a deactivating Extension's providers stop being called: its ctx scope
-    // disposes exactly this handle, so the live path and the teardown path are the same one.
+    // disposes exactly this handle.
     await press(harness, () => harness.setup.mockInput.pressKey("F"))
     expect(frame(harness)).toContain("two [first/warning]")
 
@@ -281,8 +280,8 @@ describe("useKeyCapture", () => {
     expect(rendered).toContain("Keybindings — editor")
     expect(rendered).toContain("Submit message")
     expect(rendered).toContain("editor (capturing keys)")
-    // Against an entry rather than a heading, so this pins the ordering the name claims: the
-    // Pane's ordinary keys, then its capture keys, then the globals that trail every sheet.
+    // Against an entry rather than a heading, so this pins the order the name claims: the
+    // Pane's ordinary keys, then its capture keys, then the globals.
     expect(rendered.indexOf("editor (capturing keys)")).toBeGreaterThan(rendered.indexOf("Begin editing"))
     expect(rendered.indexOf("Global")).toBeGreaterThan(rendered.indexOf("editor (capturing keys)"))
 
@@ -299,8 +298,8 @@ describe("useKeyCapture", () => {
     const rendered = frame(harness)
     expect(rendered).toContain("editor (capturing keys)")
     expect(rendered).toContain("Submit message")
-    // `q` quits and `e` begins an edit, and neither does anything right now, so neither is
-    // offered — the sheet lists what is live, not what exists.
+    // `q` quits and `e` begins an edit, and neither does anything right now: the sheet lists
+    // what is live, not what exists.
     expect(rendered).not.toContain("Quit")
     expect(rendered).not.toContain("Begin editing")
 
@@ -357,9 +356,8 @@ describe("PaneHandle", () => {
 })
 
 /**
- * Three Panes and not one digit among them — which is the point. A third-party Extension
- * cannot know which numbers are free, and under the old scheme it either guessed or went
- * unreachable.
+ * Three Panes and not one digit among them, which is the point: a third-party Extension cannot
+ * know which numbers are free.
  */
 const jumpSource = `
   /** @jsxImportSource @opentui/react */
@@ -389,8 +387,8 @@ describe("pane-jump keys", () => {
 
     expect(frame(harness)).toContain("files focused")
 
-    // `2` is the second cell of the first column, and `3` carries on into the next column:
-    // reading order, which is the only order the numbers could mean.
+    // `2` is the second cell of the first column and `3` carries on into the next: reading
+    // order, which is the only order the numbers could mean.
     await press(harness, () => harness.setup.mockInput.pressKey("2"))
     expect(frame(harness)).toContain("actions focused")
     expect(frame(harness)).toContain("files blurred")
@@ -415,11 +413,9 @@ describe("pane-jump keys", () => {
     )
 
     await press(harness, () => harness.setup.mockInput.pressKey("?"))
-    // The titles the Panes registered, not "pane 2" — this sheet is where a user goes to
-    // find out which digit is which, and a positional key can only be explained here.
-    // All three at once, on a terminal with the room for them: the jump keys trail the rest
-    // of the globals, and a sheet that had to be scrolled to reach the one thing only it can
-    // explain would answer the question by hiding the answer.
+    // The titles the Panes registered, not "pane 2": this sheet is where a user finds out
+    // which digit is which. All three at once, because the jump keys trail the rest of the
+    // globals and a sheet that had to be scrolled would hide the answer.
     const sheet = frame(harness)
     expect(sheet).toContain("Focus Files")
     expect(sheet).toContain("Focus Actions")

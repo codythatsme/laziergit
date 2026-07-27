@@ -37,16 +37,13 @@ function Segments({ panes, segments }: { panes: PaneHost; segments: readonly Sta
 const hintSeparator = "  ·  "
 
 /**
- * What the focused Pane can do, in the keys that would do it.
+ * What the focused Pane can do, in the keys that would do it. Only Commands whose author wrote
+ * a {@link CommandSpec.hint} appear: `tab`, the palette and `q` are on every screen in every
+ * mode, so printing them forever would crowd out the keys that change.
  *
- * Only the Commands whose author wrote a {@link CommandSpec.hint} appear. `tab`, the palette
- * and `q` are on every screen in every mode, so printing them forever would crowd out the
- * keys that actually change — core writes no hint of its own for exactly that reason.
- *
- * Clipped rather than wrapped or elided: the row is one line by contract (§1.10), and there
- * is no width here to elide against. The order is the order the Commands were registered in,
- * and the live set puts the focused Pane's before the globals, so what a narrow terminal
- * loses is the least specific end of the line.
+ * Clipped rather than wrapped or elided, since the row is one line by contract (§1.10). The
+ * live set puts the focused Pane's Commands before the globals, so a narrow terminal loses the
+ * least specific end of the line.
  */
 function HintBar({ keys }: { keys: ExternalStore<readonly LiveBinding[]> }) {
   const theme = useTheme()
@@ -71,11 +68,9 @@ function HintBar({ keys }: { keys: ExternalStore<readonly LiveBinding[]> }) {
 }
 
 /**
- * The bottom row: what you can press on the left, Extension-owned segments on the right.
- *
- * Core adds the pending key sequence, because "what did I just press" is the one piece of
- * state no Extension can report. Left-aligned segments still render — the config may pin
- * one there — but they follow the hints rather than displacing them.
+ * The bottom row: what you can press on the left, Extension-owned segments on the right. Core
+ * adds the pending key sequence, because "what did I just press" is the one piece of state no
+ * Extension can report.
  */
 export function StatuslineView({
   statusline,
@@ -91,10 +86,9 @@ export function StatuslineView({
   const pending = usePendingSequence()
 
   return (
-    // `paddingLeft={2}` is a Pane's border plus its own left padding, so the hint bar starts
-    // on exactly the column every row of every Pane starts on. `gap={2}` is what keeps the
-    // two halves apart: `space-between` alone lets a long hint run touch the branch name,
-    // and the row is one line with nothing to elide against (§1.10).
+    // `paddingLeft={2}` is a Pane's border plus its own left padding, so the hint bar starts on
+    // the column every Pane row starts on. `gap={2}` keeps the two halves apart: `space-between`
+    // alone lets a long hint run touch the branch name.
     <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={2} paddingRight={2} gap={2}>
       <box flexDirection="row" gap={2} flexShrink={1}>
         <HintBar keys={keys} />
@@ -114,13 +108,10 @@ export function StatuslineView({
 const maxToastLines = 6
 
 /**
- * A notification's lines, capped.
- *
- * Git writes its most useful refusals across several lines — "would be overwritten by
- * merge:" is a header and the file list is everything after it — and every Bundled
- * Extension passes `GitError.stderr` through verbatim, so a toast that rendered only the
- * first line would drop precisely the part naming what went wrong. Capped because a toast
- * is an overlay: a rebase that lists forty paths must not cover the screen.
+ * A notification's lines, capped. Git writes its most useful refusals across several lines — a
+ * header plus the file list — and every Bundled Extension passes `GitError.stderr` through
+ * verbatim, so rendering only the first line would drop the part naming what went wrong.
+ * Capped because a toast is an overlay.
  */
 function toastLines(message: string): readonly string[] {
   const lines = message.split("\n").filter((line) => line.trim() !== "")
@@ -129,14 +120,10 @@ function toastLines(message: string): readonly string[] {
 }
 
 /**
- * Transient notifications, stacked above the status line and never taking focus.
- *
- * `bottom={2}` clears that row rather than landing on it. At `1` a toast would sit exactly on
- * the status line and blank whatever was there for as long as it lasted — survivable when the
- * row held a branch name, not once it also holds the keys you can press, since the moment a
- * toast appears is the moment you are deciding what to do next. `right={0}` docks the toast's
- * border to the column the Pane frames end on, now that the shell adds no inset of its own;
- * both numbers dropped by one when that padding went.
+ * Transient notifications, stacked above the status line and never taking focus. `bottom={2}`
+ * clears that row rather than landing on it: at `1` a toast would blank the keys you can press
+ * for as long as it lasted, at exactly the moment you are deciding what to do next. `right={0}`
+ * docks the toast's border to the column the Pane frames end on.
  */
 export function ToastLayer({ notifications }: { notifications: NotificationHost }) {
   const theme = useTheme()

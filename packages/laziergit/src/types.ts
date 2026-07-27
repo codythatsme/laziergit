@@ -130,19 +130,7 @@ export interface StringArrayConfigOption extends ConfigOptionBase {
   readonly default: readonly string[]
 }
 
-/**
- * One declared setting, as a union over `kind` rather than a `kind` beside an uncorrelated
- * `default`.
- *
- * The flat shape let `{ kind: "number", default: "none" }` typecheck: `ctx.config.limit`
- * then inferred `string` while the reader handed back a `number`, which is the exact
- * unsoundness the schema-to-value inference exists to rule out. It also had nowhere to put
- * `min`, `max` and `values`, so the two readers that need them — the config reader and the
- * JSON Schema generator — each re-declared a wider shadow type by hand and widened into it.
- *
- * Discriminating on `kind` puts the constraints on the variants that have them, and makes
- * both shadows and their `?? []` fallbacks unnecessary rather than merely tidy.
- */
+/** One declared setting. Discriminated on `kind`, so each variant carries its own bounds. */
 export type ConfigOption =
   | StringConfigOption
   | NumberConfigOption
@@ -151,7 +139,6 @@ export type ConfigOption =
   | StringArrayConfigOption
 
 export type ConfigSchema = Record<string, ConfigOption>
-/** Each setting's value type is its variant's `default` type — no conditional needed. */
 export type ConfigValues<S extends ConfigSchema> = {
   readonly [K in keyof S]: S[K]["default"]
 }
@@ -161,9 +148,8 @@ export const option = {
     return Object.freeze({ kind: "string", ...opts })
   },
   number(opts: { default: number; description?: string; min?: number; max?: number }): NumberConfigOption {
-    // Thrown at definition time, like the enum check below, because the alternative is
-    // silent: a default outside its own bounds is handed straight back as the fallback for
-    // every user who does not set the option, so nothing would ever surface it.
+    // At definition time: a default outside its own bounds is handed back verbatim to every
+    // user who does not set the option, so nothing downstream would ever surface it.
     const { default: value, min, max } = opts
     if (min !== undefined && max !== undefined && min > max) {
       throw new TypeError(`Number option min ${min} exceeds max ${max}`)
@@ -190,12 +176,8 @@ export const option = {
 }
 
 /**
- * One git operation core is running right now — see {@link useGitActivity}.
- *
- * Deliberately not a slice of {@link GitState}: that is the repository as last read, and this
- * is what is happening to it. Only writes appear (a push, a commit, a stage), and only once
- * they have been running long enough to be worth drawing — a stage that settles in 8ms never
- * shows up at all, so a surface can render this without flickering on every keystroke.
+ * One git operation core is running right now — see {@link useGitActivity}. Only writes, and
+ * only once they have run long enough to be worth drawing.
  */
 export interface GitActivity {
   /** Unique for as long as the operation runs. */
@@ -215,24 +197,13 @@ export interface GitState {
 }
 
 /**
- * Where HEAD points — the three shapes git can produce, plus the one it cannot because
- * there is no repository to ask.
- *
- * A union rather than four independent fields because the fields are not independent: an
- * unborn HEAD has no commit to name, a detached one has no branch and therefore no
- * upstream, and only a branch with a commit behind it can have both. Reading an oid off a
- * repository with no commits, or an upstream off a detached HEAD, is now a type error
- * rather than a `""`.
+ * Where HEAD points. A union, because the fields are not independent: an unborn HEAD has no
+ * commit to name, and a detached one has no branch and therefore no upstream.
  */
 export type Head =
   /**
-   * There is no repository here, so HEAD names nothing. Every other slice of
-   * {@link GitState} is empty beside it and every write rejects.
-   *
-   * Its own variant rather than an unborn HEAD with a nameless branch: laziergit runs
-   * wherever the user starts it, so "not a repository" is an ordinary state a Pane renders
-   * differently from a fresh `git init`, and a Pane that must tell them apart should not
-   * have to know that `""` is not a legal refname to do it.
+   * There is no repository here. Every other slice of {@link GitState} is empty beside it and
+   * every write rejects.
    */
   | { readonly kind: "noRepository" }
   /**
@@ -256,8 +227,8 @@ export interface UpstreamInfo {
   readonly branch: string
   /**
    * The upstream ref no longer exists on the remote. Git reports `gone` *instead of* a
-   * divergence, so {@link ahead} and {@link behind} are both 0 here and mean nothing —
-   * this flag is the only thing separating a deleted upstream from an in-sync one.
+   * divergence, so {@link ahead} and {@link behind} are both 0 and mean nothing — this flag is
+   * all that separates a deleted upstream from an in-sync one.
    */
   readonly gone: boolean
   readonly ahead: number
@@ -288,40 +259,25 @@ export interface Commit {
 }
 
 /**
- * What one side of the index did to a path — porcelain v2's `X` and `Y` letters, named.
- *
- * `X` is HEAD→index and `Y` is index→working tree. They are two independent columns
- * measuring two different comparisons, which is why one path can be `MM`: modified in the
- * index *and* modified again since (ADR-0005).
+ * What one side of the index did to a path — porcelain v2's `X` and `Y` letters, named. `X` is
+ * HEAD→index and `Y` is index→working tree, two independent comparisons, which is why one path
+ * can be `MM` (ADR-0005).
  */
 export type ChangeKind = "added" | "modified" | "deleted" | "renamed" | "copied" | "typechange"
 
-/**
- * The working-tree side reports one thing the index side cannot: a path git has never been
- * told about. `?` is a whole-file state rather than a change measured against something, so
- * it lives here and not in {@link ChangeKind} — an index cannot hold an untracked file by
- * definition, and a type that said it could would need a runtime check at every read.
- */
+/** Only the working-tree side can report a path git has never been told about. */
 export type WorktreeChange = ChangeKind | "untracked"
 
 /** What one side of a merge did to a path — porcelain v2's unmerged `XY`, one letter each. */
 export type ConflictSide = "added" | "deleted" | "modified"
 
 /**
- * One path, one entry.
+ * One path, one entry (ADR-0005). Narrow on `kind`: an unmerged path has no
+ * index-vs-working-tree pair to report at all. Ask the questions with {@link isStaged},
+ * {@link isUnstaged}, {@link isUntracked} and {@link isConflicted}.
  *
- * A union rather than a record with four loose optional fields, because the fields are not
- * independent: an unmerged path has no index-vs-working-tree pair to report at all, and
- * `{ index: "modified", ours: "added" }` was representable in the flat shape while meaning
- * nothing. Narrowing on `kind` is what lets a reader ask `change.ours` only where git
- * actually said something about sides.
- *
- * Invariant on the `"changed"` arm: at least one of `index` / `worktree` is non-null. Git
- * does not report a path that matches HEAD on both sides, so an entry where both are null
- * describes a file with nothing to say about it.
- *
- * The four predicates — {@link isStaged}, {@link isUnstaged}, {@link isUntracked},
- * {@link isConflicted} — are how you ask the questions the old four arrays answered.
+ * Invariant on the `"changed"` arm: at least one of `index` / `worktree` is non-null, since
+ * git does not report a path that matches HEAD on both sides.
  */
 export type FileChange =
   | {
@@ -347,16 +303,10 @@ export type FileChange =
 
 export interface WorkingTreeStatus {
   /**
-   * One entry per path git reported, ordered by path.
-   *
-   * A single list rather than the four this used to be (staged / unstaged / untracked /
-   * conflicted), because those four could not name a path that belonged to two of them:
-   * an `MM` file appeared twice, as two objects, and which array a row came from was the
-   * only surviving record of which side of the index it described (ADR-0005).
-   *
-   * Filter it with the predicates. Select the list itself in a `useGit` selector and
-   * derive in a `useMemo` — `useGit((s) => s.status.files.filter(isStaged))` builds a
-   * fresh array every snapshot and never settles.
+   * One entry per path git reported, ordered by path. Filter it with the predicates — but
+   * select the list itself in a `useGit` selector and derive in a `useMemo`, because
+   * `useGit((s) => s.status.files.filter(isStaged))` builds a fresh array every snapshot and
+   * never settles.
    */
   readonly files: readonly FileChange[]
   readonly isClean: boolean
@@ -458,18 +408,15 @@ export interface CommandSpec<TName extends string = string> {
   pane?: string
   hidden?: boolean
   /**
-   * Short label for the hint bar — "checkout", not "Check out branch". Its *presence* is
-   * the opt-in: a Command without one is still bound, still in the palette, still in the
-   * cheat sheet, and simply stays off the bar. Bar order is registration order, and only
-   * the Commands live right now are listed, so a Pane's bar is what that Pane can do.
+   * Short label for the hint bar — "checkout", not "Check out branch". Its presence is the
+   * opt-in; a Command without one is still bound, in the palette and in the cheat sheet. Bar
+   * order is registration order, and only the currently live Commands are listed.
    */
   hint?: string
   /**
    * Keep this Command's keys live while its Pane is capturing raw input
-   * ({@link useKeyCapture}) — the exit keys of a Pane that owns the keyboard, `mod+s` to
-   * submit and `escape` to cancel. Capture is a property of a Pane's keyboard, so this is
-   * ignored (with a logged diagnostic) on a Command with no `pane`; inside a Pane
-   * component {@link useCommand} supplies the Pane for you.
+   * ({@link useKeyCapture}) — the exit keys of a Pane that owns the keyboard. Ignored, with a
+   * logged diagnostic, on a Command with no `pane`.
    */
   capture?: boolean
   run(): void | Promise<void>
@@ -523,12 +470,8 @@ export interface Theme {
   readonly info: string
   readonly background: string
   /**
-   * The raised chrome that sits *above* {@link background} — popups and the status line.
-   *
-   * Not a Pane background, despite the name: a Pane draws on {@link background} like
-   * everything else in the Layout, and "panel" here means the lifted surface, not the
-   * CONTEXT.md sense of the word. Renaming it is a breaking change to every user theme, so
-   * the name stays and this says what it means.
+   * The raised chrome above {@link background} — popups and the status line. Not a Pane
+   * background: a Pane draws on {@link background} like everything else in the Layout.
    */
   readonly backgroundPanel: string
   readonly border: string
@@ -641,16 +584,8 @@ export type CommitsApi = RowSource<Commit>
 export type StashApi = RowSource<StashEntry>
 
 /**
- * What the diff Pane is showing, as the two shapes that differ in whether they name a ref.
- *
- * A union rather than a flat record with a nullable `ref`, because `{ kind: "commit", ref:
- * null }` was representable and meant nothing: the diff Pane had to carry a runtime branch
- * for a state no caller could sensibly build. `path` narrows any of them to one file.
- *
- * `branch` and `commit` fetch the same patch — a branch name is a ref like any other — and
- * differ only in the context the Pane prints above it. That difference is the whole point:
- * a Pane whose rows are clipped to one line needs somewhere to show the name in full, and
- * `{ kind: "commit", ref: tip }` can only ever name the commit.
+ * What the diff Pane is showing. `path` narrows any of them to one file. `branch` and `commit`
+ * fetch the same patch and differ only in the context line the Pane prints above it.
  */
 export type DiffTarget =
   | { readonly kind: "workingTree" | "staged"; readonly path: string | null }
@@ -658,15 +593,10 @@ export type DiffTarget =
 
 export interface DiffApi {
   current(): DiffTarget | null
-  /**
-   * Point the diff Pane at a target, or at `null` to say there is nothing to show — a list
-   * Pane whose rows just went away needs the second as much as the first, and `current()`
-   * could already return it.
-   */
+  /** Point the diff Pane at a target, or at `null` to say there is nothing to show. */
   show(target: DiffTarget | null): void
 }
 
-/** How a commit flow ended, for a caller that composed the message it handed over. */
 export type CommitFlowResult = "committed" | "abandoned"
 
 export interface CommitFlowApi {

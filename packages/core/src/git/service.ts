@@ -35,10 +35,9 @@ import { GitStore } from "./store"
 
 /**
  * Subcommands that are read-only whatever their arguments. Anything outside this set is
- * assumed to mutate, so `ctx.git.raw` refreshes after it — the failure mode of a wasted
- * refresh is a duplicate read, while the failure mode of a missed one is a screen that
- * silently disagrees with the repository. Commands like `config` and `symbolic-ref` are
- * deliberately absent: they read *or* write depending on their arguments.
+ * assumed to mutate and refreshes after: a wasted refresh costs a duplicate read, a missed one
+ * leaves the screen disagreeing with the repository. `config` and `symbolic-ref` are absent
+ * because they read *or* write depending on their arguments.
  */
 const readOnlySubcommands: ReadonlySet<string> = new Set([
   "blame",
@@ -79,11 +78,7 @@ export interface GitServiceOptions {
   readonly report: (message: string, error?: unknown) => void
 }
 
-/**
- * Read-only only in combination — `git stash list` and `git stash show` against every
- * other `git stash` verb. Without these the stash-preview pane in docs/extension-api.md
- * §4.4 would trigger a whole refresh on every cursor movement.
- */
+/** Read-only only in combination — `git stash list` against every other `git stash` verb. */
 const readOnlySubcommandPairs: ReadonlySet<string> = new Set([
   "bisect log",
   "notes list",
@@ -132,35 +127,26 @@ function isMutating(args: readonly string[]): boolean {
 }
 
 /**
- * What the poll compares, and why it is four reads rather than one.
- *
- * `status` catches working-tree edits, which move nothing under `.git` at all. `refs`
- * catches commits, checkouts, and fetches. `stash` is separate because dropping any entry
- * but the top one rewrites only the stash *reflog*, leaving `refs/stash` — and so the refs
- * snapshot — byte-identical. `config` catches what is configured rather than committed:
- * adding a remote, or setting an upstream on a branch that is not HEAD.
- *
- * Joined on a separator no git output can contain.
+ * What the poll compares. Four reads, because each catches what the others cannot: `status`
+ * for working-tree edits, which move nothing under `.git`; `refs` for commits, checkouts and
+ * fetches; `stash`, because dropping any entry but the top one rewrites only the stash reflog
+ * and leaves `refs/stash` identical; `config` for a new remote or upstream.
  */
 function fingerprintOf(status: string, refs: string, stash: string, config: string): string {
   return [status, refs, stash, config].join("\u0000\u0000")
 }
 
 /**
- * All git access, and the only writer of the {@link GitStore}.
- *
- * Effect owns the I/O — child-process lifetime, lock retry, and the concurrent fan-out of
- * a refresh — while the store, coalescing, and polling stay plain TypeScript, because
- * they are control flow the rest of core already speaks. The Promise surface handed to
- * Extensions never mentions Effect (ADR-0002); the narrow Effect surface behind
- * `ctx.effect` is built from the very same effects rather than re-wrapped.
+ * All git access, and the only writer of the {@link GitStore}. Effect owns the I/O —
+ * child-process lifetime, lock retry, the concurrent fan-out of a refresh — while the store,
+ * coalescing and polling stay plain TypeScript (ADR-0002).
  */
 export class GitService {
   readonly store: GitStore
   /**
-   * What git is doing right now. Written here, at the one choke point every write already
-   * passes through, so no Extension has to remember to report its own progress — and none
-   * can forget. Reads are deliberately absent: the diff Pane runs one on every cursor move.
+   * What git is doing right now, written at the one choke point every write passes through so
+   * no Extension has to report its own progress. Reads are absent: the diff Pane runs one on
+   * every cursor move.
    */
   readonly activity: GitActivityStore
   readonly #repoRoot: string
@@ -203,13 +189,9 @@ export class GitService {
   }
 
   /**
-   * Loads the store once, before any Extension activates, so `ctx.git.state` is never
-   * empty-because-not-yet-read. Idempotent across hot reloads — reload must not republish
-   * a snapshot, or every reactivated Extension would see a spurious change.
-   *
-   * Never throws: outside a repository, or when git itself fails, the store keeps serving
-   * the empty snapshot and the reason is reported as a diagnostic. An unreadable
-   * repository degrades laziergit; it does not stop it from starting.
+   * Loads the store once, before any Extension activates. Idempotent across hot reloads, which
+   * must not republish a snapshot. Never throws: an unreadable repository leaves the empty
+   * snapshot in place and reports a diagnostic.
    */
   prime(): Promise<void> {
     this.#opened ??= this.#open()
@@ -219,21 +201,15 @@ export class GitService {
   async #open(): Promise<void> {
     if (this.#stopped) return
     this.#repository = await openRepository(this.#repoRoot)
-    // Running outside a repository is a supported mode, not a failure, so it is not
-    // diagnosed here. Whoever chose the directory is the one who can explain it — for the
-    // binary that is `main`, which tells the user in the running app.
+    // Running outside a repository is a supported mode; `main` is what tells the user.
     if (this.#repository === null) return
     await this.refresh()
   }
 
   /**
-   * Re-reads every slice and publishes.
-   *
-   * A caller arriving while a pass is running does **not** get that pass: its reads were
-   * already in flight before the caller's write landed, so awaiting it would resolve
-   * against a snapshot that predates the very change the caller just made. It gets the
-   * queued follow-up instead. Only one follow-up is ever queued — a burst of writes must
-   * not cost a refresh each — but the last of them is always observed.
+   * Re-reads every slice and publishes. A caller arriving mid-pass gets the queued follow-up
+   * rather than that pass, whose reads predate the caller's write. Only one follow-up is ever
+   * queued, so a burst of writes costs two refreshes rather than one each.
    */
   refresh(): Promise<void> {
     if (this.#refreshing) {
@@ -261,9 +237,8 @@ export class GitService {
     try {
       const read = await this.#run(this.#readState(repository))
       if (this.#stopped) return
-      // Recorded from the same pass that produced the snapshot, so the fingerprint always
-      // describes what was just published — the next poll tick is quiet unless the
-      // repository really moved, whether the refresh came from a write or from a poll.
+      // From the same pass that produced the snapshot, so the next poll tick is quiet unless
+      // the repository really moved.
       this.#fingerprint = read.fingerprint
       this.store.publish(read.state)
     } catch (error) {
@@ -296,15 +271,13 @@ export class GitService {
       const branches = parseBranches(outputs.branches.stdout, headBranch)
       const head = readHead(status, headBranch, branches)
 
-      // Asking for a log needs a commit to start from, which is exactly the two variants
-      // carrying an oid — spelled positively so a later variant cannot slip through.
+      // A log needs a commit to start from: exactly the two variants carrying an oid.
       const commits =
         head.kind !== "detached" && head.kind !== "onBranch"
           ? Effect.succeed("")
           : Effect.catch(
               Effect.map(execGit(root, commitArgs(this.#config.commitLimit)), (output) => output.stdout),
-              // The repository can go unborn between the two reads. One empty slice beats
-              // failing a whole refresh over history that momentarily does not exist.
+              // The repository can go unborn between the two reads.
               (error: GitError) => {
                 this.#report("reading commits", error)
                 return Effect.succeed("")
@@ -323,9 +296,6 @@ export class GitService {
           branches,
           remotes: parseRemotes(outputs.config.stdout),
           tags: parseTags(outputs.tags.stdout),
-          // `isClean` stays a stored boolean rather than a getter: it is read in eight
-          // places, computed in exactly this one, and a value compares `Object.is`-stably
-          // inside a `useGit` selector where a derived array would not.
           status: { files: status.files, isClean: status.files.length === 0 },
           commits: parseCommits(log),
           stash: parseStash(outputs.stash.stdout),
@@ -336,11 +306,7 @@ export class GitService {
 
   // ---- polling ---------------------------------------------------------------------
 
-  /**
-   * Starts watching for changes made outside laziergit. Deliberately not fs-watching
-   * `.git`: lazygit's experience is that polling a cheap fingerprint is both simpler and
-   * more reliable across platforms and filesystems.
-   */
+  /** Starts watching for changes made outside laziergit. Polling, never fs-watching `.git`. */
   start(): void {
     if (this.#stopped || this.#pollTimer) return
     this.#armPoll()
@@ -357,10 +323,9 @@ export class GitService {
   }
 
   /**
-   * Reads exactly what {@link fingerprintOf} compares, and nothing else — four small
-   * commands, none of which touches an object. All of them suppress optional locks, so the
-   * poll can neither contend with the user's own `git` nor dirty the index and thereby
-   * trigger itself on the next tick.
+   * Reads exactly what {@link fingerprintOf} compares. All four suppress optional locks, so
+   * the poll neither contends with the user's own `git` nor dirties the index and triggers
+   * itself on the next tick.
    */
   async #poll(): Promise<void> {
     const repository = this.#repository
@@ -381,8 +346,6 @@ export class GitService {
         ),
       )
       if (fingerprintOf(status.stdout, refs.stdout, stash.stdout, config.stdout) === this.#fingerprint) return
-      // The refresh records the fingerprint from its own reads, not this tick's, so a
-      // change landing between the two passes is caught next tick rather than lost.
       await this.refresh()
     } catch (error) {
       this.#report("polling for changes", error)
@@ -391,10 +354,7 @@ export class GitService {
     }
   }
 
-  /**
-   * Applies changed settings live. Nothing here republishes the snapshot: a settings edit
-   * that changed no git setting must not fire seven slice events and re-render every pane.
-   */
+  /** Applies changed settings live, without republishing a snapshot nothing asked to change. */
   setConfig(config: GitConfig): void {
     const previous = this.#config
     this.#config = config
@@ -403,8 +363,7 @@ export class GitService {
       this.#disarmPoll()
       this.#armPoll()
     }
-    // The commit window is the one setting that changes what the store *contains*, so it
-    // is also the one whose edit legitimately publishes new state.
+    // The commit window is the one setting that changes what the store contains.
     if (previous.commitLimit !== config.commitLimit && this.#repository) void this.refresh()
   }
 
@@ -412,9 +371,7 @@ export class GitService {
 
   /**
    * Runs an effect and tracks it until it settles, so shutdown can wait for a `git commit`
-   * that is already underway. Extension-facing supervision is a separate concern: the
-   * activation scope parks the *promise* on reload, while the write itself always runs to
-   * completion (docs/extension-api.md §5.3).
+   * already underway. A reload parks the promise, but the write itself always completes (§5.3).
    */
   #run<A>(effect: Effect.Effect<A, GitError>): Promise<A> {
     const pending = Effect.runPromise(effect)
@@ -422,34 +379,28 @@ export class GitService {
     const tracked = pending.finally(() => {
       this.#inflight.delete(pending)
     })
-    // The tracker must not become an unhandled rejection of its own; the caller still sees
-    // the original rejection through `pending`.
+    // The tracker must not become an unhandled rejection of its own; the caller still sees the
+    // original rejection through `pending`.
     void tracked.catch(() => undefined)
     return pending
   }
 
   /**
-   * {@link #run}, plus an entry in {@link activity} for as long as the work lasts.
-   *
-   * Wrapped around the promise rather than folded into the effect so it ends on every exit —
-   * git refusing, the repository being absent, a defect — and so it survives `#refreshed`
-   * running the follow-up read *inside* the effect: the operation stays announced until the
-   * store has caught up, because until then the screen still shows the old repository.
+   * {@link #run}, plus an entry in {@link activity} for as long as the work lasts. Wrapped
+   * around the promise so it ends on every exit, and so it covers `#refreshed`'s follow-up
+   * read: until the store catches up the screen still shows the old repository.
    */
   #announced<A>(args: readonly string[], effect: Effect.Effect<A, GitError>): Promise<A> {
     const subcommand = subcommandOf(args)
-    // Argv with no subcommand is nothing to name. `isMutating` already assumes the worst
-    // about it and refreshes; there is just no honest word to put on the status line.
+    // Nothing to name. `isMutating` already assumes the worst about it and refreshes.
     if (subcommand === null) return this.#run(effect)
     const end = this.activity.begin(labelFor(args, subcommand.name))
     return this.#run(effect).finally(end)
   }
 
   /**
-   * Runs `build` against the repository root, or fails with a {@link GitError} naming the
-   * reason. A typed failure rather than a thrown defect: to an Extension "there is no
-   * repository here" is the same kind of answer as "git said no", and both belong in the
-   * `catch` it already wrote.
+   * Runs `build` against the repository root, or fails with a {@link GitError}. A typed
+   * failure, so "there is no repository here" lands in the `catch` an Extension already wrote.
    */
   #withRepository<A>(
     args: readonly string[],
@@ -465,12 +416,9 @@ export class GitService {
   }
 
   /**
-   * Republishes after a write, so the caller's `await` already sees the result on the
-   * screen — whether git said yes or no. A failed write is not a write that did nothing: a
-   * conflicting `stash pop`, a `pull --rebase` that stops on a conflict, a `discard` whose
-   * `clean` fails after its `restore` landed, all move the repository while rejecting, and
-   * a success-only refresh would leave the store reporting the state from before. A refresh
-   * that turns out to have nothing to report is already coalesced, so it costs one read.
+   * Republishes after a write, whether git said yes or no: a conflicting `stash pop`, a
+   * `pull --rebase` that stops on a conflict, and a `discard` whose `clean` fails after its
+   * `restore` landed all move the repository while rejecting.
    */
   #refreshed<A>(effect: Effect.Effect<A, GitError>): Effect.Effect<A, GitError> {
     return Effect.ensuring(
@@ -485,22 +433,17 @@ export class GitService {
     const invocation = this.#withRepository(args, (root) =>
       execGit(root, args, { stdin: options.stdin, allowFailure: options.allowFailure, write: mutating }),
     )
-    // Uninterruptible for the same reason `ctx.git`'s Promise face passes no cancel
-    // callback: a write started while the Extension was live must run to completion, or a
-    // hot reload landing mid-`git commit` leaves the repository half-written
-    // (docs/extension-api.md §5.3). Only the awaited promise is parked.
+    // Uninterruptible: a hot reload landing mid-`git commit` must not leave the repository
+    // half-written. Only the awaited promise is parked (§5.3).
     return mutating ? this.#refreshed(Effect.uninterruptible(invocation)) : invocation
   }
 
   raw(args: readonly string[], options: RawOptions = {}): Promise<GitOutput> {
     const effect = this.rawEffect(args, options)
-    // The same test that decides whether to refresh decides whether to announce, and for the
-    // same reason: a read is something the app does while you look at it, a write is something
-    // you asked for and are now waiting on.
+    // The same test that decides whether to refresh decides whether to announce.
     return isMutating(args) ? this.#announced(args, effect) : this.#run(effect)
   }
 
-  /** A porcelain write. Every helper encodes its own safe flag handling and nothing else. */
   #write(args: readonly string[]): Promise<void> {
     return this.#announced(
       args,
@@ -528,9 +471,8 @@ export class GitService {
   }
 
   stage(paths: readonly string[] | "all"): Promise<void> {
-    // `--all` takes no pathspec at all, so there is nothing here to make literal.
-    // `--` separates paths from options so a file named `-f` can never become a flag; it
-    // does *not* stop git reading a path as a glob, which is what `literalPathspec` is for.
+    // `--` stops a file named `-f` becoming a flag; it does *not* stop git reading a path as a
+    // glob, which is what `literalPathspec` is for.
     return this.#write(paths === "all" ? ["add", "--all", "--"] : ["add", "--", ...literalPaths(paths)])
   }
 
@@ -538,22 +480,16 @@ export class GitService {
     // An empty selection means unstage nothing, and must not reach git: a pathspec-less
     // `git reset --` is a mixed reset that would unstage *everything*.
     if (paths !== "all" && paths.length === 0) return Promise.resolve()
-    // `git reset -- <paths>` rather than `git restore --staged`, which needs a HEAD to
-    // restore from and so fails outright on a repository with no commits yet — where
-    // unstaging is both meaningful and common. A pathspec'd reset never touches the
-    // working tree.
-    //
-    // `"all"` passes `"."`, which is a pathspec but not a user path: making it literal
-    // would ask for a file actually named `.`.
+    // `git reset -- <paths>` rather than `git restore --staged`, which needs a HEAD and so
+    // fails on a repository with no commits. A pathspec'd reset never touches the working tree.
+    // `"all"` passes `"."`, a pathspec rather than a user path, so it is not made literal.
     return this.#write(["reset", "--quiet", "--", ...(paths === "all" ? ["."] : literalPaths(paths))])
   }
 
   /**
-   * Discarding means two different git operations: a tracked file is restored from the
-   * index, an untracked one is deleted. They cannot be one invocation — `git restore`
-   * refuses the *whole* pathspec if any entry is untracked, silently leaving the tracked
-   * edits in place too — so the paths are split by what the store last saw, which is the
-   * same list the user was looking at when they chose them.
+   * Two git operations: a tracked file is restored from the index, an untracked one deleted.
+   * They cannot be one invocation — `git restore` refuses the whole pathspec if any entry is
+   * untracked — so the paths are split by what the store last saw.
    */
   discard(paths: readonly string[]): Promise<void> {
     if (paths.length === 0) return Promise.resolve()
@@ -578,8 +514,8 @@ export class GitService {
                 )
           if (toDelete.length === 0) return restored
           return Effect.flatMap(restored, () =>
-            // `-ff`, not `-f`: a single force makes clean silently refuse to descend into
-            // an untracked directory that has its own `.git`, exiting 0 having done nothing.
+            // `-ff`, not `-f`: a single force makes clean silently refuse to descend into an
+            // untracked directory that has its own `.git`, exiting 0 having done nothing.
             Effect.map(
               execGit(root, ["clean", "-ffd", "--", ...literalPaths(toDelete)], { write: true }),
               () => undefined,
@@ -656,10 +592,7 @@ export class GitService {
   /** Re-read on every run, never a captured snapshot. */
   readonly stateEffect: Effect.Effect<GitState> = Effect.sync(() => this.store.getSnapshot())
 
-  /**
-   * A snapshot per refresh. The subscription is released by the stream's own scope, so a
-   * consumer that stops consuming stops observing — no listener outlives its fiber.
-   */
+  /** A snapshot per refresh. The stream's own scope releases the subscription. */
   readonly changes: Stream.Stream<GitState> = Stream.callback<GitState>((queue) =>
     Effect.acquireRelease(
       Effect.sync(() => this.store.onPublish((publication) => Queue.offerUnsafe(queue, publication.current))),
@@ -670,16 +603,14 @@ export class GitService {
   // ---- shutdown --------------------------------------------------------------------
 
   /**
-   * Waits for git work already in flight. Called after Extensions deactivate — their
-   * promises are parked by then, but the writes behind them are still running and the
-   * process must not exit mid-`git commit`.
+   * Waits for git work already in flight. Extensions' promises are parked by the time this
+   * runs, but the writes behind them are not, and the process must not exit mid-`git commit`.
    */
   async drain(): Promise<void> {
     this.#stopped = true
     this.#disarmPoll()
     await Promise.allSettled([this.#opened, this.#refreshing, ...this.#inflight])
-    // After the wait, not before: until the writes settle they really are in flight, and
-    // anything still rendering should keep saying so.
+    // After the wait: until the writes settle they really are in flight.
     this.activity.clear()
   }
 
@@ -696,14 +627,9 @@ function stashRef(index: number | undefined): string {
 }
 
 /**
- * Every path in a selection, as a pathspec that matches only itself.
- *
- * The paths reaching these helpers come verbatim out of `status --porcelain=v2 -z`, so
- * nothing upstream has escaped them and a name containing `*`, `?`, `[` or a leading `:`
- * would otherwise act on its neighbours — `discard(["foo[1].txt"])` restoring `foo1.txt`
- * over the user's edits, and `git clean -ffd` deleting an untracked `bar1.txt` nobody
- * named. Applied at the argv edge rather than at the API edge so there is exactly one
- * place to check that every path git sees went through it.
+ * Every path in a selection, as a pathspec that matches only itself. Paths arrive verbatim
+ * from porcelain, so a name containing `*`, `?`, `[` or a leading `:` would otherwise act on
+ * its neighbours. Applied at the argv edge, so there is one place to check.
  */
 function literalPaths(paths: readonly string[]): readonly string[] {
   return paths.map(literalPathspec)

@@ -16,15 +16,10 @@ async function inTemporaryDirectory<T>(run: (directory: string) => Promise<T>): 
 
 describe("publishTypeEnvironment", () => {
   /**
-   * The authoring environment is the whole of "learnable from types" (§0): an editor that
-   * cannot resolve an import has no API to offer, and the failure is silent — the published
-   * tsconfig sets `skipLibCheck`, so a package missing from this overlay does not announce
-   * itself, it just degrades the author's types to `any`.
-   *
-   * `effect` is the one this test was written for. `ctx.effect` (§1.12) is declared in terms of
-   * `Effect.Effect` and `Stream.Stream`, so leaving `effect` out of the overlay made the single
-   * surface the spec calls version-coupled the single surface with no types at all — and
-   * `skipLibCheck` hid it inside laziergit's own declarations rather than reporting it.
+   * An editor that cannot resolve an import has no API to offer, and the failure is silent:
+   * the published tsconfig sets `skipLibCheck`, so a package missing from this overlay
+   * degrades the author's types to `any` without announcing itself. `effect` is the one this
+   * test was written for, since `ctx.effect` is declared in terms of `Effect.Effect`.
    */
   it("links every package an Extension may import, including effect for ctx.effect", async () => {
     await inTemporaryDirectory(async (directory) => {

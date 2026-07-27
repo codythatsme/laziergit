@@ -8,9 +8,8 @@ export interface GitPublication {
 }
 
 /**
- * The single canonical snapshot every reader shares — React panes through `useGit`,
- * activate-scope code through `ctx.git.subscribe`, and the kernel's event bridge — so no
- * two consumers can disagree about the repository mid-render.
+ * The single canonical snapshot every reader shares, so no two consumers can disagree about
+ * the repository mid-render.
  *
  * `getSnapshot` and `subscribe` are bound arrow properties because `useSyncExternalStore`
  * calls them unbound, and `getSnapshot` returns the *same* object until a publish happens:
@@ -81,9 +80,8 @@ export class GitStore {
     this.#snapshot = current
     const publication: GitPublication = { previous, current }
 
-    // Snapshotted so a listener may unsubscribe from inside the notification, then
-    // re-checked so one that was unsubscribed *by an earlier listener in the same pass*
-    // is not called anyway — a disposed subscription must go quiet immediately.
+    // Snapshotted so a listener may unsubscribe from inside the notification, then re-checked
+    // so one unsubscribed by an earlier listener in the same pass is not called anyway.
     const publications = [...this.#publications]
     for (const listener of publications) {
       if (!this.#publications.has(listener)) continue
@@ -94,7 +92,7 @@ export class GitStore {
       }
     }
 
-    // React listeners only ever say "something changed"; skipping them when nothing did
+    // React listeners only ever say "something changed", so skipping them when nothing did
     // avoids a render pass per poll tick on an idle repository.
     if (!Object.is(previous, current)) {
       const listeners = [...this.#listeners]

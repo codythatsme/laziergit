@@ -137,8 +137,8 @@ describe("sync.push", () => {
     await waitForToast(harness, "Pushed main to origin/main")
 
     expect(await git(origin, "rev-parse", "main")).toEqual(await git(harness.directory, "rev-parse", "main"))
-    // The store refreshed with the push, so the segment is already telling the truth — and
-    // an in-sync branch has nothing to report, so it reports nothing rather than `↑0 ↓0`.
+    // The store refreshed with the push, and an in-sync branch reports nothing rather than
+    // `↑0 ↓0`.
     expect(frame(harness)).not.toContain("↑")
   })
 
@@ -180,9 +180,8 @@ describe("sync.push", () => {
   it("pushes only the current branch, whatever push.default would have sent", async () => {
     const harness = await startRepo()
     const origin = await addOrigin(harness)
-    // `matching` is git's oldest default and still in plenty of configs: a bare `git push`
-    // under it sends every branch whose name exists on the remote, so `other` would travel
-    // on the back of a push the user asked for on `main`.
+    // Under `matching`, git's oldest default, a bare `git push` sends every branch whose name
+    // exists on the remote — so `other` would travel on the back of a push asked for on `main`.
     await git(harness.directory, "config", "push.default", "matching")
     await git(harness.directory, "checkout", "--quiet", "-b", "other")
     await git(harness.directory, "push", "--quiet", "--set-upstream", "origin", "other")
@@ -218,8 +217,8 @@ describe("sync.push", () => {
     // git's account of the refusal is on screen underneath the confirm, verbatim.
     expect(toasts(harness).join("\n")).toContain("[rejected]")
     expect(frame(harness)).toContain("--force-with-lease")
-    // The number is the fact that decides the answer: the lease will pass here, because
-    // these commits were fetched, so nothing else on screen says work is about to be lost.
+    // The lease will pass here, because these commits were fetched, so nothing else on screen
+    // says work is about to be lost.
     expect(frame(harness)).toContain("2 commits on origin/main will be destroyed.")
 
     await press(harness, "y")
@@ -259,10 +258,9 @@ describe("sync.push", () => {
     const harness = await startRepo()
     const origin = await addOrigin(harness)
     const theirs = await cloneOf(origin)
-    // Pushed from a second clone, so this repository's `origin/main` still points at the
-    // old commit. git says `fetch first` rather than `non-fast-forward`, and the two mean
-    // opposite things: nothing here can count what a force would destroy, so it is not
-    // offered at all.
+    // Pushed from a second clone, so this repository's `origin/main` still points at the old
+    // commit. git says `fetch first` rather than `non-fast-forward`: nothing here can count
+    // what a force would destroy, so it is not offered at all.
     await commitIn(theirs, "theirs.txt", "theirs\n")
     await git(theirs, "push", "--quiet", "origin", "main")
     await commitIn(harness.directory, "ours.txt", "ours\n")
@@ -286,8 +284,7 @@ describe("sync.push", () => {
     await commitIn(harness.directory, "ours.txt", "ours\n")
     await renderApp(harness)
 
-    // Reached deliberately from the menu, because the rejection path above refuses to
-    // suggest it: the lease is the last line of defence, and it holds.
+    // Reached from the menu, because the rejection path above refuses to suggest it.
     await press(harness, "S")
     await waitForFrame(harness, "Fetch all remotes")
     await press(harness, "o")
@@ -347,8 +344,7 @@ describe("sync.pull and sync.fetch", () => {
     await waitForToast(harness, "Fetched — ↑0 ↓1")
 
     expect(await git(harness.directory, "rev-parse", "main")).toBe(before)
-    // The segment's own composition — branch, then only the non-zero counts. The toast above
-    // says "↑0 ↓1", so asserting that string alone would no longer pin the segment at all.
+    // The segment's own composition: branch, then only the non-zero counts.
     expect(frame(harness)).toContain("main ↓1")
   })
 
@@ -379,10 +375,7 @@ describe("the sync.actions menu", () => {
   })
 })
 
-/**
- * The status line is where HEAD lives now that there is no status Pane, so these are the
- * responsibilities `sync` inherited rather than anything about pushing.
- */
+/** The status line is where HEAD lives, so these are responsibilities `sync` inherited. */
 describe("the status line segment", () => {
   it("names the branch, and the divergence only when there is one", async () => {
     const harness = await startRepo()
@@ -390,8 +383,7 @@ describe("the status line segment", () => {
     await renderApp(harness)
 
     await waitForFrame(harness, "main")
-    // In sync, so the branch stands alone: an in-sync `↑0 ↓0` is a standing column of
-    // nothing having happened.
+    // In sync, so the branch stands alone rather than carrying a standing `↑0 ↓0`.
     expect(frame(harness)).not.toContain("↑")
 
     await commitIn(harness.directory, "ahead.txt", "one\n")
@@ -415,7 +407,7 @@ describe("the status line segment", () => {
     await git(harness.directory, "fetch", "--quiet", "--prune")
     await renderApp(harness)
 
-    // `gone` is `↑0 ↓0` in git's own data, so a segment that read the numbers would report
+    // `gone` is `↑0 ↓0` in git's own data, so a segment reading the numbers would report
     // "everything is pushed" for a branch whose remote no longer exists.
     await waitForFrame(harness, "gone")
     expect(frame(harness)).toContain("main")
@@ -425,8 +417,8 @@ describe("the status line segment", () => {
     const harness = await startRepo()
     await addOrigin(harness)
     await commitIn(harness.directory, "ahead.txt", "one\n")
-    // A hook is what makes the busy state observable at all — the same lever the git service's
-    // own tests use. Without it a local push is over before the loader is worth revealing.
+    // A hook is what makes the busy state observable: a local push is otherwise over before
+    // the loader is worth revealing.
     await writeFile(join(harness.directory, ".git/hooks/pre-push"), "#!/bin/sh\nsleep 2\n")
     await chmod(join(harness.directory, ".git/hooks/pre-push"), 0o755)
     await renderApp(harness)
@@ -443,11 +435,9 @@ describe("the status line segment", () => {
         .find((row) => row.includes("pushing"))
       if (line === undefined) break
       frames.push(line)
-      // What the branch and the counts must never do: move. Recorded as the column the branch
-      // starts at plus the printed width of the whole row, so a frame that measured wider —
-      // an ambiguous-width glyph, a frame that lost a cell — shows up as a second signature.
-      // Code points, deliberately: braille is one code point and one cell, so counting them is
-      // counting columns, which is the property under test.
+      // What the branch and the counts must never do: move. Recorded as the branch's start
+      // column plus the printed width of the row, so a frame that measured wider shows up as
+      // a second signature. Code points, because braille is one code point and one cell.
       signatures.add(`${line.indexOf("main")}:${Array.from(line).length}`)
       await act(async () => {
         await Bun.sleep(70)
@@ -455,9 +445,8 @@ describe("the status line segment", () => {
       await settle(harness)
     }
 
-    // The branch and its divergence stay on screen for the whole operation. Replacing them was
-    // the actual complaint: a push cost you the one place the branch is unconditionally
-    // written, at the moment you most want to know which branch is moving.
+    // The branch and its divergence stay on screen for the whole operation, rather than being
+    // replaced by the loader.
     for (const line of frames) {
       expect(line).toContain("main")
       expect(line).toContain("↑1")
@@ -479,9 +468,9 @@ describe("the status line segment", () => {
     await renderApp(harness)
     await waitForFrame(harness, "main")
 
-    // The spinner state used to render a `content` prop where every other state rendered
-    // children; React reuses the one renderable across both, and OpenTUI's text buffer came
-    // back with no chunks — the slot's error boundary then hid this segment permanently.
+    // React reuses one renderable across both forms, so a state rendering `content` where the
+    // others render children leaves OpenTUI's text buffer with no chunks, and the slot's error
+    // boundary hides the segment for good.
     await press(harness, "f")
     await waitForToast(harness, "Fetched")
     await waitForFrame(harness, "main")

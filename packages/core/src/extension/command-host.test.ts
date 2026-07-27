@@ -147,9 +147,8 @@ it("gives a key to the later registration, leaving the loser its palette row", (
 })
 
 it("resolves a case-variant of a key as the same stroke, last registration winning", () => {
-  // A bare letter binds its lowercase stroke, so `"D"` and `"d"` are one physical key. Before
-  // case-folding the two spellings never met in the claim map, so the collision was silent and
-  // the keymap — not this resolver — decided the winner, contradicting "last registration wins".
+  // A bare letter binds its lowercase stroke, so `"D"` and `"d"` are one physical key: without
+  // case-folding the collision is silent and the keymap decides the winner instead.
   const diagnostics = new Diagnostics()
   const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
   const host = new CommandHost(diagnostics, panes())

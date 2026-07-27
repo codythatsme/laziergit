@@ -13,11 +13,9 @@ installHarnessLifecycle()
 const branchesExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "branches")
 
 /**
- * Stands in for the diff Extension, which `branches` needs.
- *
- * A stub rather than the real one keeps this file about branches — the {@link DiffTarget}
- * the branches pane asks for is on screen where an assertion can see it, and a sibling
- * Extension's bugs cannot fail these tests.
+ * Stands in for the diff Extension, which `branches` needs. A stub keeps this file about
+ * branches: the {@link DiffTarget} the pane asks for is on screen where an assertion can see
+ * it, and a sibling Extension's bugs cannot fail these tests.
  */
 const diffStub = `
   /** @jsxImportSource @opentui/react */
@@ -100,16 +98,10 @@ async function press(harness: Harness, action: () => void): Promise<void> {
 }
 
 /**
- * Renders with the real branches Extension loaded.
- *
- * Startup focus is the Layout's first cell — not whichever Extension activated first — so
- * a test that needs the branches Pane *unfocused* writes a Layout that puts the diff Pane
- * in front of it. The branches case still presses a jump key: it is what a user reaches for,
- * and one of the things under test. `1`, not the `2` this Pane used to claim for itself —
- * core numbers the cells of the Layout now, and here the branches Pane is the first of them.
- *
- * `"tabbed"` puts both Panes in one cell, where `]` hides — and therefore unmounts — the one
- * that was showing. That is the only way a user makes this Pane go away without quitting.
+ * Renders with the real branches Extension loaded. Startup focus is the Layout's first cell,
+ * so a test that needs the branches Pane unfocused writes a Layout putting the diff Pane in
+ * front of it. `"tabbed"` puts both Panes in one cell, where `]` hides — and therefore
+ * unmounts — the one that was showing.
  */
 async function start(harness: Harness, focus: "branches" | "diff" | "tabbed" = "branches"): Promise<void> {
   const columns =
@@ -138,8 +130,7 @@ async function waitUntil(
   while (Date.now() < deadline) {
     await settle(harness)
     // Inside `act`, because the condition shells out to git: the store can publish and the
-    // Panes re-render while it is running, and a render React did not know it was driving
-    // is a warning on stderr about an update the test really did cause.
+    // Panes re-render while it is running.
     let met = false
     await act(async () => {
       met = await condition()
@@ -167,8 +158,8 @@ describe("checking out", () => {
 
     await press(harness, () => harness.setup.mockInput.pressKey("j"))
     await press(harness, () => harness.setup.mockInput.pressKey(" "))
-    // The marker moves because the store refreshed behind the write, which is the whole
-    // reason a checkout goes through the porcelain helper rather than `raw`.
+    // The marker moves because the store refreshed behind the write, which is why a checkout
+    // goes through the porcelain helper rather than `raw`.
     await waitUntil(harness, async () => frame(harness).includes("* other"), "the pane to follow the checkout")
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("other")
   }, 30_000)
@@ -234,7 +225,7 @@ describe("deleting a branch", () => {
 
     await press(harness, () => harness.setup.mockInput.pressKey("y"))
     // git's refusal is read, not assumed: the second confirm only appears because the branch
-    // is unmerged, and it says which commits are at stake.
+    // is unmerged.
     await waitUntil(harness, async () => frame(harness).includes("Force delete wip?"), "the force confirm to open")
     expect(frame(harness)).toContain("commits no other branch has")
 
@@ -321,10 +312,8 @@ describe("the branch menu", () => {
   }, 30_000)
 
   /**
-   * The URL itself is `pull-request.test.ts`'s subject; what this pins is the offer — that
-   * `o` and its menu item exist exactly where a hosting service does, and nowhere else.
-   * `addOrigin` points `origin` at a bare directory inside the harness, which is a remote
-   * with no web page at all — the case a menu item that always showed would lie about.
+   * The URL itself is `pull-request.test.ts`'s subject; what this pins is the offer. `addOrigin`
+   * points `origin` at a bare directory, which is a remote with no web page at all.
    */
   it("hides the pull-request item when the remote is a directory nobody can browse", async () => {
     const harness = await createHarness({ git: true })
@@ -383,10 +372,8 @@ describe("the branch menu", () => {
     expect(frame(harness)).toContain("Push, setting upstream")
 
     await press(harness, () => harness.setup.mockInput.pressKey("p"))
-    // A row says nothing about an upstream that is in sync — that is the point of the
-    // column — so the outcome is read from the repository rather than from the frame. What
-    // the *user* sees is the detail view's context line, which the diff stub here does not
-    // draw; the diff Extension's own tests cover that.
+    // A row says nothing about an upstream that is in sync, so the outcome is read from the
+    // repository rather than from the frame.
     await waitUntil(
       harness,
       async () => (await git(harness, "config", "--get", "branch.main.remote")) === "origin",
@@ -408,8 +395,8 @@ describe("the branch menu", () => {
     await git(harness, "checkout", "--quiet", "main")
 
     await start(harness)
-    // The stub prints the DiffTarget it was handed, so this pins the kind the Pane pushes —
-    // `branch`, whose whole purpose is to let the detail view name what a clipped row cut off.
+    // The stub prints the DiffTarget it was handed, so this pins the kind the Pane pushes:
+    // `branch`, which is what lets the detail view name what a clipped row cut off.
     expect(frame(harness)).toContain("diff branch main")
 
     await press(harness, () => harness.setup.mockInput.pressKey("j"))
@@ -443,8 +430,7 @@ describe("what a row says about its upstream", () => {
 
     await start(harness)
 
-    // Ahead by one, behind by none: the row says `↑1` and stops there. A column that spelled
-    // out every zero would spend its width reporting that nothing had happened.
+    // Ahead by one, behind by none: the row says `↑1` and stops there.
     await waitUntil(harness, async () => frame(harness).includes("* main"), "the branch row")
     const ahead = frame(harness)
     expect(ahead).toContain("↑1")
@@ -471,9 +457,8 @@ describe("what a row says about its upstream", () => {
     await start(harness)
     await waitUntil(harness, async () => frame(harness).includes("abandoned"), "the branch row")
 
-    // `gone` is reported by git as `↑0 ↓0` — byte-identical to a branch that is perfectly in
-    // sync (§5.12) — so with the words dropped from the row, colour is the whole signal, and
-    // the char frame cannot see it. Spans can.
+    // `gone` is reported by git as `↑0 ↓0`, byte-identical to a branch in sync, so colour is
+    // the whole signal — and the char frame cannot see it. Spans can.
     const nameSpan = (needle: string) =>
       harness.setup
         .captureSpans()
@@ -496,8 +481,7 @@ describe("what a row says about its upstream", () => {
     await start(harness)
     await waitUntil(harness, async () => frame(harness).includes("feature/PROJ"), "the long branch row")
 
-    // Clipped, not wrapped: the tail of the name is simply absent, and no row below it moved
-    // down to make room. Wrapping is what turns a list into something the cursor lies about.
+    // Clipped, not wrapped: the tail of the name is absent, and no row below it moved down.
     const lines = frame(harness).split("\n")
     const index = lines.findIndex((line) => line.includes("feature/PROJ"))
     expect(index).toBeGreaterThan(-1)

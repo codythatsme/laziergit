@@ -1,12 +1,8 @@
 import { isConflicted, isStaged, isUnstaged, isUntracked, type FileChange } from "laziergit"
 
 /**
- * The files Pane's projection of the working tree into a folder hierarchy — a Path Tree.
- *
- * Pure and repository-free, so every rule below is testable against `FileChange` literals.
- * A helper file beside the Extension rather than public API: it is one Pane's view model,
- * and the second consumer (a commit's file list) is the one that would tell us which parts
- * generalise. `import type`-adjacent by design — the only import is the public module.
+ * The files Pane's projection of the working tree into a folder hierarchy — a Path Tree. Pure
+ * and repository-free, so every rule below is testable against `FileChange` literals.
  */
 
 export interface FileNode {
@@ -16,11 +12,8 @@ export interface FileNode {
   /** What the row prints: the segments this node adds to its parent. */
   readonly label: string
   /**
-   * The store's own object, by reference.
-   *
-   * Load-bearing: `useDecoration` caches by `Object.is` on the row it is handed, so a node
-   * that copied or rebuilt the change would evict its own slot on every render and the
-   * `useSyncExternalStore` snapshot would never converge.
+   * The store's own object, by reference: `useDecoration` caches by `Object.is`, so a copy
+   * would evict its own slot on every render.
    */
   readonly change: FileChange
 }
@@ -48,17 +41,9 @@ interface Building {
 }
 
 /**
- * Splits a git path into the segments a tree is built from.
- *
- * The empty-segment filter is load-bearing rather than defensive. Under
- * `--untracked-files=all` git reports a nested repository as a single record ending in a
- * slash — `? vendor/nested/` — and `"vendor/nested/".split("/")` is
- * `["vendor", "nested", ""]`. Without the filter that builds a directory holding a child
- * with no name, which is a row that prints nothing and can never be acted on.
- *
- * `node:path` is not available here (ADR-0001) and would be wrong anyway: git reports
- * root-relative paths with `/` separators on every platform, so `/` is the separator even
- * where the OS spells it `\`.
+ * Splits a git path into the segments a tree is built from. The empty-segment filter is not
+ * defensive: git reports a nested repository as `vendor/nested/`, whose trailing slash would
+ * otherwise build a child with no name. Always `/` — git's separator on every platform.
  */
 function segmentsOf(path: string): readonly string[] {
   return path.split("/").filter((segment) => segment.length > 0)
@@ -66,18 +51,8 @@ function segmentsOf(path: string): readonly string[] {
 
 /**
  * Sibling order: every directory first, then every file, each group by full node path,
- * code-unit, case-sensitive.
- *
- * Folders-first is lazygit's `fileTreeSortOrder: foldersFirst`, not its default — the
- * default interleaves them, which puts a repository's root files (`README.md`, `package.json`)
- * above the folders holding everything you actually changed. Splitting on kind is what puts
- * the shallow rows at the bottom, where the eye lands after walking the tree.
- *
- * Comparing full paths rather than labels still matters within each group: two directories
- * sharing a parent compare the same either way, but `b/` and `b.txt` do not — `/` (0x2F)
- * sorts after `.` (0x2E) — and the kind split is what decides that pair now anyway. The
- * parser already sorts its entries by path, but insertion order alone cannot produce sibling
- * order: the directory `b` is created when `b/a.txt` arrives, which is after `b.txt`.
+ * code-unit, case-sensitive. Sorted here rather than relying on the parser's own path order,
+ * which cannot produce it: the directory `b` is created when `b/a.txt` arrives, after `b.txt`.
  */
 function byPath(left: TreeNode, right: TreeNode): number {
   const leftIsDirectory = left.kind === "directory"
@@ -87,19 +62,15 @@ function byPath(left: TreeNode, right: TreeNode): number {
 
 /**
  * The label a node prints: the segments it adds to its parent, which for a compressed chain
- * is the whole chain (`core/src`). One rule covers plain directories, compressed chains and
- * roots, so there is no separate "compression level" to keep in step with the path.
+ * is the whole chain (`core/src`).
  */
 function labelUnder(parentPath: string, path: string): string {
   return parentPath === "" ? path : path.slice(parentPath.length + 1)
 }
 
 /**
- * A file's label, with a rename read as the move it is.
- *
- * The previous path is shortened to its own leaf when the file did not leave its directory,
- * because `src/a.ts → src/b.ts` under a `src` row is three quarters redundant and the row
- * is competing for width in a narrow column.
+ * A file's label, with a rename read as the move it is. A rename within one directory keeps
+ * only the previous leaf: `src/a.ts → src/b.ts` under a `src` row is mostly redundant.
  */
 export function fileLabel(node: FileNode): string {
   const { change } = node
@@ -111,17 +82,9 @@ export function fileLabel(node: FileNode): string {
 }
 
 /**
- * Collapses single-child directory chains into one row: `docs` holding only `adr` holding
- * files becomes one `docs/adr` row.
- *
- * Stops as soon as the single child is a *file*, so `extensions/diff/index.tsx` keeps its
- * `extensions` and `diff` rows rather than folding a file's whole path into its directory.
- * Without this a deep repository spends most of a narrow Pane on rows that offer no choice.
- *
- * Deliberately not ported from lazygit: its single-file special case, which suppresses the
- * directory row entirely when the whole status is one file one level down. It produces a row
- * whose label is a path with no parent above it, and it vanishes the moment a second file
- * appears — a layout that reshuffles on an unrelated edit.
+ * Collapses single-child directory chains into one row: `docs` holding only `adr` becomes a
+ * `docs/adr` row. Stops at a single *file* child, so `extensions/diff/index.tsx` keeps its
+ * directory rows rather than folding a file's whole path into one.
  */
 function compress(node: Building): Building {
   let current = node
@@ -140,13 +103,9 @@ function finish(node: Building, parentPath: string): DirectoryNode {
 }
 
 /**
- * The children of a level, finished — and the root's entry point.
- *
- * The root is gathered rather than finished because it must never be *compressed*: a repo
- * whose whole status sits under one directory has a root with a single child, and
- * compressing it would return that child's children and drop the directory row itself.
- * Compression is a property of a directory's relationship to its parent, and the root has
- * no parent.
+ * The children of a level, finished — and the root's entry point. The root is gathered rather
+ * than finished because compressing it would drop the one directory row a single-child status
+ * has; compression is a relationship to a parent, and the root has none.
  */
 function gather(node: Building, parentPath: string): DirectoryNode {
   const collapsed = node
@@ -190,13 +149,7 @@ function gather(node: Building, parentPath: string): DirectoryNode {
   }
 }
 
-/**
- * The working tree as a flat-rooted folder hierarchy.
- *
- * No root row (lazygit's `showRootItem: false`): with one path form there is exactly one way
- * to name a node, so the two-path confusion lazygit documents in `node.go` — an internal
- * `./x` path alongside a display `x` — cannot arise here.
- */
+/** The working tree as a flat-rooted folder hierarchy, with no root row. */
 export function buildTree(files: readonly FileChange[]): readonly TreeNode[] {
   const root: Building = { path: "", children: new Map() }
 
@@ -220,9 +173,8 @@ export function buildTree(files: readonly FileChange[]): readonly TreeNode[] {
 
     const leaf = segments[segments.length - 1] ?? ""
     const path = current.path === "" ? leaf : `${current.path}/${leaf}`
-    // The label, not the path, restores a nested repository's trailing slash: every write
-    // hands git back `change.path` verbatim, so the node's own path stays the normalised
-    // form the tree is keyed by while the row still reads as the directory git reported.
+    // The label, not the path, carries a nested repository's trailing slash: the path stays
+    // the normalised form the tree is keyed by.
     const label = change.path.endsWith("/") ? `${leaf}/` : leaf
     current.children.set(leaf, { kind: "file", path, label, change })
   }
@@ -231,12 +183,8 @@ export function buildTree(files: readonly FileChange[]): readonly TreeNode[] {
 }
 
 /**
- * The same files as one depth-0 list labelled with full paths — today's density, one key
- * away.
- *
- * Built by walking the tree rather than mapping the input, so flat mode inherits the tree's
- * ordering instead of being a second ordering model with its own cursor cases. (lazygit's
- * flat mode floats conflicts, then tracked, then untracked; ours does not, deliberately.)
+ * The same files as one depth-0 list labelled with full paths. Built by walking the tree, so
+ * flat mode inherits its ordering rather than being a second ordering model.
  */
 export function buildFlatList(files: readonly FileChange[]): readonly TreeNode[] {
   return leavesOf(buildTree(files)).map((node) => ({ ...node, label: node.change.path }))
@@ -252,12 +200,8 @@ function leavesOf(nodes: readonly TreeNode[]): readonly FileNode[] {
 }
 
 /**
- * Which directories are folded.
- *
- * Three states rather than a single collapsed set, because a threshold that folds a huge
- * directory on first draw has to lose to an explicit "no, keep this open" — otherwise the
- * ~2s poll would re-fold it under the user every time the status object changed. `expanded`
- * is that override, and it outranks both the threshold and nothing else.
+ * Which directories are folded. `expanded` exists so an explicit unfold outranks the fold
+ * threshold, which would otherwise re-fold a big directory on the next poll.
  */
 export interface FoldState {
   readonly collapsed: ReadonlySet<string>
@@ -316,17 +260,9 @@ export function filesUnder(node: TreeNode): readonly FileChange[] {
 }
 
 /**
- * Where a path sits in the visible rows: exactly, else its deepest visible ancestor, else
- * -1.
- *
- * The ancestor fallback is what keeps a cursor on screen when the directory above it folds —
- * the row it was on is gone, and the row that swallowed it is the honest place to land. It
- * also gives lazygit's collapse-all behaviour (the cursor rises to the top-level ancestor)
- * as a consequence of the general rule rather than as its own special case.
- *
- * Tested with `startsWith(path + "/")` rather than by counting segments, because path
- * compression makes a row's path multi-segment: `packages/core/src` is one row, so "a row's
- * parent is its path minus one segment" is false everywhere in this tree.
+ * Where a path sits in the visible rows: exactly, else its deepest visible ancestor, else -1.
+ * The fallback is what catches a cursor whose row just folded away. Ancestry is tested with
+ * `startsWith`, because path compression makes a row's path multi-segment.
  */
 export function rowIndexFor(rows: readonly VisibleRow[], path: string): number {
   let best = -1

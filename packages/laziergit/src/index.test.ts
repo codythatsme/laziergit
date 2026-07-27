@@ -21,8 +21,6 @@ describe("config schema", () => {
       wrap: option.boolean({ default: true }),
     } satisfies ConfigSchema
 
-    // The whole point of the union: `kind` and `default` can no longer disagree. The flat
-    // shape accepted this, inferred `string` for the value, and handed back a number.
     // @ts-expect-error a number option's default must be a number
     const mismatched = { limit: { kind: "number", default: "none" } } satisfies ConfigSchema
     void mismatched
@@ -40,21 +38,16 @@ describe("config schema", () => {
     const offEnum: ConfigValues<typeof schema>["mode"] = "sideways"
     void offEnum
 
-    // `min`/`max` and `values` are reachable without a shadow type, which is what let the
-    // config reader and the JSON Schema generator each stop declaring one.
+    // `min`/`max` and `values` are reachable without a shadow type.
     expect(schema.limit.min).toBe(1)
     expect(schema.mode.values).toEqual(["unified", "split"])
   })
 
   it("refuses a default that its own bounds exclude, at definition time", () => {
-    // Silent otherwise: an out-of-range default is handed back as the fallback for every
-    // user who never sets the option, so nothing downstream would ever surface it.
     expect(() => option.number({ default: 0, min: 1, max: 10 })).toThrow("below min")
     expect(() => option.number({ default: 20, min: 1, max: 10 })).toThrow("above max")
     expect(() => option.number({ default: 5, min: 10, max: 1 })).toThrow("exceeds max")
-    // The enum case is caught twice over: a type error for anyone compiling against these
-    // types, and still a throw for an Extension that reaches the runtime untypechecked,
-    // which every Extension does (ADR-0003).
+    // Caught twice over: a compile error, and still a throw for an untypechecked Extension.
     // @ts-expect-error a default outside its declared values is also a compile error
     expect(() => option.enum(["a", "b"], { default: "c" })).toThrow("not one of its declared values")
   })
@@ -192,8 +185,7 @@ const theme: Theme = {
 
 describe("toneColor", () => {
   it("maps every tone to a theme token, and no tone to ordinary text", () => {
-    // Both sides are mapped over Tone, so a new tone fails to compile until it is mapped
-    // and asserted — the whole point of the function is that no tone falls through.
+    // Both sides are mapped over Tone, so a new tone fails to compile until it is asserted.
     const resolved: { readonly [K in Tone]: string } = {
       neutral: toneColor(theme, "neutral"),
       info: toneColor(theme, "info"),
@@ -236,8 +228,6 @@ describe("createRowSource", () => {
     })
 
     handle.dispose()
-    // Both are "do something to my registration": the answer for a dead one is nothing,
-    // never a throw, because cleanup paths run late by nature.
     expect(() => handle.refresh()).not.toThrow()
     expect(() => handle.dispose()).not.toThrow()
     expect(calls).toBe(0)

@@ -1,9 +1,8 @@
 /**
- * A JSONC reader: JSON plus `//` and block comments, trailing commas, and precise
- * error positions. Hand-written rather than delegating to `JSON.parse`, because a
- * user's config.jsonc must fail with a line and column they can act on, and because
- * Bun's own JSONC support only exists behind `import`, whose module cache would
- * defeat config reloading.
+ * A JSONC reader: JSON plus `//` and block comments, trailing commas, and precise error
+ * positions. Hand-written because a user's config.jsonc must fail with a line and column they
+ * can act on, and because Bun's own JSONC support exists only behind `import`, whose module
+ * cache would defeat config reloading.
  */
 
 /** Thrown for any malformed document; carries the 1-based position of the offending character. */

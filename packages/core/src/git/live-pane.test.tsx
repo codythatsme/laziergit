@@ -21,8 +21,7 @@ const livePane = `
     name: "live",
     activate(ctx) {
       function LivePane() {
-        // The union is read the way every Bundled Extension reads it: the variant first,
-        // and only then the fields that variant actually has.
+        // The union is read the way every Bundled Extension reads it: the variant first.
         const head = useGit((state) => state.head)
         const commits = useGit((state) => state.commits.length)
         const clean = useGit((state) => state.status.isClean)
@@ -72,9 +71,8 @@ it("renders live branch and status, and tracks git commands run outside laziergi
     `{ "layout": { "columns": [["live"]] }, "git": { "refreshIntervalMs": 250 } }`,
   )
   await writeFile(join(harness.repo, "live.tsx"), livePane)
-  // The harness directory is also the Extension and config home — and where the kernel
-  // publishes config.schema.json — so its own scaffolding would otherwise show up as
-  // untracked noise in the very status this test asserts on.
+  // The harness directory is also the Extension and config home, so its own scaffolding would
+  // otherwise show up as untracked noise in the very status this test asserts on.
   await writeFile(join(harness.directory, ".gitignore"), "global/\nrepo/\n*.json\n*.jsonc\n")
   await writeFile(join(harness.directory, "tracked.txt"), "one\n")
   await git(harness, "add", ".gitignore", "tracked.txt")
@@ -130,9 +128,8 @@ it("renders an empty store, without polling, outside a repository", async () => 
   await writeFile(join(harness.repo, "live.tsx"), livePane)
 
   await renderApp(harness)
-  // Degraded, not broken: `useGit` still resolves and the Pane still renders. The empty
-  // store serves `noRepository`, the variant that claims nothing at all — a Pane can tell
-  // it from a fresh `git init` without inspecting a branch name.
+  // Degraded, not broken: `useGit` still resolves and the Pane still renders. The empty store
+  // serves `noRepository`, which a Pane can tell from a fresh `git init`.
   expect(frame(harness)).toContain("on noRepository 0c clean")
   expect(harness.kernel.git.available).toBe(false)
   expect(harness.kernel.diagnostics.getSnapshot()).toEqual([])

@@ -12,9 +12,8 @@ installHarnessLifecycle()
 const stashExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "stash")
 
 /**
- * A `diff` that renders the target it was handed. The stash Pane's only observable effect
- * on the diff Pane is *which target it pushed*, so a stand-in that prints it is a sharper
- * instrument than the real one, whose output is a git diff.
+ * A `diff` that renders the target it was handed: the stash Pane's only observable effect on
+ * the diff Pane is which target it pushed.
  */
 const diffSource = `
   /** @jsxImportSource @opentui/react */
@@ -54,17 +53,15 @@ const filesSource = `
         component: FilesPane,
         placement: { column: 0, order: 20 },
       })
-      // Keyless, like the real one: core binds the digits over the Layout, and this Pane is
-      // the first cell of it — so \`1\` reaches here and \`2\` reaches the stash Pane below it.
+      // Keyless, like the real one: core binds the digits over the Layout.
       ctx.commands.register({ id: "files.focus", title: "Focus files", run: () => pane.focus() })
     },
   })
 `
 
 /**
- * A consumer of the exported `StashApi`, which is the only vantage point the selection is
- * observable from: the Pane keeps its cursor to itself, and `selected()` is the whole of
- * what it publishes.
+ * A consumer of the exported `StashApi`, the only vantage point the selection is observable
+ * from: the Pane keeps its cursor to itself.
  */
 const consumerSource = `
   import { defineExtension } from "laziergit"
@@ -98,10 +95,7 @@ const syncSource = `
 
 /**
  * Reads the repository behind the app's back, so assertions test git and not the store.
- *
- * Inside `act` because spawning git is the one thing here that takes real time while the
- * fingerprint poll is running: a refresh landing mid-spawn is a React update, and one that
- * happened outside `act` would be reported as a test that failed to wrap it.
+ * Inside `act`, because a refresh landing mid-spawn is a React update.
  */
 async function git(harness: Harness, ...args: readonly string[]): Promise<string> {
   let stdout = ""
@@ -129,13 +123,10 @@ function stashCount(list: string): number {
 }
 
 /**
- * One commit on `main`, with the three Extension scopes excluded first: they live inside
- * the repository root, so without this every `stash --include-untracked` would sweep up the
- * very sources the harness is loading Extensions from.
+ * One commit on `main`, with the three Extension scopes excluded first: they live inside the
+ * repository root, so `stash --include-untracked` would otherwise sweep them up.
  */
 async function seed(harness: Harness): Promise<void> {
-  // The Extension scopes, the harness's config files, and the JSON schema the kernel writes
-  // beside them all live inside the repository root.
   await writeFile(
     join(harness.directory, ".git", "info", "exclude"),
     "bundled/\nglobal/\nrepo/\n*.jsonc\nconfig.schema.json\n",
@@ -176,10 +167,9 @@ async function press(harness: Harness, action: () => void): Promise<void> {
 }
 
 /**
- * A keypress starts git in another process; what follows is only worth asserting once that
- * has landed, the store has republished, and React has painted. Polled rather than slept
- * for a fixed span, so the test is neither flaky on a loaded machine nor slow on an idle
- * one — and the failure carries the frame, because "timed out" alone explains nothing.
+ * A keypress starts git in another process, so what follows is worth asserting only once
+ * that has landed, the store has republished, and React has painted. Polled rather than
+ * slept for, and the failure carries the frame.
  */
 async function settleUntil(harness: Harness, what: string, holds: () => boolean | Promise<boolean>): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -199,9 +189,8 @@ async function frameShowing(harness: Harness, text: string): Promise<string> {
 }
 
 /**
- * Wide enough that a row's message, branch, and age all survive the column split. `height`
- * is a parameter so a test can make the list taller than the Pane without stashing dozens
- * of times to get there.
+ * Wide enough that a row's message, branch and age all survive the column split. `height` is
+ * a parameter so a test can make the list taller than the Pane.
  */
 async function stashHarness(height = 36): Promise<Harness> {
   const harness = await createHarness({ git: true, width: 140, height })
@@ -229,17 +218,15 @@ describe("stash actions", () => {
   it("shows git's own refusal when a write fails", async () => {
     const harness = await stashHarness()
     await stash(harness, "wip one")
-    // An uncommitted edit to the very file the stash touches, which `stash apply` refuses
-    // to overwrite. Nothing in the Pane could have predicted that, so git's text is the
-    // whole explanation the user gets.
+    // An uncommitted edit to the very file the stash touches, which `stash apply` refuses to
+    // overwrite. Nothing in the Pane could have predicted that, so git's text is the answer.
     await writeFile(join(harness.directory, "seed.txt"), "local edit\n")
     await start(harness)
 
     await press(harness, () => harness.setup.mockInput.pressKey("2"))
     await press(harness, () => harness.setup.mockInput.pressKey(" "))
 
-    // Git's first line, verbatim and attributed — a toast is one line, so the paths it goes
-    // on to list are not on screen, but the sentence that explains the refusal is.
+    // Git's first line, verbatim and attributed.
     expect(await frameShowing(harness, "would be overwritten")).toContain("stash: error:")
     expect(stashCount(await git(harness, "stash", "list"))).toBe(1)
   })
@@ -291,14 +278,12 @@ describe("stash actions", () => {
     await stash(harness, "wip two")
     await start(harness)
 
-    // Drop the top entry, wip two, which renumbers `wip one` from 1 to 0, then drop what is
-    // now selected: acting on the index wip one was *drawn* with would take a `stash@{1}`
-    // that no longer exists.
+    // Dropping the top entry renumbers `wip one` from 1 to 0, so acting on the index the row
+    // was drawn with would take a `stash@{1}` that no longer exists.
     await press(harness, () => harness.setup.mockInput.pressKey("2"))
     await press(harness, () => harness.setup.mockInput.pressKey("d"))
     await press(harness, () => harness.setup.mockInput.pressKey("y"))
-    // `wip two` was already on screen before the drop, so waiting on it proves nothing; wait
-    // for it to *leave* — the moment the first drop lands and the cursor falls onto wip one.
+    // `wip two` was already on screen, so wait for it to leave rather than to appear.
     await settleUntil(harness, "the first drop to leave only wip one", () => !frame(harness).includes("wip two"))
 
     await press(harness, () => harness.setup.mockInput.pressKey("d"))
@@ -312,8 +297,7 @@ describe("stash actions", () => {
     const harness = await stashHarness()
     await stash(harness, "wip one")
     await stash(harness, "wip two")
-    // Fast enough for the app to notice an outside push while a popup is up; the shipped 2s
-    // is a person's timescale, not a test's.
+    // Fast enough to notice an outside push while a popup is up; the shipped 2s is not.
     await start(harness, `{ "git": { "refreshIntervalMs": 250 } }`)
 
     await press(harness, () => harness.setup.mockInput.pressKey("2"))
@@ -321,8 +305,8 @@ describe("stash actions", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("d"))
     expect(frame(harness)).toContain("Drop stash@{1}?")
 
-    // Another process stashes while the confirmation waits — the case the 2s poll exists
-    // for. `wip one` is stash@{2} now, and the slot the row was in holds `wip two`.
+    // Another process stashes while the confirmation waits: `wip one` is stash@{2} now, and
+    // the slot the row was in holds `wip two`.
     await stash(harness, "from elsewhere")
     await settleUntil(harness, "the store to notice the outside stash", () =>
       frame(harness).includes("stash@{2} wip one"),
@@ -330,9 +314,8 @@ describe("stash actions", () => {
 
     await press(harness, () => harness.setup.mockInput.pressKey("y"))
 
-    // Waited on through the frame rather than by spawning git in a loop: with the store
-    // settled the reads below are, and a read racing the refresh is a React update this
-    // test never wrapped.
+    // Waited on through the frame rather than by spawning git in a loop: a read racing the
+    // refresh is a React update this test never wrapped.
     await settleUntil(
       harness,
       "the drop to leave two entries",
@@ -387,9 +370,8 @@ describe("stash menu", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("b"))
     expect(frame(harness)).toContain("Branch from stash@{1}")
 
-    // The same outside push, against the prompt this time. `git stash branch` drops the
-    // entry it applied, so aiming it at a slot destroys someone else's stash as surely as
-    // `drop` does.
+    // The same outside push, against the prompt. `git stash branch` drops the entry it
+    // applied, so aiming it at a slot destroys someone else's stash as surely as `drop` does.
     await stash(harness, "from elsewhere")
     await settleUntil(harness, "the store to notice the outside stash", () =>
       frame(harness).includes("stash@{2} wip one"),
@@ -398,9 +380,8 @@ describe("stash menu", () => {
     await press(harness, () => void harness.setup.mockInput.typeText("rescue"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
-    // Waited on through the frame rather than by spawning git in a loop: with the store
-    // settled the reads below are, and a read racing the refresh is a React update this
-    // test never wrapped.
+    // Waited on through the frame rather than by spawning git in a loop: a read racing the
+    // refresh is a React update this test never wrapped.
     await settleUntil(
       harness,
       "the branch to take one of the three entries with it",

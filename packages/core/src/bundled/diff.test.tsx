@@ -9,24 +9,18 @@ import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type 
 installHarnessLifecycle()
 
 /**
- * The two halves of this Extension that no other suite can see.
- *
- * The e2e suite drives the Pane a person actually looks at, but its diff assertion reads the
- * header — which is built from the `DiffTarget` the Pane was *given*, not from git's answer, so
- * it stays green for an argv git rejects. What is only checkable here is therefore what git was
- * asked (every `fetchFor` branch, recorded at the process boundary) and what the Pane made of
- * the answer (`splitPatch`/`pathOfSection`, whose result surfaces nowhere but the rows it
- * names). Scrolling, the view toggle, the actions menu and revealing a tabbed-away Pane are
- * about what a person sees, and stay in `scripts/e2e`.
+ * The two halves of this Extension no other suite can see: what git was asked (every `fetchFor`
+ * branch, recorded at the process boundary) and what the Pane made of the answer. The e2e
+ * suite's diff assertion reads the header, which is built from the `DiffTarget` rather than
+ * from git's answer, so it stays green for an argv git rejects.
  */
 
 /** The same directory `main.tsx` hands the kernel as the bundled scope. */
 const bundledExtensionDirectory = resolve(import.meta.dir, "..", "..", "..", "..", "extensions")
 
 /**
- * Stands in for the four list Panes: the only way into the `diff` Extension is `show`, so
- * something has to call it from its own `activate` scope the way `files` and `commits` do.
- * One Command per target, because `execute` takes an id and nothing else.
+ * Stands in for the four list Panes: `show` is the only way into the `diff` Extension, and it
+ * has to be called from another Extension's own `activate` scope.
  */
 const driverSource = `
   import { defineExtension } from "laziergit"
@@ -128,16 +122,11 @@ afterEach(() => {
 const unitSeparator = "\u001f"
 
 /**
- * Puts a recording stand-in for `git` at the front of `PATH`, and hands back a reader for
- * what it caught.
+ * Puts a recording stand-in for `git` at the front of `PATH`, and hands back a reader for what
+ * it caught. `execGit` spawns the bare name `git`, and nothing about `fetchFor` is exported, so
+ * the process boundary is the only place to read the argv an Extension built.
  *
- * `execGit` spawns the bare name `git` (git/exec.ts), so this is the one place a test can
- * read the argv an Extension actually built — and the process boundary is the honest place
- * to read it, since nothing about `fetchFor` is exported or otherwise observable.
- *
- * One file per invocation rather than one shared log: several git processes overlap here,
- * and appending to a single log would interleave their records with no way to tell whose
- * arguments were whose.
+ * One file per invocation: overlapping git processes would interleave a shared log.
  */
 async function recordGitArgv(harness: Harness): Promise<() => Promise<readonly (readonly string[])[]>> {
   const bin = join(harness.directory, "bin")
@@ -165,10 +154,8 @@ async function recordGitArgv(harness: Harness): Promise<() => Promise<readonly (
 }
 
 /**
- * One recorded argv, with the pinning flags `execGit` puts in front of every invocation
- * removed (git/exec.ts). Those belong to core, and repeating them in each expectation below
- * would make this file a change-detector for core's flag list rather than a test of the
- * argv the Extension itself built.
+ * One recorded argv, with core's own pinning flags removed: repeating them in each expectation
+ * would make this a change-detector for that flag list.
  */
 function extensionArgv(recorded: readonly string[]): readonly string[] {
   let index = 0
@@ -181,11 +168,7 @@ function extensionArgv(recorded: readonly string[]): readonly string[] {
   return recorded.slice(index)
 }
 
-/**
- * The diff Pane's own invocations. The store reads with `status`, `for-each-ref`, `show-ref`,
- * `config`, `log` and `stash list` (git/parse.ts) and never with any of these, so this
- * separates the Pane's fetches from the traffic the kernel makes around them.
- */
+/** The diff Pane's own invocations, separated from the store reads the kernel makes around them. */
 function isFetch(argv: readonly string[]): boolean {
   return argv[0] === "diff" || argv[0] === "show" || (argv[0] === "stash" && argv[1] === "show")
 }
@@ -199,10 +182,8 @@ interface DiffHarness {
 }
 
 /**
- * The diff Pane and the driver over a repository with one commit. The `.gitignore` covers
- * the harness's own scaffolding — Extension directories, config files, the published schema,
- * and the recorder above — which would otherwise be untracked files this suite never asked
- * about.
+ * The diff Pane and the driver over a repository with one commit. The `.gitignore` covers the
+ * harness's own scaffolding, which would otherwise show up as untracked files.
  */
 async function createDiffHarness(extensionConfig = ""): Promise<DiffHarness> {
   const harness = await createHarness({ git: true })
@@ -234,20 +215,18 @@ async function createDiffHarness(extensionConfig = ""): Promise<DiffHarness> {
     harness,
     fetches,
     async show(command) {
-      // The recording is never cleared, so a second target's fetch would arrive beside the
-      // first with nothing to tell them apart. One target per harness, said out loud.
+      // The recording is never cleared, so one target per harness.
       if (read !== null) throw new Error("show() drives one target per harness")
-      // Installed here rather than in `createHarness`, so the fixture git above — which is
-      // most of the git these tests run — never has to be filtered back out.
+      // Installed here rather than in `createHarness`, so the fixture git above is never
+      // recorded and never has to be filtered back out.
       read = await recordGitArgv(harness)
       await renderApp(harness)
       await act(async () => {
         void harness.kernel.commands.execute(command)
         await Bun.sleep(20)
       })
-      // The fetch is a real git process behind a `useEffect`, so it lands several ticks
-      // after the Command that asked for it. A Pane that never reached git hands back no
-      // argv at all, which the caller's own expectation then reports.
+      // The fetch is a real git process behind a `useEffect`, so it lands several ticks after
+      // the Command that asked for it.
       const deadline = Date.now() + 3_000
       for (;;) {
         await settle(harness)
@@ -263,11 +242,9 @@ async function createDiffHarness(extensionConfig = ""): Promise<DiffHarness> {
 }
 
 /**
- * Renders until `predicate` holds, and hands back the frame that matched — so the rest of a
- * test reads that same frame rather than racing the next one. Each fetch is a real git
- * process behind a `useEffect`, so the frame proving it landed is several ticks after the
- * Command that asked for it. Giving up returns the last frame quietly, leaving the test's
- * own `expect` to report the failure with its own message.
+ * Renders until `predicate` holds, and hands back the frame that matched, so the rest of a test
+ * reads that same frame rather than racing the next one. Giving up returns the last frame
+ * quietly, leaving the test's own `expect` to report the failure.
  */
 async function waitForFrame(harness: Harness, predicate: (screen: string) => boolean): Promise<string> {
   const deadline = Date.now() + 3_000
@@ -286,8 +263,7 @@ describe("the git the diff pane asks for", () => {
     const diff = await createDiffHarness()
     await writeFile(join(diff.harness.directory, "tracked.txt"), "one\nTWO\nthree\n")
 
-    // `:(literal)` because every path git takes is a *pattern*; the glob case below is what
-    // that buys, and it has to be the same spelling here or only one of them is real.
+    // `:(literal)` because every path git takes is a pattern — see the glob case below.
     expect(await diff.show("driver.working-file")).toEqual([
       "diff",
       "--no-ext-diff",
@@ -326,9 +302,8 @@ describe("the git the diff pane asks for", () => {
 
     const argv = await diff.show("driver.untracked")
 
-    // Plain `git diff` prints nothing at all for a path git does not track, so the row that
-    // promised a change would render an empty Pane. `--no-index` takes filesystem paths
-    // rather than pathspecs, which is why this one path is *not* wrapped in `:(literal)`.
+    // Plain `git diff` prints nothing for an untracked path. `--no-index` takes filesystem
+    // paths rather than pathspecs, which is why this one is not wrapped in `:(literal)`.
     expect(argv).toEqual(["diff", "--no-index", "--no-ext-diff", "-U3", "--", "/dev/null", "untracked.txt"])
   })
 
@@ -353,11 +328,9 @@ describe("the git the diff pane asks for", () => {
 
     const argv = await diff.show("driver.head-commit-file")
 
-    // `--pretty=medium`, not the `--format=` that used to strip the header: rows are clipped
-    // to one line, so a subject that runs off the right edge has to be readable somewhere,
-    // and `splitPatch` lifts the preamble off the front rather than letting `<diff>` parse it
-    // as a file section. `--first-parent` is byte-identical to no flag at all on an ordinary
-    // commit, so it rides along here for the merge case below.
+    // `--pretty=medium` keeps the header a clipped one-line row cannot show; `splitPatch`
+    // lifts it off rather than letting `<diff>` parse it as a file section. `--first-parent`
+    // is byte-identical to no flag on an ordinary commit, and rides along for the merge below.
     expect(argv).toEqual([
       "show",
       "--pretty=medium",
@@ -377,9 +350,8 @@ describe("the git the diff pane asks for", () => {
 
     const argv = await diff.show("driver.stash")
 
-    // The service reads the argv element *directly* after the subcommand as its operand, and
-    // only the exact pair `stash show` is on its read-only list — a flag in between makes
-    // this a mutation.
+    // The service reads the argv element directly after the subcommand as its operand, and
+    // only the exact pair `stash show` is on its read-only list.
     expect(argv).toEqual(["stash", "show", "-p", "--no-ext-diff", "-U3", "stash@{0}"])
 
     const settled = (await diff.fetches()).length
@@ -387,9 +359,8 @@ describe("the git the diff pane asks for", () => {
       await Bun.sleep(400)
     })
     await settle(diff.harness)
-    // And that is what the classification is *for*: a fetch counted as a mutation would
-    // refresh the store, the refresh would re-run the fetch, and the count would climb for
-    // as long as anyone watched.
+    // A fetch counted as a mutation would refresh the store, and the refresh would re-run the
+    // fetch for as long as anyone watched.
     expect((await diff.fetches()).length).toBe(settled)
   })
 
@@ -434,7 +405,7 @@ describe("splitting git's patch into one section per file", () => {
     await diff.show("driver.head-commit")
 
     // `<diff>` renders `patches[0]` and nothing else, so the second and third files are on
-    // screen only because the patch was split into a `<diff>` each.
+    // screen only because the patch was split.
     const screen = await waitForFrame(diff.harness, (text) => text.includes("beta.txt"))
     expect(screen).toContain("alpha.txt")
     // A deletion writes `+++ /dev/null`, so this one is named only by the fallback to the
@@ -454,8 +425,7 @@ describe("splitting git's patch into one section per file", () => {
 
     await diff.show("driver.head-commit")
 
-    // Without `--first-parent` git suppresses a merge's diff outright, so the tip of `main`
-    // in most repositories rendered as a commit that changed no files.
+    // Without `--first-parent` git suppresses a merge's diff outright.
     const screen = await waitForFrame(diff.harness, (text) => text.includes("+ merged"))
     expect(screen).toContain("side.txt")
     expect(screen).not.toContain("no changes")
@@ -467,9 +437,7 @@ describe("splitting git's patch into one section per file", () => {
 
     await diff.show("driver.untracked")
 
-    // `--no-index` exits 1 to mean "the two files differ", which is the ordinary answer
-    // here: the whole file, as an addition. Read as a failure it would put git's silence on
-    // screen instead.
+    // `--no-index` exits 1 to mean "the two files differ", the ordinary answer here.
     const screen = await waitForFrame(diff.harness, (text) => text.includes("+ brand"))
     expect(screen).toContain("+ new")
     expect(screen).not.toContain("no changes")

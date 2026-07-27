@@ -88,9 +88,9 @@ export interface HarnessOptions {
 }
 
 /**
- * Nulling the global config also nulls the developer's `init.defaultBranch`, so the branch
- * name is pinned per-command instead: on a git old enough to still default to `master`, every
- * test that reads or asserts on `main` would otherwise fail for a reason unrelated to it.
+ * Nulling the global config also nulls the developer's `init.defaultBranch`, so the branch name
+ * is pinned per-command: on a git old enough to default to `master`, every test asserting on
+ * `main` would otherwise fail for an unrelated reason.
  */
 async function initRepository(directory: string): Promise<void> {
   const env = { ...process.env, ...gitIsolationEnv }
@@ -210,20 +210,13 @@ export function frame(harness: Harness): string {
 }
 
 /**
- * The rows currently painted with the selection colour, trimmed, in screen order.
+ * The rows currently painted with the selection colour, trimmed, in screen order. The list
+ * Panes draw no cursor marker — the highlight is the cursor — so this reads the same fact off
+ * the styled capture, proving the row the user sees lit in the colour the theme lights it.
  *
- * The list Panes draw no cursor marker any more — the highlight *is* the cursor — so
- * `captureCharFrame` cannot see where the cursor is, and a test that asserted on a `❯`
- * would be asserting on a glyph nothing draws. This reads the same fact off the styled
- * capture instead, which is a stronger claim than the marker ever was: it proves the row
- * the user actually sees lit, in the colour the theme says lights it.
- *
- * A list, not a single row, because "exactly one row is lit" is itself worth asserting —
- * two Panes lighting a row at once is the bug this would catch.
- *
- * Only the spans carrying the selection colour are joined, not the whole terminal line: a
- * screen line crosses every column, so taking the line would append whatever the diff Pane
- * happens to be drawing beside the row.
+ * A list, not a single row, because "exactly one row is lit" is itself worth asserting. Only
+ * the spans carrying the selection colour are joined: a screen line crosses every column, so
+ * taking the whole line would append whatever the diff Pane is drawing beside the row.
  */
 export function highlighted(harness: Harness): readonly string[] {
   const selection = RGBA.fromHex(harness.kernel.theme.getSnapshot().selection)
