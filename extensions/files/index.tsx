@@ -572,7 +572,7 @@ export default defineExtension({
                 run: () => toggleDirectory({ ...node, unstaged: false, untracked: false }),
               },
               { key: "shift+d", label: "Discard everything here", run: () => discardDirectory(node) },
-              { key: "e", label: "Open folder", run: () => openPath(node.path) },
+              { key: "o", label: "Open folder", run: () => openPath(node.path) },
             ],
           },
         ],
@@ -597,7 +597,11 @@ export default defineExtension({
               run: unstage,
             },
             { key: "d", label: "Discard changes", when: isNotConflicted, run: discard },
-            { key: "e", label: "Open in default application", when: isNotConflicted, run: openFile },
+            // The same `o` the conflict group below offers, and safe because the two `when`s
+            // are exact opposites: a menu is one keyspace, but visibility is settled before
+            // conflicts and an item `when` hides never contests a key (§5.7). So the key the
+            // pane uses is the key the menu shows, whichever kind of row you opened it on.
+            { key: "o", label: "Open in default application", when: isNotConflicted, run: openFile },
           ],
         },
         {
@@ -822,7 +826,11 @@ export default defineExtension({
       useCommand({
         id: "files.open",
         title: "Open file in default application",
-        keys: "e",
+        // `o`, lazygit's key for exactly this, rather than the `e` it was: in lazygit `e`
+        // means *edit* — hand the file to `$EDITOR` inside the TUI — and binding it to the
+        // OS opener would teach the wrong half of a pair we intend to complete. `e` is left
+        // free for the day the full-screen suspend that makes editing possible lands.
+        keys: "o",
         run: () => (selected === undefined ? undefined : openPath(selected.node.path)),
       })
       useCommand({
