@@ -1,11 +1,110 @@
 import { describe, expect, it } from "bun:test"
 import type { Theme } from "laziergit"
 
-import { defaultTheme, ThemeStore } from "./theme"
+import { defaultTheme, defaultThemePreset, findThemePreset, themePresets, ThemeStore } from "./theme"
 
 function createTheme(overrides: Partial<Theme> = {}): Theme {
   return { ...defaultTheme, ...overrides }
 }
+
+/** sRGB → relative luminance, per WCAG. */
+function luminance(hex: string): number {
+  const channel = (value: number): number => {
+    const c = value / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }
+  const h = hex.replace("#", "")
+  return (
+    0.2126 * channel(Number.parseInt(h.slice(0, 2), 16)) +
+    0.7152 * channel(Number.parseInt(h.slice(2, 4), 16)) +
+    0.0722 * channel(Number.parseInt(h.slice(4, 6), 16))
+  )
+}
+
+function contrast(foreground: string, background: string): number {
+  const a = luminance(foreground)
+  const b = luminance(background)
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+}
+
+/**
+ * What each pair has to clear, and why that number.
+ *
+ * `text` and the selected row are held to AAA because they are the whole screen for eight
+ * hours. `textMuted` is held to AA against *both* grounds it is ever drawn on, which is the
+ * floor the original palette missed: it renders every empty state in the app — the sentence
+ * telling you the working tree is clean — plus the cursor gutter beside every unselected row,
+ * so treating it as decorative grey makes the app's own explanations its least readable text.
+ */
+const contrastFloors: readonly (readonly [keyof Theme, keyof Theme, number])[] = [
+  ["text", "background", 7],
+  ["text", "selection", 7],
+  ["text", "backgroundPanel", 7],
+  ["textMuted", "background", 4.5],
+  ["textMuted", "selection", 4.5],
+  ["accent", "background", 4.5],
+  ["success", "background", 4.5],
+  ["warning", "background", 4.5],
+  ["danger", "background", 4.5],
+  ["info", "background", 4.5],
+  ["diffAdded", "background", 4.5],
+  ["diffRemoved", "background", 4.5],
+  ["diffHunkHeader", "background", 4.5],
+  // An unfocused frame still has to frame something, and the focused one has to win clearly.
+  ["border", "background", 1.5],
+  ["borderFocused", "background", 2.5],
+]
+
+describe("theme presets", () => {
+  it("registers the default preset and gives every preset a distinct name", () => {
+    expect(findThemePreset(defaultThemePreset)?.tokens).toBe(defaultTheme)
+    const names = themePresets.map((entry) => entry.name)
+    expect(new Set(names).size).toBe(names.length)
+    expect(findThemePreset("no-such-preset")).toBeUndefined()
+  })
+
+  it("spells every token of every preset as a six-digit hex color", () => {
+    for (const entry of themePresets) {
+      for (const [token, color] of Object.entries(entry.tokens)) {
+        expect(`${entry.name}.${token}=${color}`).toMatch(/=#[0-9a-f]{6}$/)
+      }
+      // A preset is a complete base, not a patch: a missing token would silently inherit a
+      // colour from a palette the user did not choose.
+      expect(Object.keys(entry.tokens).sort()).toEqual(Object.keys(defaultTheme).sort())
+    }
+  })
+
+  it("keeps every preset above its contrast floors", () => {
+    const failures: string[] = []
+    for (const entry of themePresets) {
+      for (const [foreground, background, floor] of contrastFloors) {
+        const ratio = contrast(entry.tokens[foreground], entry.tokens[background])
+        if (ratio < floor) {
+          failures.push(`${entry.name}: ${foreground}/${background} = ${ratio.toFixed(2)}, needs ${floor}`)
+        }
+      }
+
+      // Focus is read at a glance across four frames at once, so the focused border has to be
+      // a step rather than a shade.
+      const step =
+        contrast(entry.tokens.borderFocused, entry.tokens.background) /
+        contrast(entry.tokens.border, entry.tokens.background)
+      if (step < 2) failures.push(`${entry.name}: focused border is only ${step.toFixed(2)}x the unfocused one`)
+
+      // The files Pane draws the index column green immediately beside the working-tree column
+      // red (§ files/index.tsx `statusCell`). Hue alone therefore carries a meaning that a
+      // red-green colour vision deficiency cannot read, so the pair must differ in luminance
+      // too — which is the second channel that keeps `M ` and ` M` apart for everyone.
+      const staged = luminance(entry.tokens.success)
+      const unstaged = luminance(entry.tokens.danger)
+      const separation = Math.abs(staged - unstaged) / Math.max(staged, unstaged)
+      if (separation < 0.12) {
+        failures.push(`${entry.name}: success/danger differ by only ${(separation * 100).toFixed(0)}% luminance`)
+      }
+    }
+    expect(failures).toEqual([])
+  })
+})
 
 describe("ThemeStore", () => {
   it("keeps a frozen copy of each supplied Theme", () => {

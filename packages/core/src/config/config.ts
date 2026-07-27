@@ -4,7 +4,7 @@ import { join } from "node:path"
 import type { ConfigSchema, ConfigValue, Theme } from "laziergit"
 
 import { errorCode } from "../extension/diagnostics"
-import { defaultTheme } from "../extension/theme"
+import { defaultTheme, findThemePreset, themePresets } from "../extension/theme"
 import { parseJsonc } from "./jsonc"
 
 /** One cell of the Layout: a single Pane id, or a tab group sharing one cell. */
@@ -246,12 +246,26 @@ function readKeybindings(value: unknown, log: ProblemLog): ReadonlyMap<string, r
 function readTheme(value: unknown, log: ProblemLog): Theme {
   if (value === undefined) return defaultTheme
   if (!isRecord(value)) {
-    log.reject("theme", "theme must be an object of color tokens")
+    log.reject("theme", 'theme must be an object — a "preset" name, color tokens, or both')
     return defaultTheme
   }
 
+  // The preset is resolved first because it is the base every token override lands on. A name
+  // nobody registered falls back to the default rather than to nothing: a typo in one field
+  // should cost the user that field, not leave the app with no colors at all.
+  let base = defaultTheme
+  const { preset, ...tokens } = value
+  if (preset !== undefined) {
+    const known = typeof preset === "string" ? findThemePreset(preset) : undefined
+    if (known) base = known.tokens
+    else {
+      const names = themePresets.map((entry) => entry.name).join(", ")
+      log.reject("theme.preset", `Unknown theme preset — pick one of: ${names}`)
+    }
+  }
+
   const overrides: Record<string, string> = {}
-  for (const [token, color] of Object.entries(value)) {
+  for (const [token, color] of Object.entries(tokens)) {
     if (!Object.hasOwn(defaultTheme, token)) {
       log.reject(`theme.${token}`, "Unknown theme token")
       continue
@@ -262,7 +276,7 @@ function readTheme(value: unknown, log: ProblemLog): Theme {
     }
     overrides[token] = color
   }
-  return Object.freeze({ ...defaultTheme, ...overrides })
+  return Object.freeze({ ...base, ...overrides })
 }
 
 function readStatusline(value: unknown, log: ProblemLog): StatuslineConfig {
