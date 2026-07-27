@@ -24,8 +24,17 @@ export interface TypeEnvironmentOptions {
  * carry: `react` ships no declarations of its own, and `types: ["bun"]` below is a demand for
  * `@types/bun` by name. Resolved out of laziergit's own installation, so the author typechecks
  * against the exact code that will run their Extension rather than a version they installed.
+ *
+ * `effect` is here for one reason: `ctx.effect` (§1.12) is declared in terms of `Effect.Effect`
+ * and `Stream.Stream`, and those names have to resolve somewhere for the door to be usable.
+ * Without it the escape hatch typechecks only because the authoring tsconfig sets
+ * `skipLibCheck`, which hides the unresolved import inside laziergit's own declarations and
+ * then hands the author `any` — so the one surface the spec calls version-coupled was the one
+ * surface with no types at all. It is the `effect` laziergit itself runs, which is what
+ * ADR-0002's peer dependency means: an author writing against this door is pinned to the same
+ * beta core is, deliberately.
  */
-const AUTHORING_PACKAGES = ["laziergit", "react", "@opentui/react", "@types/react", "@types/bun"] as const
+const AUTHORING_PACKAGES = ["laziergit", "react", "@opentui/react", "@types/react", "@types/bun", "effect"] as const
 
 const TSCONFIG_NAME = "tsconfig.json"
 
