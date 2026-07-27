@@ -2320,6 +2320,10 @@ const extension = defineExtension({
       group: "GitHub",
       items: [
         {
+          // Deliberately the branches menu's own `o`, which opens the *compare* page for
+          // the branch. A splice outranks the owner's item (§5.7), so on a branch that has
+          // a pull request this replaces it with a link to that pull request — and on one
+          // that does not, `when` stands the splice down and the owner's item is back.
           key: "o",
           label: "Open pull request in browser",
           when: (branch) => byBranch.has(branch.name),

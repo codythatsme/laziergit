@@ -320,6 +320,39 @@ describe("the branch menu", () => {
     await press(harness, () => harness.setup.mockInput.pressEscape())
   }, 30_000)
 
+  /**
+   * The URL itself is `pull-request.test.ts`'s subject; what this pins is the offer — that
+   * `o` and its menu item exist exactly where a hosting service does, and nowhere else.
+   * `addOrigin` points `origin` at a bare directory inside the harness, which is a remote
+   * with no web page at all — the case a menu item that always showed would lie about.
+   */
+  it("hides the pull-request item when the remote is a directory nobody can browse", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await addOrigin(harness)
+
+    await start(harness)
+    await press(harness, () => harness.setup.mockInput.pressKey("x"))
+
+    expect(frame(harness)).toContain("Branch: main")
+    expect(frame(harness)).not.toContain("Open a pull request")
+
+    await press(harness, () => harness.setup.mockInput.pressEscape())
+  }, 30_000)
+
+  it("offers a pull request when the remote is a hosting service", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await git(harness, "remote", "add", "origin", "git@github.com:acme/tools.git")
+
+    await start(harness)
+    await press(harness, () => harness.setup.mockInput.pressKey("x"))
+
+    expect(frame(harness)).toContain("Open a pull request")
+
+    await press(harness, () => harness.setup.mockInput.pressEscape())
+  }, 30_000)
+
   it("fast-forwards a branch that is not checked out", async () => {
     const harness = await createHarness({ git: true })
     await withBehindBranch(harness)
