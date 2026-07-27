@@ -18,6 +18,8 @@ import {
 } from "laziergit"
 import { useEffect } from "react"
 
+import { pullRequestUrl } from "./pull-request"
+
 /**
  * The divergence, as arrows, or `""` where there is nothing to say.
  *
@@ -204,6 +206,27 @@ export default defineExtension({
       }
     }
 
+    /**
+     * `o`, lazygit's key for it: the hosting service's "open a pull request" page for the
+     * branch under the cursor.
+     *
+     * Deliberately not gated on the branch having an upstream. A branch can be on the remote
+     * without one configured, and a branch that is genuinely unpushed gets a 404 from the
+     * host — which is lazygit's behaviour too, and a better answer than a Pane refusing on a
+     * guess about state it would have to fetch to know.
+     */
+    async function openPullRequest(branch: Branch): Promise<void> {
+      const url = pullRequestUrl(ctx.git.state.remotes, branch.name)
+      // The menu item's `when` already hid this; the pane key has no `when` to hide behind,
+      // so the sentence is what a repository with no web remote gets instead of a no-op.
+      if (url === null) return ctx.popups.notify("No web remote to open a pull request on", "warning")
+      try {
+        await ctx.open(url)
+      } catch (error) {
+        fail(error)
+      }
+    }
+
     function openMenu(branch: Branch): void {
       void ctx.menus.open("branches.actions", branch).catch(fail)
     }
@@ -297,6 +320,12 @@ export default defineExtension({
         run: () => (selected === undefined ? undefined : deleteBranch(selected)),
       })
       useCommand({
+        id: "branches.pull-request",
+        title: "Open a pull request for this branch",
+        keys: "o",
+        run: () => (selected === undefined ? undefined : openPullRequest(selected)),
+      })
+      useCommand({
         id: "branches.menu",
         title: "Branch actions",
         hint: "menu",
@@ -381,6 +410,15 @@ export default defineExtension({
               run: pushSettingUpstream,
             },
             { key: "f", label: "Fast-forward", when: canFastForward, run: fastForward },
+            {
+              key: "o",
+              label: "Open a pull request",
+              // Hidden rather than inert where there is nothing to open: a `file://` remote
+              // or a sibling clone has no hosting service behind it, and §1.9 hides what
+              // cannot apply. The pane's own `o` says so in words instead, having no `when`.
+              when: (branch) => pullRequestUrl(ctx.git.state.remotes, branch.name) !== null,
+              run: openPullRequest,
+            },
           ],
         },
       ],
