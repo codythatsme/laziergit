@@ -364,9 +364,10 @@ describe("stash menu", () => {
     await press(harness, () => void harness.setup.mockInput.typeText("rescue"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
-    await settleUntil(harness, "the rescue branch to exist", async () =>
-      (await git(harness, "branch", "--list", "rescue")).includes("rescue"),
-    )
+    await settleUntil(harness, "the rescue branch to exist and consume its stash", () => {
+      const state = harness.kernel.git.getSnapshot()
+      return state.head.kind === "onBranch" && state.head.branch === "rescue" && state.stash.length === 1
+    })
     // `git stash branch` drops the entry once it has applied cleanly.
     expect(stashCount(await git(harness, "stash", "list"))).toBe(1)
   })

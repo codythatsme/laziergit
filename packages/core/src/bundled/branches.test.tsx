@@ -583,10 +583,14 @@ describe("the branch menu", () => {
 
     await press(harness, () => harness.setup.mockInput.pressKey("p"))
     // A row says nothing about an upstream that is in sync, so the outcome is read from the
-    // repository rather than from the frame.
+    // store rather than from the frame. Waiting for the store also waits for the write's
+    // follow-up refresh, not merely for git's first on-disk side effect.
     await waitUntil(
       harness,
-      async () => (await git(harness, "config", "--get", "branch.main.remote")) === "origin",
+      async () => {
+        const upstream = harness.kernel.git.getSnapshot().branches.find((branch) => branch.name === "main")?.upstream
+        return upstream?.remote === "origin" && upstream.branch === "main"
+      },
       "the branch to report an upstream",
     )
     expect(await git(harness, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/main")).toBe(
