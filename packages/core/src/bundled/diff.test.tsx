@@ -1,19 +1,13 @@
-import { afterEach, describe, expect, it } from "bun:test"
-import { chmod, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises"
+import { describe, expect, it, spyOn } from "bun:test"
+import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { act } from "react"
 
+import { fetchFor } from "../../../../extensions/diff/fetch"
 import { gitIsolationEnv } from "../git/test-repo"
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
 
 installHarnessLifecycle()
-
-/**
- * The two halves of this Extension no other suite can see: what git was asked (every `fetchFor`
- * branch, recorded at the process boundary) and what the Pane made of the answer. The e2e
- * suite's diff assertion reads the header, which is built from the `DiffTarget` rather than
- * from git's answer, so it stays green for an argv git rejects.
- */
 
 /** The same directory `main.tsx` hands the kernel as the bundled scope. */
 const bundledExtensionDirectory = resolve(import.meta.dir, "..", "..", "..", "..", "extensions")
@@ -109,93 +103,26 @@ async function git(harness: Harness, ...args: readonly string[]): Promise<string
   return stdout
 }
 
-const originalPath = process.env.PATH
-
-afterEach(() => {
-  process.env.PATH = originalPath
-})
-
-/**
- * Separates the arguments of one recorded invocation: ASCII unit separator, written as an
- * escape so no control byte lands in this file. No git argument can contain it.
- */
-const unitSeparator = "\u001f"
-
-/**
- * Puts a recording stand-in for `git` at the front of `PATH`, and hands back a reader for what
- * it caught. `execGit` spawns the bare name `git`, and nothing about `fetchFor` is exported, so
- * the process boundary is the only place to read the argv an Extension built.
- *
- * One file per invocation: overlapping git processes would interleave a shared log.
- */
-async function recordGitArgv(harness: Harness): Promise<() => Promise<readonly (readonly string[])[]>> {
-  const bin = join(harness.directory, "bin")
-  const log = join(harness.directory, "argv")
-  await Promise.all([mkdir(bin), mkdir(log)])
-  const shim = join(bin, "git")
-  // `printf` reuses its format for every remaining argument, so one call writes the whole
-  // record; `exec` then hands the process over, so nothing else about the run changes.
-  const script = [
-    "#!/bin/sh",
-    `printf '%s\\037' "$@" > "$(mktemp ${JSON.stringify(join(log, "argv.XXXXXX"))})"`,
-    `exec ${JSON.stringify(realGit())} "$@"`,
-    "",
-  ].join("\n")
-  await writeFile(shim, script)
-  await chmod(shim, 0o755)
-  process.env.PATH = `${bin}:${originalPath ?? ""}`
-
-  return async () => {
-    const names = await readdir(log)
-    const records = await Promise.all(names.map((name) => readFile(join(log, name), "utf8")))
-    // Every record ends with a separator, so the split leaves one empty tail element.
-    return records.map((record) => record.split(unitSeparator).slice(0, -1))
-  }
-}
-
-/**
- * One recorded argv, with core's own pinning flags removed: repeating them in each expectation
- * would make this a change-detector for that flag list.
- */
-function extensionArgv(recorded: readonly string[]): readonly string[] {
-  let index = 0
-  while (index < recorded.length) {
-    const argument = recorded[index]
-    if (argument === "-c") index += 2
-    else if (argument === "--no-pager" || argument === "--no-optional-locks") index += 1
-    else break
-  }
-  return recorded.slice(index)
-}
-
-/** The diff Pane's own invocations, separated from the store reads the kernel makes around them. */
-function isFetch(argv: readonly string[]): boolean {
-  return argv[0] === "diff" || argv[0] === "show" || (argv[0] === "stash" && argv[1] === "show")
-}
-
 interface DiffHarness {
   readonly harness: Harness
-  /** Every fetch the diff Pane has issued so far. */
-  fetches(): Promise<readonly (readonly string[])[]>
-  /** Runs a driver Command and waits for the fetch it causes to reach git. */
-  show(command: string): Promise<readonly string[]>
+  show(command: string): Promise<void>
 }
 
 /**
  * The diff Pane and the driver over a repository with one commit. The `.gitignore` covers the
  * harness's own scaffolding, which would otherwise show up as untracked files.
  */
-async function createDiffHarness(extensionConfig = ""): Promise<DiffHarness> {
+async function createDiffHarness(): Promise<DiffHarness> {
   const harness = await createHarness({ git: true })
   await symlink(join(bundledExtensionDirectory, "diff"), join(harness.bundled, "diff"))
   await writeFile(join(harness.repo, "driver.ts"), driverSource)
   await writeFile(
     harness.configFiles.repo,
     // The poll is off: every fixture is complete before the kernel starts, so a tick could
-    // only re-issue a fetch this file counts.
-    `{ "layout": { "columns": [["diff"]] }, "git": { "refreshIntervalMs": 60000 }${extensionConfig} }`,
+    // only issue an unrelated second fetch while an integration assertion reads the frame.
+    `{ "layout": { "columns": [["diff"]] }, "git": { "refreshIntervalMs": 60000 } }`,
   )
-  await writeFile(join(harness.directory, ".gitignore"), "global/\nrepo/\nbundled/\nbin/\nargv/\n*.json\n*.jsonc\n")
+  await writeFile(join(harness.directory, ".gitignore"), "global/\nrepo/\nbundled/\n*.json\n*.jsonc\n")
   await writeFile(join(harness.directory, "seed.txt"), "seed\n")
   await writeFile(join(harness.directory, "tracked.txt"), "one\ntwo\nthree\n")
   // A file whose name is also a pathspec pattern, and the file that pattern would catch.
@@ -204,62 +131,25 @@ async function createDiffHarness(extensionConfig = ""): Promise<DiffHarness> {
   await git(harness, "add", ".gitignore", "seed.txt", "tracked.txt", "glob1.txt", ":(literal)glob[1].txt")
   await git(harness, "commit", "--quiet", "--message", "first commit")
 
-  let read: (() => Promise<readonly (readonly string[])[]>) | null = null
-  const fetches = async (): Promise<readonly (readonly string[])[]> => {
-    if (read === null) return []
-    const all = await read()
-    return all.map(extensionArgv).filter(isFetch)
-  }
-
   return {
     harness,
-    fetches,
     async show(command) {
-      // The recording is never cleared, so one target per harness.
-      if (read !== null) throw new Error("show() drives one target per harness")
-      // Installed here rather than in `createHarness`, so the fixture git above is never
-      // recorded and never has to be filtered back out.
-      read = await recordGitArgv(harness)
       await renderApp(harness)
-      await act(async () => {
-        void harness.kernel.commands.execute(command)
-        await Bun.sleep(20)
-      })
-      // The fetch is a real git process behind a `useEffect`, so it lands several ticks after
-      // the Command that asked for it.
-      const deadline = Date.now() + 3_000
-      for (;;) {
-        await settle(harness)
-        const first = (await fetches())[0]
-        if (first !== undefined) return first
-        if (Date.now() > deadline) return []
-        await act(async () => {
-          await Bun.sleep(20)
-        })
-      }
+      await execute(harness, command)
     },
   }
 }
 
 /**
- * A `git` that stalls only the diff Pane's fetches — `--no-ext-diff` is on every one of them
- * and on no call core makes — so a test can read the screen mid-fetch.
+ * Stalls only the diff Pane's fetches — `--no-ext-diff` is on every one of them and on no call
+ * core makes — so a test can read the screen mid-fetch.
  */
-async function installSlowDiffGit(harness: Harness, seconds: number): Promise<void> {
-  const bin = join(harness.directory, "bin")
-  await mkdir(bin)
-  const shim = join(bin, "git")
-  const script = [
-    "#!/bin/sh",
-    'for arg in "$@"; do',
-    `  if [ "$arg" = "--no-ext-diff" ]; then sleep ${seconds}; break; fi`,
-    "done",
-    `exec ${JSON.stringify(realGit())} "$@"`,
-    "",
-  ].join("\n")
-  await writeFile(shim, script)
-  await chmod(shim, 0o755)
-  process.env.PATH = `${bin}:${originalPath ?? ""}`
+function installSlowDiffGit(harness: Harness, milliseconds: number): void {
+  const raw = harness.kernel.git.raw.bind(harness.kernel.git)
+  spyOn(harness.kernel.git, "raw").mockImplementation(async (argv, options) => {
+    if (argv.includes("--no-ext-diff")) await Bun.sleep(milliseconds)
+    return raw(argv, options)
+  })
 }
 
 async function execute(harness: Harness, command: string): Promise<void> {
@@ -286,13 +176,18 @@ async function waitForFrame(harness: Harness, predicate: (screen: string) => boo
   }
 }
 
-describe("the git the diff pane asks for", () => {
-  it("diffs one working-tree path against the index", async () => {
-    const diff = await createDiffHarness()
-    await writeFile(join(diff.harness.directory, "tracked.txt"), "one\nTWO\nthree\n")
+function argvFor(
+  target: Parameters<typeof fetchFor>[0],
+  context = 3,
+  untracked: readonly string[] = [],
+): readonly string[] {
+  return fetchFor(target, context, new Set(untracked)).argv
+}
 
+describe("the git the diff pane asks for", () => {
+  it("diffs one working-tree path against the index", () => {
     // `:(literal)` because every path git takes is a pattern — see the glob case below.
-    expect(await diff.show("driver.working-file")).toEqual([
+    expect(argvFor({ kind: "workingTree", path: "tracked.txt" })).toEqual([
       "diff",
       "--no-ext-diff",
       "-U3",
@@ -301,46 +196,48 @@ describe("the git the diff pane asks for", () => {
     ])
   })
 
-  it("diffs the whole side when the target names no path", async () => {
-    const diff = await createDiffHarness()
-    await writeFile(join(diff.harness.directory, "seed.txt"), "seed changed\n")
-
+  it("diffs the whole side when the target names no path", () => {
     // No pathspec at all, rather than one that matches everything: a Pane whose selection is
     // not a single file should show the side, not an empty diff.
-    expect(await diff.show("driver.working-tree")).toEqual(["diff", "--no-ext-diff", "-U3"])
+    expect(argvFor({ kind: "workingTree", path: null })).toEqual(["diff", "--no-ext-diff", "-U3"])
   })
 
   it("wraps a path that reads as a glob so it cannot match its neighbour", async () => {
+    // Unwrapped, `glob[1].txt` is a pattern that also matches `glob1.txt`, so the Pane would
+    // diff a file the user never selected alongside the one they did.
+    expect(argvFor({ kind: "workingTree", path: "glob[1].txt" })).toEqual([
+      "diff",
+      "--no-ext-diff",
+      "-U3",
+      "--",
+      ":(literal)glob[1].txt",
+    ])
+
     const diff = await createDiffHarness()
     await writeFile(join(diff.harness.directory, "glob[1].txt"), "bracket changed\n")
     await writeFile(join(diff.harness.directory, "glob1.txt"), "decoy changed\n")
+    await diff.show("driver.glob-file")
 
-    const argv = await diff.show("driver.glob-file")
-
-    // Unwrapped, `glob[1].txt` is a pattern that also matches `glob1.txt`, so the Pane would
-    // diff a file the user never selected alongside the one they did.
-    expect(argv).toEqual(["diff", "--no-ext-diff", "-U3", "--", ":(literal)glob[1].txt"])
     const screen = await waitForFrame(diff.harness, (text) => text.includes("bracket changed"))
     expect(screen).not.toContain("decoy")
   })
 
-  it("diffs an untracked file against /dev/null, outside the index entirely", async () => {
-    const diff = await createDiffHarness()
-    await writeFile(join(diff.harness.directory, "untracked.txt"), "brand\nnew\n")
-
-    const argv = await diff.show("driver.untracked")
-
+  it("diffs an untracked file against /dev/null, outside the index entirely", () => {
     // Plain `git diff` prints nothing for an untracked path. `--no-index` takes filesystem
     // paths rather than pathspecs, which is why this one is not wrapped in `:(literal)`.
-    expect(argv).toEqual(["diff", "--no-index", "--no-ext-diff", "-U3", "--", "/dev/null", "untracked.txt"])
+    expect(argvFor({ kind: "workingTree", path: "untracked.txt" }, 3, ["untracked.txt"])).toEqual([
+      "diff",
+      "--no-index",
+      "--no-ext-diff",
+      "-U3",
+      "--",
+      "/dev/null",
+      "untracked.txt",
+    ])
   })
 
-  it("diffs the index against HEAD for a staged target", async () => {
-    const diff = await createDiffHarness()
-    await writeFile(join(diff.harness.directory, "tracked.txt"), "one\nTWO\nthree\n")
-    await git(diff.harness, "add", "tracked.txt")
-
-    expect(await diff.show("driver.staged-file")).toEqual([
+  it("diffs the index against HEAD for a staged target", () => {
+    expect(argvFor({ kind: "staged", path: "tracked.txt" })).toEqual([
       "diff",
       "--cached",
       "--no-ext-diff",
@@ -350,56 +247,39 @@ describe("the git the diff pane asks for", () => {
     ])
   })
 
-  it("shows a commit with its own header, always against its first parent", async () => {
-    const diff = await createDiffHarness()
-    const oid = (await git(diff.harness, "rev-parse", "HEAD")).trim()
-
-    const argv = await diff.show("driver.head-commit-file")
-
+  it("shows a commit with its own header, always against its first parent", () => {
     // `--pretty=medium` keeps the header a clipped one-line row cannot show; `splitPatch`
     // lifts it off rather than letting `<diff>` parse it as a file section. `--first-parent`
     // is byte-identical to no flag on an ordinary commit, and rides along for the merge below.
-    expect(argv).toEqual([
+    expect(argvFor({ kind: "commit", ref: "deadbeef", path: "tracked.txt" })).toEqual([
       "show",
       "--pretty=medium",
       "--no-ext-diff",
       "-U3",
       "--first-parent",
-      oid,
+      "deadbeef",
       "--",
       ":(literal)tracked.txt",
     ])
   })
 
-  it("keeps show read-only for a whole stash entry by putting show straight after stash", async () => {
-    const diff = await createDiffHarness()
-    await writeFile(join(diff.harness.directory, "tracked.txt"), "one\nstashed\nthree\n")
-    await git(diff.harness, "stash", "push", "--quiet", "--message", "wip")
-
-    const argv = await diff.show("driver.stash")
-
+  it("keeps show read-only for a whole stash entry by putting show straight after stash", () => {
     // The service reads the argv element directly after the subcommand as its operand, and
     // only the exact pair `stash show` is on its read-only list.
-    expect(argv).toEqual(["stash", "show", "-p", "--no-ext-diff", "-U3", "stash@{0}"])
-
-    const settled = (await diff.fetches()).length
-    await act(async () => {
-      await Bun.sleep(400)
-    })
-    await settle(diff.harness)
-    // A fetch counted as a mutation would refresh the store, and the refresh would re-run the
-    // fetch for as long as anyone watched.
-    expect((await diff.fetches()).length).toBe(settled)
+    expect(argvFor({ kind: "stash", ref: "stash@{0}", path: null })).toEqual([
+      "stash",
+      "show",
+      "-p",
+      "--no-ext-diff",
+      "-U3",
+      "stash@{0}",
+    ])
   })
 
-  it("narrows a stash through its first parent, which stash show cannot be asked to do", async () => {
-    const diff = await createDiffHarness()
-    await writeFile(join(diff.harness.directory, "tracked.txt"), "one\nstashed\nthree\n")
-    await git(diff.harness, "stash", "push", "--quiet", "--message", "wip")
-
+  it("narrows a stash through its first parent, which stash show cannot be asked to do", () => {
     // `git stash show <ref> -- <path>` exits with "Too many revisions specified"; the diff
     // against the entry's first parent is the same patch and does take a pathspec.
-    expect(await diff.show("driver.stash-file")).toEqual([
+    expect(argvFor({ kind: "stash", ref: "stash@{0}", path: "tracked.txt" })).toEqual([
       "diff",
       "--no-ext-diff",
       "-U3",
@@ -410,11 +290,8 @@ describe("the git the diff pane asks for", () => {
     ])
   })
 
-  it("carries the configured context into the invocation", async () => {
-    const diff = await createDiffHarness(`, "extensions": { "diff": { "context": 0 } }`)
-    await writeFile(join(diff.harness.directory, "tracked.txt"), "one\nTWO\nthree\n")
-
-    expect(await diff.show("driver.working-file")).toContain("-U0")
+  it("carries the configured context into the invocation", () => {
+    expect(argvFor({ kind: "workingTree", path: "tracked.txt" }, 0)).toContain("-U0")
   })
 })
 
@@ -477,7 +354,7 @@ describe("moving from one target to the next", () => {
     const diff = await createDiffHarness()
     await writeFile(join(diff.harness.directory, "tracked.txt"), "one\nTWO\nthree\n")
     await writeFile(join(diff.harness.directory, "untracked.txt"), "brand\nnew\n")
-    await installSlowDiffGit(diff.harness, 0.4)
+    installSlowDiffGit(diff.harness, 400)
     await renderApp(diff.harness)
 
     await execute(diff.harness, "driver.working-file")

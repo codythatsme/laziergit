@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { errorCode } from "./diagnostics"
-import { discoverExtensions, importCopyContainerName, type ExtensionCandidate } from "./discovery"
+import { discoverExtensions, importCopyContainerName, importCopyIgnoreName, type ExtensionCandidate } from "./discovery"
 import { ImportCopyCache, type ImportCopyCacheDiagnostic } from "./import-copy-cache"
 
 const temporaryRoots: string[] = []
@@ -198,9 +198,14 @@ describe("ImportCopyCache leases", () => {
     expect(cache.activeLeaseCount).toBe(0)
     expect(diagnostics).toEqual([expect.objectContaining({ phase: "cache", error: cleanupError })])
     await cache.releaseAll()
-    // Nothing of laziergit's is left in the Extension directory — not the failed copy, and
-    // not the container it was written into.
-    expect(await fs.readdir(extensions)).toEqual(["broken.ts"])
+    // The failed copy must be gone. The empty bookkeeping container is explicitly
+    // best-effort: Windows can keep it busy briefly after removing its junctions.
+    const extensionEntries = await fs.readdir(extensions)
+    expect(extensionEntries.filter((entry) => entry !== importCopyContainerName)).toEqual(["broken.ts"])
+    if (extensionEntries.includes(importCopyContainerName)) {
+      const containerEntries = await fs.readdir(join(extensions, importCopyContainerName))
+      expect(containerEntries.filter((entry) => entry !== importCopyIgnoreName)).toEqual([])
+    }
   })
 
   it("uses junctions for every directory overlay on Windows", async () => {
