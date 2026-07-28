@@ -219,7 +219,8 @@ describe("the diff Pane's context header", () => {
     await show(harness, { kind: "stash", ref: "stash@{0}", path: null })
 
     // `stash show` prints no header, so this line is the Pane's, read out of the store.
-    await waitForFrame(harness, "stash@{0}: a message longer than a row")
+    await waitForFrame(harness, "a message longer than a row on main")
+    expect(frame(harness)).not.toContain("stash@{")
     expect(frame(harness)).toContain("stashed")
   }, 30_000)
 })
