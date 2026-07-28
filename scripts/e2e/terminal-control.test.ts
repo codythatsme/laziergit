@@ -180,14 +180,26 @@ async function inTerminal(
   }
 }
 
-async function pressPrimaryModifier(session: Session, key: string): Promise<void> {
+async function pressKittyModifier(session: Session, key: string, modifier: number): Promise<void> {
   const codePoint = key.codePointAt(0)
   if (codePoint === undefined) throw new TypeError("A modified key needs one character")
+  await session.keyboard.write(new TextEncoder().encode(`\u001b[${codePoint};${modifier}u`))
+}
+
+async function pressPrimaryModifier(session: Session, key: string): Promise<void> {
   // Terminal Control reports Kitty keyboard support to OpenTUI, so `mod` resolves to Super on
   // macOS and Ctrl elsewhere. Writing the protocol sequence exercises a real key event rather
   // than a legacy control byte the PTY line discipline can consume as XON/XOFF.
   const modifier = process.platform === "darwin" ? 9 : 5
-  await session.keyboard.write(new TextEncoder().encode(`\u001b[${codePoint};${modifier}u`))
+  await pressKittyModifier(session, key, modifier)
+}
+
+async function pressOption(session: Session, key: string): Promise<void> {
+  await pressKittyModifier(session, key, 3)
+}
+
+async function pressSuper(session: Session, key: string): Promise<void> {
+  await pressKittyModifier(session, key, 9)
 }
 
 /**
@@ -195,9 +207,7 @@ async function pressPrimaryModifier(session: Session, key: string): Promise<void
  * rather than `mod` (ADR-0004).
  */
 async function pressCtrl(session: Session, key: string): Promise<void> {
-  const codePoint = key.codePointAt(0)
-  if (codePoint === undefined) throw new TypeError("A modified key needs one character")
-  await session.keyboard.write(new TextEncoder().encode(`\u001b[${codePoint};5u`))
+  await pressKittyModifier(session, key, 5)
 }
 
 async function pressEscape(session: Session): Promise<void> {
@@ -481,6 +491,18 @@ describe("laziergit through a real terminal", () => {
       await waitForText(session, " M tracked.txt")
       await session.keyboard.type("s")
       await waitForText(session, "Stash message")
+
+      await session.keyboard.type("first second")
+      await waitForText(session, "first second")
+      await pressOption(session, "\u007f")
+      await waitForScreen(
+        session,
+        "Option+Backspace to delete the previous word",
+        (screen) => screen.includes("first ") && !screen.includes("second"),
+      )
+      await pressSuper(session, "\u007f")
+      await waitForText(session, "leave empty for git's default")
+
       await session.keyboard.type("from e2e")
       await session.keyboard.press("Enter")
       await waitForText(session, "working tree clean")

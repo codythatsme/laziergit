@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test"
+import { InputRenderable } from "@opentui/core"
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { act } from "react"
@@ -334,6 +335,29 @@ describe("popups", () => {
 
     expect(frame(harness)).not.toContain("Name it")
     expect(frame(harness)).toContain("named seedx")
+  })
+
+  it("uses terminal-reported Option and Command modifiers for native text editing", async () => {
+    const harness = await createHarness()
+    await twoPanes(harness)
+
+    await press(harness, () => void harness.kernel.commands.execute("alpha.ask"))
+    await press(harness, () => void harness.setup.mockInput.typeText(" one two"))
+
+    const input = harness.setup.renderer.currentFocusedRenderable
+    expect(input).toBeInstanceOf(InputRenderable)
+    if (!(input instanceof InputRenderable)) throw new TypeError("The prompt did not focus its input")
+
+    await press(harness, () => harness.setup.mockInput.pressBackspace({ meta: true }))
+    expect(input.value).toBe("seed one ")
+
+    await press(harness, () => harness.setup.mockInput.pressBackspace({ super: true }))
+    expect(input.value).toBe("")
+
+    await press(harness, () => void harness.setup.mockInput.typeText("left right"))
+    await press(harness, () => harness.setup.mockInput.pressArrow("left", { super: true }))
+    await press(harness, () => harness.setup.mockInput.pressKey("DELETE", { super: true }))
+    expect(input.value).toBe("")
   })
 
   it("chooses the row the cursor is on even when Enter arrives before the render that moves it", async () => {
