@@ -242,6 +242,34 @@ async function createDiffHarness(extensionConfig = ""): Promise<DiffHarness> {
 }
 
 /**
+ * A `git` that stalls only the diff Pane's fetches — `--no-ext-diff` is on every one of them
+ * and on no call core makes — so a test can read the screen mid-fetch.
+ */
+async function installSlowDiffGit(harness: Harness, seconds: number): Promise<void> {
+  const bin = join(harness.directory, "bin")
+  await mkdir(bin)
+  const shim = join(bin, "git")
+  const script = [
+    "#!/bin/sh",
+    'for arg in "$@"; do',
+    `  if [ "$arg" = "--no-ext-diff" ]; then sleep ${seconds}; break; fi`,
+    "done",
+    `exec ${JSON.stringify(realGit())} "$@"`,
+    "",
+  ].join("\n")
+  await writeFile(shim, script)
+  await chmod(shim, 0o755)
+  process.env.PATH = `${bin}:${originalPath ?? ""}`
+}
+
+async function execute(harness: Harness, command: string): Promise<void> {
+  await act(async () => {
+    void harness.kernel.commands.execute(command)
+  })
+  await settle(harness)
+}
+
+/**
  * Renders until `predicate` holds, and hands back the frame that matched, so the rest of a test
  * reads that same frame rather than racing the next one. Giving up returns the last frame
  * quietly, leaving the test's own `expect` to report the failure.
@@ -441,5 +469,27 @@ describe("splitting git's patch into one section per file", () => {
     const screen = await waitForFrame(diff.harness, (text) => text.includes("+ brand"))
     expect(screen).toContain("+ new")
     expect(screen).not.toContain("no changes")
+  })
+})
+
+describe("moving from one target to the next", () => {
+  it("holds the patch on screen until the next one has arrived", async () => {
+    const diff = await createDiffHarness()
+    await writeFile(join(diff.harness.directory, "tracked.txt"), "one\nTWO\nthree\n")
+    await writeFile(join(diff.harness.directory, "untracked.txt"), "brand\nnew\n")
+    await installSlowDiffGit(diff.harness, 0.4)
+    await renderApp(diff.harness)
+
+    await execute(diff.harness, "driver.working-file")
+    expect(await waitForFrame(diff.harness, (text) => text.includes("+ TWO"))).toContain("+ TWO")
+
+    await execute(diff.harness, "driver.untracked")
+
+    // The Pane has been pointed at a target git has not answered for yet.
+    const during = frame(diff.harness)
+    expect(during).toContain("+ TWO")
+    expect(during).not.toContain("loading")
+
+    expect(await waitForFrame(diff.harness, (text) => text.includes("+ brand"))).not.toContain("+ TWO")
   })
 })
