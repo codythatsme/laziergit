@@ -4,6 +4,7 @@ import {
   defineExtension,
   describeGitFailure,
   GitError,
+  isConflicted,
   toneColor,
   useCommand,
   useGit,
@@ -18,6 +19,7 @@ import {
 } from "laziergit"
 import { useEffect } from "react"
 
+import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
 import { pullRequestUrl } from "./pull-request"
 
 function divergence(upstream: UpstreamInfo | null): string {
@@ -66,6 +68,192 @@ export default defineExtension({
     const diff = ctx.extensions.get("diff")
 
     const fail = (error: unknown): void => ctx.popups.notify(describeGitFailure(error), "error")
+
+    function currentBranch(): string | null {
+      const head = ctx.git.state.head
+      return head.kind === "onBranch" ? head.branch : null
+    }
+
+    function hasConflicts(): boolean {
+      return ctx.git.state.status.files.some(isConflicted)
+    }
+
+    async function mergeInProgress(): Promise<boolean> {
+      const result = await ctx.git.raw(["rev-parse", "--quiet", "--verify", "MERGE_HEAD"], {
+        allowFailure: true,
+      })
+      return result.exitCode === 0
+    }
+
+    async function canMergeFastForward(branch: Branch): Promise<boolean> {
+      const args = ["merge-base", "--is-ancestor", "HEAD", branch.oid] as const
+      const result = await ctx.git.raw(args, { allowFailure: true })
+      if (result.exitCode === 0) return true
+      if (result.exitCode === 1) return false
+      throw new GitError(args, result)
+    }
+
+    async function abortMerge(confirm: boolean): Promise<void> {
+      if (confirm) {
+        const accepted = await ctx.popups.confirm({
+          title: "Abort the current merge?",
+          message: "Restore the index and working tree to their pre-merge state.",
+          confirmLabel: "Abort merge",
+          danger: true,
+        })
+        if (!accepted) return
+      }
+
+      try {
+        await ctx.git.raw(["merge", "--abort"])
+        ctx.popups.notify("Merge aborted", "success")
+      } catch (error) {
+        fail(error)
+      }
+    }
+
+    async function abortSquashMerge(): Promise<void> {
+      const accepted = await ctx.popups.confirm({
+        title: "Abort the squash merge?",
+        message: "Restore the index and working tree to their pre-merge state.",
+        confirmLabel: "Abort squash",
+        danger: true,
+      })
+      if (!accepted) return
+
+      try {
+        await ctx.git.raw(["reset", "--merge", "ORIG_HEAD"])
+        ctx.popups.notify("Squash merge aborted", "success")
+      } catch (error) {
+        fail(error)
+      }
+    }
+
+    async function continueMerge(): Promise<void> {
+      try {
+        if (!(await mergeInProgress())) {
+          ctx.popups.notify("No merge is in progress", "warning")
+          return
+        }
+        if (hasConflicts()) {
+          ctx.popups.notify("Resolve and stage every conflict before continuing", "warning")
+          return
+        }
+        // `merge --continue` opens an editor on piped stdio. `commit --no-edit` consumes the
+        // same MERGE_MSG without asking for terminal input.
+        await ctx.git.raw(["commit", "--no-edit"])
+        ctx.popups.notify("Merge completed", "success")
+      } catch (error) {
+        fail(error)
+      }
+    }
+
+    async function openMergeRecovery(): Promise<void> {
+      const branch = currentBranch()
+      await ctx.popups.menu({
+        title: branch === null ? "Merge in progress" : `Merge in progress on ${branch}`,
+        groups: [
+          {
+            id: "merge",
+            items: [
+              { key: "c", label: "Continue merge", run: continueMerge },
+              { key: "a", label: "Abort merge…", run: () => abortMerge(true) },
+              { key: "v", label: "View files", run: () => ctx.commands.execute("files.focus") },
+            ],
+          },
+        ],
+      })
+    }
+
+    async function handleMergeConflict(branch: Branch, mode: MergeMode): Promise<void> {
+      const squash = mode === "squash" || mode === "squash-commit"
+      await ctx.popups.menu({
+        title: `Merge ${branch.name} stopped with conflicts`,
+        groups: [
+          {
+            id: "conflicts",
+            items: [
+              { key: "v", label: "View conflicted files", run: () => ctx.commands.execute("files.focus") },
+              {
+                key: "a",
+                label: squash ? "Abort squash merge…" : "Abort merge",
+                run: () => (squash ? abortSquashMerge() : abortMerge(false)),
+              },
+            ],
+          },
+        ],
+      })
+    }
+
+    async function mergeBranch(branch: Branch, mode: MergeMode): Promise<void> {
+      const into = currentBranch()
+      if (into === null) {
+        ctx.popups.notify("Check out a local branch before merging", "warning")
+        return
+      }
+      if (branch.name === into) {
+        ctx.popups.notify(`Cannot merge ${branch.name} into itself`, "warning")
+        return
+      }
+
+      try {
+        await ctx.git.raw(mergeArgs(branch.name, mode))
+        if (mode === "squash-commit") {
+          await ctx.git.commit(squashCommitMessage(branch.name, into))
+          ctx.popups.notify(`Squash-merged ${branch.name} into ${into}`, "success")
+        } else if (mode === "squash") {
+          ctx.popups.notify(`Squash-merged ${branch.name}; the changes are staged`, "success")
+        } else {
+          ctx.popups.notify(`Merged ${branch.name} into ${into}`, "success")
+        }
+      } catch (error) {
+        if (error instanceof GitError && hasConflicts()) {
+          await handleMergeConflict(branch, mode)
+          return
+        }
+        fail(error)
+      }
+    }
+
+    async function openMergeMenu(branch: Branch): Promise<void> {
+      try {
+        if (await mergeInProgress()) {
+          await openMergeRecovery()
+          return
+        }
+
+        const into = currentBranch()
+        if (into === null) {
+          ctx.popups.notify("Check out a local branch before merging", "warning")
+          return
+        }
+        if (branch.name === into) {
+          ctx.popups.notify(`Cannot merge ${branch.name} into itself`, "warning")
+          return
+        }
+        if (hasConflicts()) {
+          ctx.popups.notify("Resolve the current conflicts before starting a merge", "warning")
+          return
+        }
+
+        const choices = mergeChoices(await canMergeFastForward(branch))
+        await ctx.popups.menu({
+          title: `Merge ${branch.name} into ${into}`,
+          groups: [
+            {
+              id: "merge",
+              items: choices.map((choice) => ({
+                key: choice.key,
+                label: choice.label,
+                run: () => mergeBranch(branch, choice.mode),
+              })),
+            },
+          ],
+        })
+      } catch (error) {
+        fail(error)
+      }
+    }
 
     async function checkout(branch: Branch): Promise<void> {
       // `git checkout` on the current branch is a silent no-op.
@@ -247,6 +435,13 @@ export default defineExtension({
         run: () => (selected === undefined ? undefined : deleteBranch(selected)),
       })
       useCommand({
+        id: "branches.merge",
+        title: "Merge branch into the current branch",
+        hint: "merge",
+        keys: "shift+m",
+        run: () => (selected === undefined ? undefined : openMergeMenu(selected)),
+      })
+      useCommand({
         id: "branches.pull-request",
         title: "Open a pull request for this branch",
         keys: "o",
@@ -307,6 +502,12 @@ export default defineExtension({
           items: [
             { key: "c", label: "Check out", when: (branch) => !branch.isHead, run: checkout },
             { key: "n", label: "Create branch here", run: createBranchAt },
+            {
+              key: "m",
+              label: "Merge into current branch…",
+              when: (branch) => !branch.isHead,
+              run: openMergeMenu,
+            },
             { key: "d", label: "Delete", when: (branch) => !branch.isHead, run: deleteBranch },
             {
               // `shift+d`, not `D`: the parser lowercases a bare letter, colliding with `d`.
