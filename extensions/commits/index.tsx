@@ -211,7 +211,7 @@ export default defineExtension({
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
           <span fg={dim ? theme.textMuted : theme.accent}>{commit.shortOid}</span>
           {/* A fixed-width gutter, so the merge marker does not shift the subject right. */}
-          <span fg={dim ? theme.textMuted : theme.info}>{isMerge(commit) ? " ⑂ " : "   "}</span>
+          <span fg={dim ? theme.textMuted : theme.info}>{isMerge(commit) ? "⑂ " : "  "}</span>
           <span fg={dim ? theme.textMuted : theme.text}>{commit.subject}</span>
           {/* Last, because the row clips from the right and the author is the loseable half. */}
           <span fg={theme.textMuted}>{`  ${commit.author.name}`}</span>
