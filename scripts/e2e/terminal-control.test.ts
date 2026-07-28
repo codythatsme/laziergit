@@ -510,7 +510,7 @@ describe("laziergit through a real terminal", () => {
       expect(await repo.git("status", "--porcelain")).toBe("")
 
       await session.keyboard.type("4")
-      await waitForText(session, "stash@{0} from e2e on main")
+      await waitForText(session, "from e2e on main")
       await session.keyboard.type("p")
       await waitForText(session, "no stashes")
 

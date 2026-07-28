@@ -22,6 +22,10 @@ function stashRef(entry: StashEntry): string {
   return `stash@{${entry.index}}`
 }
 
+function stashLabel(entry: StashEntry): string {
+  return `${entry.message}${entry.branch === null ? "" : ` on ${entry.branch}`}`
+}
+
 function branchNameProblem(value: string): string | null {
   const name = value.trim()
   if (name === "") return "Enter a branch name"
@@ -77,8 +81,8 @@ export default defineExtension({
 
     async function drop(entry: StashEntry): Promise<void> {
       const confirmed = await ctx.popups.confirm({
-        title: `Drop ${stashRef(entry)}?`,
-        message: entry.message,
+        title: "Drop stash?",
+        message: stashLabel(entry),
         confirmLabel: "drop",
         danger: true,
       })
@@ -87,7 +91,7 @@ export default defineExtension({
 
     async function branchFrom(entry: StashEntry): Promise<void> {
       const name = await ctx.popups.prompt({
-        title: `Branch from ${stashRef(entry)}`,
+        title: `Branch from ${stashLabel(entry)}`,
         placeholder: "branch name",
         validate: branchNameProblem,
       })
@@ -147,8 +151,7 @@ export default defineExtension({
 
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
-          <span fg={dim ? theme.textMuted : theme.accent}>{stashRef(entry)}</span>
-          <span fg={dim ? theme.textMuted : theme.text}>{` ${entry.message}`}</span>
+          <span fg={dim ? theme.textMuted : theme.text}>{entry.message}</span>
           {/* Absent for a stash taken on a detached HEAD, where git recorded no branch. */}
           {entry.branch === null ? null : <span fg={theme.textMuted}>{` on ${entry.branch}`}</span>}
           {decoration?.badge === undefined ? null : (
@@ -263,7 +266,7 @@ export default defineExtension({
 
     ctx.menus.register({
       id: "stash.actions",
-      title: (entry) => `${stashRef(entry)} ${entry.message}`,
+      title: stashLabel,
       groups: [
         {
           id: "stash",

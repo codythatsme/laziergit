@@ -198,6 +198,19 @@ async function stashHarness(height = 36): Promise<Harness> {
   return harness
 }
 
+describe("stash pane", () => {
+  it("shows only each stash's message and branch", async () => {
+    const harness = await stashHarness()
+    await stash(harness, "wip one")
+    await stash(harness, "wip two")
+    await start(harness)
+
+    expect(frame(harness)).toContain("wip two on main")
+    expect(frame(harness)).toContain("wip one on main")
+    expect(frame(harness)).not.toContain("stash@{")
+  })
+})
+
 describe("stash actions", () => {
   it("applies the selected stash on space and keeps the entry", async () => {
     const harness = await stashHarness()
@@ -212,7 +225,7 @@ describe("stash actions", () => {
       (await git(harness, "status", "--porcelain")).includes("seed.txt"),
     )
     expect(stashCount(await git(harness, "stash", "list"))).toBe(2)
-    expect(frame(harness)).toContain("stash@{0} wip two")
+    expect(frame(harness)).toContain("wip two on main")
   })
 
   it("shows git's own refusal when a write fails", async () => {
@@ -240,7 +253,7 @@ describe("stash actions", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("2"))
     await press(harness, () => harness.setup.mockInput.pressKey("p"))
 
-    expect(await frameShowing(harness, "stash@{0} wip one")).not.toContain("pull ran")
+    expect(await frameShowing(harness, "wip one on main")).not.toContain("pull ran")
 
     // The global binding is not gone, only shadowed: it is back the moment focus moves.
     await press(harness, () => harness.setup.mockInput.pressKey("1"))
@@ -259,8 +272,8 @@ describe("stash actions", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("d"))
 
     const asked = frame(harness)
-    expect(asked).toContain("Drop stash@{0}?")
-    expect(asked).toContain("wip two")
+    expect(asked).toContain("Drop stash?")
+    expect(asked).toContain("wip two on main")
 
     await press(harness, () => harness.setup.mockInput.pressKey("n"))
     expect(stashCount(await git(harness, "stash", "list"))).toBe(2)
@@ -268,7 +281,7 @@ describe("stash actions", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("d"))
     await press(harness, () => harness.setup.mockInput.pressKey("y"))
 
-    await frameShowing(harness, "stash@{0} wip one")
+    await frameShowing(harness, "wip one on main")
     expect(stashCount(await git(harness, "stash", "list"))).toBe(1)
   })
 
@@ -303,13 +316,13 @@ describe("stash actions", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("2"))
     await press(harness, () => harness.setup.mockInput.pressKey("j"))
     await press(harness, () => harness.setup.mockInput.pressKey("d"))
-    expect(frame(harness)).toContain("Drop stash@{1}?")
+    expect(frame(harness)).toContain("wip one on main")
 
     // Another process stashes while the confirmation waits: `wip one` is stash@{2} now, and
     // the slot the row was in holds `wip two`.
     await stash(harness, "from elsewhere")
     await settleUntil(harness, "the store to notice the outside stash", () =>
-      frame(harness).includes("stash@{2} wip one"),
+      frame(harness).includes("from elsewhere on main"),
     )
 
     await press(harness, () => harness.setup.mockInput.pressKey("y"))
@@ -319,7 +332,7 @@ describe("stash actions", () => {
     await settleUntil(
       harness,
       "the drop to leave two entries",
-      () => frame(harness).includes("stash@{1}") && !frame(harness).includes("stash@{2}"),
+      () => frame(harness).includes("wip two on main") && !frame(harness).includes("wip one on main"),
     )
     const remaining = await git(harness, "stash", "list")
     expect(remaining).toContain("wip two")
@@ -339,14 +352,14 @@ describe("stash menu", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("x"))
 
     const menu = frame(harness)
-    expect(menu).toContain("stash@{0} wip two")
+    expect(menu).toContain("wip two on main")
     expect(menu).toContain("a  Apply")
     expect(menu).toContain("p  Pop")
     expect(menu).toContain("d  Drop")
     expect(menu).toContain("b  Create branch from this stash")
 
     await press(harness, () => harness.setup.mockInput.pressKey("b"))
-    expect(frame(harness)).toContain("Branch from stash@{0}")
+    expect(frame(harness)).toContain("Branch from wip two on main")
 
     await press(harness, () => void harness.setup.mockInput.typeText("rescue"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
@@ -368,13 +381,13 @@ describe("stash menu", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("j"))
     await press(harness, () => harness.setup.mockInput.pressKey("x"))
     await press(harness, () => harness.setup.mockInput.pressKey("b"))
-    expect(frame(harness)).toContain("Branch from stash@{1}")
+    expect(frame(harness)).toContain("Branch from wip one on main")
 
     // The same outside push, against the prompt. `git stash branch` drops the entry it
     // applied, so aiming it at a slot destroys someone else's stash as surely as `drop` does.
     await stash(harness, "from elsewhere")
     await settleUntil(harness, "the store to notice the outside stash", () =>
-      frame(harness).includes("stash@{2} wip one"),
+      frame(harness).includes("from elsewhere on main"),
     )
 
     await press(harness, () => void harness.setup.mockInput.typeText("rescue"))
@@ -385,7 +398,7 @@ describe("stash menu", () => {
     await settleUntil(
       harness,
       "the branch to take one of the three entries with it",
-      () => frame(harness).includes("stash@{1}") && !frame(harness).includes("stash@{2}"),
+      () => frame(harness).includes("wip two on main") && !frame(harness).includes("wip one on main"),
     )
     expect(await git(harness, "branch", "--list", "rescue")).toContain("rescue")
     const remaining = await git(harness, "stash", "list")
@@ -425,7 +438,7 @@ describe("stash.save in the files pane", () => {
     await press(harness, () => void harness.setup.mockInput.typeText("from files"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
-    await frameShowing(harness, "stash@{0} from files on main")
+    await frameShowing(harness, "from files on main")
     expect(await git(harness, "status", "--porcelain")).toBe("")
   })
 
@@ -443,7 +456,7 @@ describe("stash.save in the files pane", () => {
     expect(frame(harness)).toContain("1 untracked file would be stashed too")
 
     await press(harness, () => harness.setup.mockInput.pressKey("y"))
-    await frameShowing(harness, "stash@{0} with untracked")
+    await frameShowing(harness, "with untracked on main")
 
     expect(await Bun.file(join(harness.directory, "scratch.txt")).exists()).toBe(false)
     expect(await git(harness, "status", "--porcelain")).toBe("")
@@ -461,7 +474,7 @@ describe("stash.save in the files pane", () => {
     await press(harness, () => harness.setup.mockInput.pressEnter())
     await press(harness, () => harness.setup.mockInput.pressKey("n"))
 
-    await frameShowing(harness, "stash@{0} tracked only")
+    await frameShowing(harness, "tracked only on main")
     expect(await Bun.file(join(harness.directory, "scratch.txt")).exists()).toBe(true)
   })
 

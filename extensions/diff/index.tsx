@@ -183,7 +183,7 @@ function scopeOf(target: DiffTarget): string {
     case "branch":
       return `branch ${target.ref}`
     case "stash":
-      return target.ref
+      return "stash"
   }
 }
 
@@ -205,7 +205,7 @@ function contextOf(target: DiffTarget, state: GitState): string | null {
   if (target.kind === "stash") {
     const entry = state.stash.find((candidate) => `stash@{${candidate.index}}` === target.ref)
     if (entry === undefined) return null
-    return `${target.ref}: ${entry.message}${entry.branch === null ? "" : ` on ${entry.branch}`}`
+    return `${entry.message}${entry.branch === null ? "" : ` on ${entry.branch}`}`
   }
   return null
 }
