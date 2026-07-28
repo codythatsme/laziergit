@@ -143,6 +143,16 @@ async function waitUntil(
   throw new Error(`Timed out waiting for ${what}. Last frame:\n${frame(harness)}`)
 }
 
+async function openMergeMenuForSecondBranch(harness: Harness, branch: string): Promise<void> {
+  await press(harness, () => harness.setup.mockInput.pressKey("j"))
+  await press(harness, () => harness.setup.mockInput.pressKey("M"))
+  await waitUntil(
+    harness,
+    async () => frame(harness).includes(`Merge ${branch} into main`),
+    `the merge menu for ${branch}`,
+  )
+}
+
 describe("checking out", () => {
   it("switches to the selected branch, and says so rather than doing nothing on HEAD", async () => {
     const harness = await createHarness({ git: true })
@@ -202,6 +212,204 @@ describe("creating a branch", () => {
 
     expect(frame(harness)).toContain("cannot contain spaces")
     expect(await git(harness, "branch", "--list", "--format=%(refname:short)")).toBe("main")
+  }, 30_000)
+})
+
+describe("merging a branch into the checked-out branch", () => {
+  async function withFastForwardTopic(harness: Harness): Promise<void> {
+    await seed(harness)
+    await git(harness, "checkout", "--quiet", "-b", "topic")
+    await commit(harness, "topic\n", "topic work")
+    await git(harness, "checkout", "--quiet", "main")
+  }
+
+  async function withDivergedTopic(harness: Harness): Promise<void> {
+    await seed(harness)
+    await git(harness, "checkout", "--quiet", "-b", "topic")
+    await writeFile(join(harness.directory, "topic.txt"), "topic\n")
+    await git(harness, "add", "topic.txt")
+    await git(harness, "commit", "--quiet", "--message", "topic work")
+    await git(harness, "checkout", "--quiet", "main")
+    await writeFile(join(harness.directory, "main.txt"), "main\n")
+    await git(harness, "add", "main.txt")
+    await git(harness, "commit", "--quiet", "--message", "main work")
+  }
+
+  async function withConflictingTopic(harness: Harness): Promise<void> {
+    await seed(harness)
+    await git(harness, "checkout", "--quiet", "-b", "topic")
+    await commit(harness, "topic\n", "topic work")
+    await git(harness, "checkout", "--quiet", "main")
+    await commit(harness, "main\n", "main work")
+  }
+
+  it("opens with M, refuses HEAD, and fast-forwards without switching branches", async () => {
+    const harness = await createHarness({ git: true })
+    await withFastForwardTopic(harness)
+    const target = await git(harness, "rev-parse", "topic")
+
+    await start(harness)
+
+    await press(harness, () => harness.setup.mockInput.pressKey("M"))
+    expect(frame(harness)).toContain("Cannot merge main into itself")
+
+    await openMergeMenuForSecondBranch(harness, "topic")
+    expect(frame(harness)).toContain("Regular merge (fast-forward)")
+    expect(frame(harness)).toContain("Regular merge (with merge commit)")
+    expect(frame(harness)).toContain("Squash merge and leave uncommitted")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("m"))
+    await waitUntil(
+      harness,
+      async () => (await git(harness, "rev-parse", "main")) === target,
+      "main to fast-forward to topic",
+    )
+    expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main")
+  }, 30_000)
+
+  it("creates a merge commit when the histories have diverged", async () => {
+    const harness = await createHarness({ git: true })
+    await withDivergedTopic(harness)
+
+    await start(harness)
+    await openMergeMenuForSecondBranch(harness, "topic")
+
+    expect(frame(harness)).toContain("Regular merge (with merge commit)")
+    expect(frame(harness)).not.toContain("Regular merge (fast-forward)")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("m"))
+    await waitUntil(
+      harness,
+      async () => (await git(harness, "show", "--no-patch", "--format=%P", "HEAD")).split(" ").length === 2,
+      "the merge commit",
+    )
+    expect(await git(harness, "log", "-1", "--format=%s")).toBe("Merge branch 'topic'")
+    expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main")
+  }, 30_000)
+
+  it("can squash into the index without moving HEAD", async () => {
+    const harness = await createHarness({ git: true })
+    await withFastForwardTopic(harness)
+    const before = await git(harness, "rev-parse", "HEAD")
+
+    await start(harness)
+    await openMergeMenuForSecondBranch(harness, "topic")
+    await press(harness, () => harness.setup.mockInput.pressKey("s"))
+
+    await waitUntil(
+      harness,
+      async () => (await git(harness, "diff", "--cached", "--name-only")) === "work.txt",
+      "the squash result to be staged",
+    )
+    expect(await git(harness, "rev-parse", "HEAD")).toBe(before)
+    expect(await git(harness, "show", "HEAD:work.txt")).toBe("one")
+  }, 30_000)
+
+  it("can commit a squash with a message naming both branches", async () => {
+    const harness = await createHarness({ git: true })
+    await withFastForwardTopic(harness)
+
+    await start(harness)
+    await openMergeMenuForSecondBranch(harness, "topic")
+    await press(harness, () => harness.setup.mockInput.pressKey("S"))
+
+    await waitUntil(
+      harness,
+      async () => (await git(harness, "log", "-1", "--format=%s")) === "Squash merge topic into main",
+      "the squash commit",
+    )
+    expect((await git(harness, "show", "--no-patch", "--format=%P", "HEAD")).split(" ")).toHaveLength(1)
+    expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main")
+  }, 30_000)
+
+  it("offers the conflicted files and can abort a stopped merge", async () => {
+    const harness = await createHarness({ git: true })
+    await withConflictingTopic(harness)
+
+    await start(harness)
+    await openMergeMenuForSecondBranch(harness, "topic")
+    await press(harness, () => harness.setup.mockInput.pressKey("m"))
+    await waitUntil(
+      harness,
+      async () => frame(harness).includes("Merge topic stopped with conflicts"),
+      "the conflict menu",
+    )
+
+    expect(frame(harness)).toContain("View conflicted files")
+    expect(frame(harness)).toContain("Abort merge")
+    expect(await git(harness, "diff", "--name-only", "--diff-filter=U")).toBe("work.txt")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("a"))
+    await waitUntil(
+      harness,
+      async () => (await git(harness, "status", "--porcelain")) === "",
+      "the merge abort to restore the working tree",
+    )
+    expect(await git(harness, "show", "HEAD:work.txt")).toBe("main")
+  }, 30_000)
+
+  it("restores the pre-merge tree when a conflicted squash is aborted", async () => {
+    const harness = await createHarness({ git: true })
+    await withConflictingTopic(harness)
+
+    await start(harness)
+    await openMergeMenuForSecondBranch(harness, "topic")
+    await press(harness, () => harness.setup.mockInput.pressKey("s"))
+    await waitUntil(
+      harness,
+      async () => frame(harness).includes("Merge topic stopped with conflicts"),
+      "the squash conflict menu",
+    )
+    expect(frame(harness)).toContain("Abort squash merge")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("a"))
+    expect(frame(harness)).toContain("Abort the squash merge?")
+    await press(harness, () => harness.setup.mockInput.pressKey("y"))
+    await waitUntil(
+      harness,
+      async () => (await git(harness, "status", "--porcelain")) === "",
+      "the squash abort to restore the working tree",
+    )
+    expect(await git(harness, "show", "HEAD:work.txt")).toBe("main")
+  }, 30_000)
+
+  it("recovers an in-progress merge and commits after its conflicts are resolved", async () => {
+    const harness = await createHarness({ git: true })
+    await withConflictingTopic(harness)
+
+    await start(harness)
+    await openMergeMenuForSecondBranch(harness, "topic")
+    await press(harness, () => harness.setup.mockInput.pressKey("m"))
+    await waitUntil(
+      harness,
+      async () => frame(harness).includes("Merge topic stopped with conflicts"),
+      "the conflict menu",
+    )
+    await press(harness, () => harness.setup.mockInput.pressEscape())
+
+    await writeFile(join(harness.directory, "work.txt"), "resolved\n")
+    await git(harness, "add", "work.txt")
+    await act(async () => {
+      await harness.kernel.git.refresh()
+    })
+    await settle(harness)
+
+    await press(harness, () => harness.setup.mockInput.pressKey("M"))
+    await waitUntil(
+      harness,
+      async () => frame(harness).includes("Merge in progress on main"),
+      "the merge recovery menu",
+    )
+    expect(frame(harness)).toContain("Continue merge")
+    expect(frame(harness)).toContain("Abort merge")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await waitUntil(
+      harness,
+      async () => (await git(harness, "show", "--no-patch", "--format=%P", "HEAD")).split(" ").length === 2,
+      "the continued merge commit",
+    )
+    expect(await git(harness, "show", "HEAD:work.txt")).toBe("resolved")
   }, 30_000)
 })
 
@@ -293,6 +501,7 @@ describe("the branch menu", () => {
     // Nothing that would act on the branch you are standing on.
     expect(onHead).not.toContain("Check out")
     expect(onHead).not.toContain("Delete")
+    expect(onHead).not.toContain("Merge into current branch")
     // In sync is not behind, so there is nothing to fast-forward.
     expect(onHead).not.toContain("Fast-forward")
 
@@ -303,6 +512,7 @@ describe("the branch menu", () => {
     const onStale = frame(harness)
     expect(onStale).toContain("Branch: stale")
     expect(onStale).toContain("Check out")
+    expect(onStale).toContain("Merge into current branch")
     expect(onStale).toContain("Force delete")
     expect(onStale).toContain("Fast-forward")
     // It has an upstream already, so there is nothing to set one up for.

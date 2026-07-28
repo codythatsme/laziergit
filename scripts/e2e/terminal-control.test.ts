@@ -372,6 +372,35 @@ describe("laziergit through a real terminal", () => {
     })
   }, 20_000)
 
+  it("merges the selected branch into the checked-out branch", async () => {
+    const repo = await createE2eRepo()
+    await repo.git("checkout", "--quiet", "-b", "topic")
+    await repo.write("tracked.txt", "topic\n")
+    await repo.git("commit", "--quiet", "--all", "--message", "topic change")
+    await repo.git("checkout", "--quiet", "main")
+    const topic = await repo.git("rev-parse", "topic")
+
+    await inTerminal(repo, async (session) => {
+      await waitForText(session, "working tree clean")
+      await pressCtrl(session, "p")
+      await session.keyboard.type("Focus branches")
+      await waitForText(session, "Focus branches")
+      await session.keyboard.press("Enter")
+      await waitForText(session, "branch main")
+
+      await session.keyboard.press("ArrowDown")
+      await waitForText(session, "branch topic")
+      await session.keyboard.type("M")
+      await waitForText(session, "Merge topic into main")
+      await waitForText(session, "Regular merge (fast-forward)")
+      await session.keyboard.type("m")
+      await waitForText(session, "Merged topic into main")
+
+      expect(await repo.git("symbolic-ref", "--short", "HEAD")).toBe("main\n")
+      expect(await repo.git("rev-parse", "main")).toBe(topic)
+    })
+  }, 20_000)
+
   /**
    * The acceptance test of PLAN.md, run by machine: a user drops a `.tsx` file into their own
    * config directory and the feature exists — no core change, nothing rebuilt.
