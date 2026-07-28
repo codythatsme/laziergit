@@ -35,11 +35,11 @@ interface ParsedPatch {
   readonly files: readonly FilePatch[]
 }
 
+/** An answer carries its target: it stays on screen while the next target's fetch is in flight. */
 type DiffState =
   | { readonly kind: "empty" }
-  | { readonly kind: "loading" }
-  | ({ readonly kind: "ready" } & ParsedPatch)
-  | { readonly kind: "failed"; readonly message: string }
+  | ({ readonly kind: "ready"; readonly target: DiffTarget } & ParsedPatch)
+  | { readonly kind: "failed"; readonly target: DiffTarget; readonly message: string }
 
 /**
  * Identity of a target, independent of the object carrying it: every list Pane builds a fresh
@@ -259,9 +259,12 @@ export default defineExtension({
       const current = target.use()
       const layout = view.use()
       const [state, setState] = useState<DiffState>({ kind: "empty" })
+      // Trails `current` while a fetch is in flight, so nothing below the chrome line draws a
+      // patch under another target's headings.
+      const shown = state.kind === "empty" ? null : state.target
       // Live, not read once at fetch time: a branch's divergence moves under an unchanged
       // target, and this line is where a user reads it.
-      const context = useGit((git) => (current === null ? null : contextOf(current, git)))
+      const context = useGit((git) => (shown === null ? null : contextOf(shown, git)))
       // `<diff>` has no scroll API of its own, so the Pane gives it one (§1.8).
       const scroll = useScrollView()
 
@@ -289,28 +292,34 @@ export default defineExtension({
           const answered = output.exitCode === 0 || (fetch.nonZeroExitMayCarryPatch && output.stdout.trim() !== "")
           setState(
             answered
-              ? { kind: "ready", ...splitPatch(output.stdout, fetch.headed) }
+              ? { kind: "ready", target: next, ...splitPatch(output.stdout, fetch.headed) }
               : {
                   // In the Pane rather than through `notify`: this runs on every store
                   // refresh, so a rejected target would toast every couple of seconds.
                   kind: "failed",
+                  target: next,
                   message: output.stderr.trim() || `git ${fetch.argv.join(" ")} exited ${output.exitCode}`,
                 },
           )
         } catch (error) {
           if (issued !== ticket.current) return
-          setState({ kind: "failed", message: messageOf(error) })
+          setState({ kind: "failed", target: next, message: messageOf(error) })
         }
       }, [])
 
       const key = targetKey(current)
       useEffect(() => {
-        // Only a change of target shows `loading`; a refresh leaves the current patch up until
-        // its replacement arrives, so staging a file does not blink the Pane empty.
-        setState({ kind: "loading" })
-        scroll.scrollTo("start")
+        // Clearing here would blank the Pane for the frames a git process takes, flashing on
+        // every cursor move of the list the user is driving.
         void load()
-      }, [key, load, scroll])
+      }, [key, load])
+
+      const shownKey = targetKey(shown)
+      useEffect(() => {
+        // Keyed on the patch that lands, not the target that asked for it: the outgoing patch
+        // would otherwise be seen jumping to its top before its replacement arrived.
+        scroll.scrollTo("start")
+      }, [shownKey, scroll])
 
       // Staging, committing and checking out change what an unchanged target diffs to.
       useEvent("git.refreshed", () => {
@@ -383,7 +392,7 @@ export default defineExtension({
 
       // Named per section only where the chrome line above cannot name the file.
       const files = state.kind === "ready" ? state.files : []
-      const nameFiles = current.path === null || files.length > 1
+      const nameFiles = shown === null || shown.path === null || files.length > 1
 
       return (
         <box flexDirection="column" flexGrow={1} flexBasis={0}>
@@ -416,7 +425,7 @@ export default defineExtension({
                       </text>
                     ) : null}
                     {file.hasHunks ? (
-                      <diff diff={file.patch} view={layout} filetype={filetypeOf(file.path ?? current.path)} />
+                      <diff diff={file.patch} view={layout} filetype={filetypeOf(file.path ?? state.target.path)} />
                     ) : (
                       <text fg={theme.textMuted}>no textual diff (binary, mode or rename only)</text>
                     )}
