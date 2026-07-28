@@ -1,5 +1,6 @@
 import { useTerminalDimensions } from "@opentui/react"
 import { useBindings } from "@opentui/keymap/react"
+import type { InputKeyBinding } from "@opentui/core"
 import { useMemo, useRef, useState, type ReactNode } from "react"
 import { useTheme, type Theme } from "laziergit"
 
@@ -18,6 +19,10 @@ import { useStore } from "./use-store"
 
 const popupWidth = 64
 const visibleRows = 10
+const textInputKeyBindings = [
+  { name: "backspace", super: true, action: "delete-to-line-start" },
+  { name: "delete", super: true, action: "delete-to-line-end" },
+] satisfies InputKeyBinding[]
 
 /**
  * The rows a popup frame spends on itself: two borders, the padding line under the title,
@@ -147,6 +152,7 @@ function PromptView({ popup, theme }: { popup: PromptPopup; theme: Theme }) {
         width="100%"
         value={value}
         placeholder={popup.placeholder ?? ""}
+        keyBindings={textInputKeyBindings}
         onInput={(next: string) => {
           latest.current = next
           setValue(next)
@@ -214,6 +220,7 @@ function ChooseView({ popup, theme }: { popup: ChoosePopup; theme: Theme }) {
         width="100%"
         value={query}
         placeholder={popup.placeholder ?? "Filter"}
+        keyBindings={textInputKeyBindings}
         onInput={(next) => {
           state.current = { query: next, cursor: 0 }
           setQuery(next)
