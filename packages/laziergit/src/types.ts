@@ -340,6 +340,7 @@ export interface GitOutput {
 export interface RawOptions {
   stdin?: string
   allowFailure?: boolean
+  env?: Readonly<Record<string, string>>
 }
 
 export class GitError extends Error {
@@ -370,7 +371,10 @@ export interface Git {
   stage(paths: readonly string[] | "all"): Promise<void>
   unstage(paths: readonly string[] | "all"): Promise<void>
   discard(paths: readonly string[]): Promise<void>
-  commit(message: string, opts?: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean }): Promise<void>
+  commit(
+    message: string,
+    opts?: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; messageOnly?: boolean },
+  ): Promise<void>
   push(opts?: { remote?: string; ref?: string; force?: boolean | "with-lease"; setUpstream?: boolean }): Promise<void>
   pull(opts?: { rebase?: boolean }): Promise<void>
   fetch(opts?: { remote?: string; prune?: boolean }): Promise<void>
@@ -600,7 +604,12 @@ export interface DiffApi {
 export type CommitFlowResult = "committed" | "abandoned"
 
 export interface CommitFlowApi {
-  begin(opts?: { message?: string; amend?: boolean; signoff?: boolean }): Promise<CommitFlowResult>
+  begin(opts?: {
+    message?: string
+    amend?: boolean
+    signoff?: boolean
+    messageOnly?: boolean
+  }): Promise<CommitFlowResult>
 }
 
 export interface GitService {

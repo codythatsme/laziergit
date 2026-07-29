@@ -65,6 +65,7 @@ const lockFragments = ["index.lock", "cannot lock ref"] as const
 
 export interface GitExecOptions {
   readonly stdin?: string
+  readonly env?: Readonly<Record<string, string>>
   /** Reads suppress optional locks and never take one; writes must not. */
   readonly write?: boolean
 }
@@ -108,7 +109,9 @@ function attempt(cwd: string, args: readonly string[], options: GitExecOptions):
     try {
       child = Bun.spawn(["git", ...argv(args, options.write ?? false)], {
         cwd,
-        env: { ...process.env, ...(options.write === true ? baseEnv : readEnv) },
+        // Callers may supply operation-specific Git hooks such as a sequence editor, while
+        // terminal prompting and locale stay pinned by laziergit's safety contract.
+        env: { ...process.env, ...options.env, ...(options.write === true ? baseEnv : readEnv) },
         stdin: "pipe",
         stdout: "pipe",
         stderr: "pipe",

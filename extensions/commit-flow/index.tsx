@@ -45,6 +45,7 @@ interface CommitDraft {
   readonly initial: string
   readonly amend: boolean
   readonly signoff: boolean
+  readonly messageOnly: boolean
   /** Settles the promise `begin` handed its caller. Idempotent: a flow closes exactly once. */
   readonly close: (result: CommitFlowResult) => void
 }
@@ -55,6 +56,7 @@ interface OpenOptions {
   readonly message?: string
   readonly amend?: boolean
   readonly signoff?: boolean
+  readonly messageOnly?: boolean
 }
 
 function countLabel(count: number): string {
@@ -100,9 +102,12 @@ export default defineExtension({
       if (paneId === "commit-flow" && previous !== null && previous !== "commit-flow") returnTo = previous
     })
 
-    /** Remembers a message worth resuming. An untouched prefill is not one. */
+    /**
+     * Remembers a message worth resuming. An untouched prefill is not one, and neither is a
+     * message-only rewrite's: that text belongs to an existing commit, not to the next one.
+     */
     function keep(draft: CommitDraft, text: string): boolean {
-      if (text.trim().length === 0 || text === draft.initial) return false
+      if (draft.messageOnly || text.trim().length === 0 || text === draft.initial) return false
       kept.set(text)
       return true
     }
@@ -198,6 +203,7 @@ export default defineExtension({
           initial,
           amend,
           signoff: options.signoff === true,
+          messageOnly: options.messageOnly === true,
           close: (result) => {
             if (closed) return
             closed = true
@@ -234,7 +240,11 @@ export default defineExtension({
       }
 
       try {
-        await ctx.git.commit(message, { amend: draft.amend, signoff: draft.signoff })
+        await ctx.git.commit(message, {
+          amend: draft.amend,
+          signoff: draft.signoff,
+          messageOnly: draft.messageOnly,
+        })
       } catch (error) {
         ctx.popups.notify(describeGitFailure(error), "error")
         return
@@ -440,7 +450,13 @@ export default defineExtension({
     })
 
     return {
-      begin: (opts) => open({ message: opts?.message, amend: opts?.amend, signoff: opts?.signoff }),
+      begin: (opts) =>
+        open({
+          message: opts?.message,
+          amend: opts?.amend,
+          signoff: opts?.signoff,
+          messageOnly: opts?.messageOnly,
+        }),
     }
   },
 })
