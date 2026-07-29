@@ -308,7 +308,9 @@ export default defineExtension({
             env: continueEnv(),
           })
           ctx.popups.notify(
-            aborted.exitCode === 0 ? "Reword cancelled; original history restored" : "Reword cancelled; abort failed",
+            aborted.exitCode === 0
+              ? "Reword cancelled; original history restored"
+              : `Reword cancelled. Automatic rollback failed: ${aborted.stderr.trim() || "git rebase --abort failed"}`,
             aborted.exitCode === 0 ? "info" : "error",
           )
         }

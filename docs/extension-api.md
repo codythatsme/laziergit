@@ -923,7 +923,10 @@ tagged with the extension name, and routed to the log file / debug pane.
         amend?: boolean;
         allowEmpty?: boolean;
         signoff?: boolean;
-        /** Amend the message without including anything currently staged. */
+        /**
+         * Amend the message without including anything currently staged. Rejects unless
+         * `amend` is also set: a plain commit has no previous content to keep.
+         */
         messageOnly?: boolean;
       },
     ): Promise<void>;
@@ -2024,7 +2027,7 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
       message?: string;
       amend?: boolean;
       signoff?: boolean;
-      /** Amend only the message, leaving the current index out of the commit. */
+      /** Amend only the message, leaving the current index out of the commit. Requires `amend`. */
       messageOnly?: boolean;
     }): Promise<CommitFlowResult>;
   }

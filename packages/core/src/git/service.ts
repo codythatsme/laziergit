@@ -535,6 +535,11 @@ export class GitService {
     message: string,
     opts: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; messageOnly?: boolean } = {},
   ): Promise<void> {
+    // Without `--amend`, git reads `--only` with no paths as "commit no content": an empty
+    // commit would land while the staged index silently stayed behind.
+    if (opts.messageOnly === true && opts.amend !== true) {
+      return Promise.reject(new TypeError("messageOnly rewrites an existing commit, so it requires amend"))
+    }
     return this.#write([
       "commit",
       ...(opts.amend === true ? ["--amend"] : []),

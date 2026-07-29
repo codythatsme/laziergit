@@ -292,6 +292,20 @@ it("rewords a commit without folding the current index into it", async () => {
   expect(await repo.git("show", "HEAD:seed.txt")).toBe("seed\n")
 })
 
+it("rejects a message-only commit that is not an amend", async () => {
+  const repo = await createSeededRepo()
+  const service = await open(repo.path)
+  await repo.write("seed.txt", "staged\n")
+  await service.stage(["seed.txt"])
+
+  // git reads `--only` with no paths as "commit no content", which would land an empty
+  // commit while the staged index stayed behind.
+  const failure = await service.commit("not an amend", { messageOnly: true }).catch((error: unknown) => error)
+  if (!(failure instanceof TypeError)) throw new Error(`Expected a TypeError, got ${String(failure)}`)
+  expect(failure.message).toContain("requires amend")
+  expect(state(service).commits.map((commit) => commit.subject)).toEqual(["first commit"])
+})
+
 it("runs the branch and stash porcelain", async () => {
   const repo = await createSeededRepo()
   const service = await open(repo.path)

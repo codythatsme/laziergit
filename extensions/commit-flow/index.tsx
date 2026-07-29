@@ -102,9 +102,12 @@ export default defineExtension({
       if (paneId === "commit-flow" && previous !== null && previous !== "commit-flow") returnTo = previous
     })
 
-    /** Remembers a message worth resuming. An untouched prefill is not one. */
+    /**
+     * Remembers a message worth resuming. An untouched prefill is not one, and neither is a
+     * message-only rewrite's: that text belongs to an existing commit, not to the next one.
+     */
     function keep(draft: CommitDraft, text: string): boolean {
-      if (text.trim().length === 0 || text === draft.initial) return false
+      if (draft.messageOnly || text.trim().length === 0 || text === draft.initial) return false
       kept.set(text)
       return true
     }

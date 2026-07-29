@@ -96,6 +96,8 @@ const filesStandIn = `
         run: () => watch("prefilled", flow.begin({ message: "handed in" })) })
       ctx.commands.register({ id: "files.begin-amend", title: "Begin an amend", keys: "n",
         run: () => watch("amend", flow.begin({ amend: true })) })
+      ctx.commands.register({ id: "files.begin-reword", title: "Begin a message-only amend", keys: "r",
+        run: () => watch("reword", flow.begin({ message: "belongs to its commit", amend: true, messageOnly: true })) })
     },
   })
 `
@@ -240,6 +242,26 @@ describe("commit-flow pane", () => {
     await stageFile(harness, "another.txt")
     await press(harness, () => harness.setup.mockInput.pressKey("c"))
     expect(frame(harness)).not.toContain("half a thought")
+  }, 30_000)
+
+  it("does not keep a draft escape backed out of a message-only flow", async () => {
+    const harness = await repository()
+    await seed(harness)
+    await start(harness)
+    await stageFile(harness, "feature.txt")
+    await focusFiles(harness)
+
+    await press(harness, () => harness.setup.mockInput.pressKey("r"))
+    await waitFor(harness, "belongs to its commit")
+    await press(harness, () => void harness.setup.mockInput.typeText(" edited"))
+    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await waitFor(harness, "reword closed #1")
+
+    // The edited text is another commit's message; resuming it on the next plain commit
+    // would write it onto unrelated work.
+    expect(frame(harness)).not.toContain("draft kept")
+    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    expect(frame(harness)).not.toContain("belongs to its commit")
   }, 30_000)
 
   it("hands the cell and the keyboard back when the flow closes", async () => {
