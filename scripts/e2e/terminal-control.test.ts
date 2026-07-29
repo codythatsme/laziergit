@@ -17,7 +17,7 @@ const selection = {
 
 const entrypoint = resolve(import.meta.dir, "..", "..", "packages", "core", "src", "main.tsx")
 const specification = resolve(import.meta.dir, "..", "..", "docs", "extension-api.md")
-const paneTitles = ["Files", "Branches", "Commits", "Stash", "[Diff] Commit"] as const
+const paneTitles = ["Files", "Branches", "Commits", "Stash", "Actions", "[Diff] Commit"] as const
 
 type Layout = "all-panes" | "working-panes"
 
@@ -40,6 +40,13 @@ async function createE2eRepo(layout: Layout = "working-panes"): Promise<TestRepo
   await repo.commit("first commit")
   await mkdir(join(repo.path, ".laziergit"), { recursive: true })
   await repo.write(".laziergit/config.jsonc", config(layout))
+  // Every session boots the bundled gh-workflows pane, so every session gets a `gh` with no
+  // runs: the machine's own gh would put the network and its auth state on the screen. A test
+  // that wants runs overwrites this stub.
+  const bin = join(repo.path, ".home", "bin")
+  await mkdir(bin, { recursive: true })
+  await Bun.write(join(bin, "gh"), "#!/bin/sh\necho '[]'\n")
+  await chmod(join(bin, "gh"), 0o755)
   return repo
 }
 
@@ -58,12 +65,13 @@ async function workedExample(): Promise<string> {
   return document.slice(open + "```tsx\n".length, close + 1)
 }
 
-function launchEnvironment(repo: TestRepo, pathPrefix?: string): Readonly<Record<string, string>> {
+function launchEnvironment(repo: TestRepo): Readonly<Record<string, string>> {
   const path = process.env.PATH
   if (path === undefined) throw new Error("The E2E test needs PATH so laziergit can invoke git")
   const home = join(repo.path, ".home")
   return {
-    PATH: pathPrefix === undefined ? path : `${pathPrefix}:${path}`,
+    // The sandbox's stubs — a `gh` at minimum — shadow the machine's own binaries.
+    PATH: `${join(home, "bin")}:${path}`,
     TERM: "xterm-256color",
     HOME: home,
     XDG_CONFIG_HOME: join(home, ".config"),
@@ -155,10 +163,7 @@ async function waitForSelectedRow(session: Session, text: string, timeoutMs = 15
 async function inTerminal(
   repo: TestRepo,
   run: (session: Session) => Promise<void>,
-  {
-    viewport = { cols: 140, rows: 45 },
-    pathPrefix,
-  }: { viewport?: { cols: number; rows: number }; pathPrefix?: string } = {},
+  { viewport = { cols: 140, rows: 45 } }: { viewport?: { cols: number; rows: number } } = {},
 ): Promise<void> {
   const terminal = await TerminalControl.make({ artifacts: false })
   try {
@@ -168,7 +173,7 @@ async function inTerminal(
       viewport,
       host: "opentui",
       inheritEnv: false,
-      env: launchEnvironment(repo, pathPrefix),
+      env: launchEnvironment(repo),
     })
     try {
       await run(session)
@@ -229,6 +234,8 @@ describe("laziergit through a real terminal", () => {
     await addOrigin(repo)
     await inTerminal(repo, async (session) => {
       await waitForText(session, "first commit")
+      // The one pane whose content arrives through a spawned `gh` rather than git.
+      await waitForText(session, "no runs for main")
       const screen = await session.screen.text()
 
       for (const title of paneTitles) expect(screen).toContain(title)
@@ -478,6 +485,9 @@ describe("laziergit through a real terminal", () => {
    *
    * `gh` is stubbed on PATH: the point under test is laziergit's loading, layout, cursor and
    * hint machinery, not GitHub's availability.
+   *
+   * The same extension ships as a Bundled Extension, so this install also exercises scope
+   * precedence: the user's copy must shadow the bundled one, and only one pane may exist.
    */
   it("loads §2's worked example from the user's config directory and runs it", async () => {
     const repo = await createE2eRepo()
@@ -500,47 +510,43 @@ describe("laziergit through a real terminal", () => {
     await Bun.write(stub, `#!/bin/sh\ncat <<'LAZIERGIT_JSON'\n${JSON.stringify(runs)}\nLAZIERGIT_JSON\n`)
     await chmod(stub, 0o755)
 
-    await inTerminal(
-      repo,
-      async (session) => {
-        // The pane the user's file registered, drawn from the stub's runs — and drawn where
-        // its `placement` hint asked, without being named in this repository's Layout.
-        await waitForText(session, "Actions")
-        const listed = await waitForScreen(
-          session,
-          "the workflow runs the stubbed gh reported",
-          (screen) => screen.includes("verify — first run") && screen.includes("verify — second run"),
-        )
-        expect(listed).toContain("✓")
-        expect(listed).toContain("✗")
-        // One row is one line (§1.8): the third title is clipped at the column edge, so its
-        // tail never reaches the screen. Without `wrapMode="none"` it reflows and TAIL shows.
-        expect(listed).not.toContain("TAIL")
+    await inTerminal(repo, async (session) => {
+      // The pane the user's file registered, drawn from the stub's runs — and drawn where
+      // its `placement` hint asked, without being named in this repository's Layout.
+      await waitForText(session, "Actions")
+      const listed = await waitForScreen(
+        session,
+        "the workflow runs the stubbed gh reported",
+        (screen) => screen.includes("verify — first run") && screen.includes("verify — second run"),
+      )
+      expect(listed).toContain("✓")
+      expect(listed).toContain("✗")
+      // One row is one line (§1.8): the third title is clipped at the column edge, so its
+      // tail never reaches the screen. Without `wrapMode="none"` it reflows and TAIL shows.
+      expect(listed).not.toContain("TAIL")
 
-        // Tab reaches it, and the cursor it got from `useListCursor` walks and lights rows.
-        await session.keyboard.press("Tab")
-        await waitForSelectedRow(session, "✓ verify — first run")
-        // `hint` on the user's own Command reaches the bottom row, like any bundled one.
-        await waitForText(session, "o open")
-        // The highlighted frame can arrive before the focus transition has gone quiet at the
-        // PTY boundary. Do not let the next key race the tail of that transition.
-        await session.screen.waitForIdle({ quietForMs: 100 })
+      // Tab reaches it, and the cursor it got from `useListCursor` walks and lights rows.
+      await session.keyboard.press("Tab")
+      await waitForSelectedRow(session, "✓ verify — first run")
+      // `hint` on the user's own Command reaches the bottom row, like any bundled one.
+      await waitForText(session, "o open")
+      // The highlighted frame can arrive before the focus transition has gone quiet at the
+      // PTY boundary. Do not let the next key race the tail of that transition.
+      await session.screen.waitForIdle({ quietForMs: 100 })
 
-        await session.keyboard.press("ArrowDown")
-        await waitForSelectedRow(session, "✗ verify — second run")
-        await session.keyboard.type("G")
-        await waitForSelectedRow(session, "●")
+      await session.keyboard.press("ArrowDown")
+      await waitForSelectedRow(session, "✗ verify — second run")
+      await session.keyboard.type("G")
+      await waitForSelectedRow(session, "●")
 
-        // The user's Command is on the focused Pane's cheat sheet, under the extension's name.
-        await session.keyboard.type("?")
-        const keys = await waitForScreen(session, "the user extension's own keybindings", (screen) =>
-          screen.includes("Keybindings — gh-workflows"),
-        )
-        expect(keys).toContain("Open workflow run in browser")
-        expect(keys).toContain("Next run")
-      },
-      { pathPrefix: bin },
-    )
+      // The user's Command is on the focused Pane's cheat sheet, under the extension's name.
+      await session.keyboard.type("?")
+      const keys = await waitForScreen(session, "the user extension's own keybindings", (screen) =>
+        screen.includes("Keybindings — gh-workflows"),
+      )
+      expect(keys).toContain("Open workflow run in browser")
+      expect(keys).toContain("Next run")
+    })
   }, 30_000)
 
   it("saves and pops a stash through the focused panes", async () => {

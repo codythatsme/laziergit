@@ -73,6 +73,18 @@
         "@types/react": "catalog:",
       },
     },
+    "extensions/gh-workflows": {
+      "name": "@laziergit/extension-gh-workflows",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
     "extensions/stash": {
       "name": "@laziergit/extension-stash",
       "version": "0.0.0",
@@ -186,6 +198,8 @@
     "@laziergit/extension-diff": ["@laziergit/extension-diff@workspace:extensions/diff"],
 
     "@laziergit/extension-files": ["@laziergit/extension-files@workspace:extensions/files"],
+
+    "@laziergit/extension-gh-workflows": ["@laziergit/extension-gh-workflows@workspace:extensions/gh-workflows"],
 
     "@laziergit/extension-stash": ["@laziergit/extension-stash@workspace:extensions/stash"],
 
