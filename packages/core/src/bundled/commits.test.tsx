@@ -10,6 +10,7 @@ installHarnessLifecycle()
 
 /** The shipped Extension itself, symlinked into the harness's bundled scope the way `main.tsx` loads it. */
 const commitsExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commits")
+const commitFlowExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commit-flow")
 
 /**
  * The harness directory is the repository, the Extension home, and where the kernel writes
@@ -102,6 +103,7 @@ async function openRepo(options: { readonly config?: string; readonly git?: bool
     writeFile(join(harness.directory, ".gitignore"), ignored),
     writeFile(harness.configFiles.repo, options.config ?? layout()),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
+    symlink(commitFlowExtension, join(harness.bundled, "commit-flow")),
     symlink(commitsExtension, join(harness.bundled, "commits")),
   ])
 
@@ -124,9 +126,9 @@ async function commit(repo: Repo, subject: string): Promise<void> {
  * A key press, plus enough real time for the terminal parser to disambiguate it — a lone
  * escape byte is only a key once the parser has waited for the sequence it could start.
  */
-async function press(harness: Harness, key: string): Promise<void> {
+async function press(harness: Harness, key: string, modifiers?: { readonly ctrl?: boolean }): Promise<void> {
   await act(async () => {
-    harness.setup.mockInput.pressKey(key)
+    harness.setup.mockInput.pressKey(key, modifiers)
     await Bun.sleep(60)
   })
   await settle(harness)
@@ -161,7 +163,7 @@ describe("searching commits", () => {
     await commit(repo, "third commit")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "/")
     await act(async () => {
       await repo.harness.setup.mockInput.typeText("second")
@@ -191,7 +193,7 @@ describe("the commits action menu", () => {
     const parent = await repo.oid("HEAD~1")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
 
@@ -216,7 +218,7 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "c")
@@ -236,7 +238,7 @@ describe("the commits action menu", () => {
     await writeFile(join(repo.harness.directory, "first-commit.txt"), "edited\n")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "h")
@@ -263,7 +265,7 @@ describe("the commits action menu", () => {
     await repo.run("add", "first-commit.txt")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "m")
@@ -289,7 +291,7 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "s")
@@ -311,7 +313,7 @@ describe("the commits action menu", () => {
     const parent = await repo.oid("HEAD~1")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "s")
@@ -333,7 +335,7 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "x")
     await press(repo.harness, "v")
 
@@ -357,13 +359,16 @@ describe("the commits action menu", () => {
     await repo.run("merge", "--quiet", "--no-ff", "--no-edit", "-m", "merge feature", "feature")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "x")
 
     // The merge is the newest commit and so the selected row. Offering the item here would
     // promise an undo `git revert` rejects for want of `-m`.
     expect(frame(repo.harness)).toContain("Check out this commit")
     expect(frame(repo.harness)).not.toContain("Revert this commit")
+    expect(frame(repo.harness)).not.toContain("Squash into the parent commit")
+    expect(frame(repo.harness)).not.toContain("Reword this commit")
+    expect(frame(repo.harness)).not.toContain("Drop this commit")
 
     // `"ESCAPE"`, not `"escape"`: the mock sends a named key's byte sequence and any other
     // string as literal characters, so the lowercase spelling would type e-s-c-a-p-e.
@@ -381,7 +386,7 @@ describe("the commits action menu", () => {
     await repo.run("remote", "add", "origin", repo.harness.directory)
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "x")
 
     expect(frame(repo.harness)).toContain("Check out this commit")
@@ -394,9 +399,148 @@ describe("the commits action menu", () => {
     await repo.run("remote", "add", "origin", "git@github.com:acme/tools.git")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "2")
+    await press(repo.harness, "3")
     await press(repo.harness, "x")
 
     expect(frame(repo.harness)).toContain("Open this commit on the remote")
+  })
+
+  it("squashes the selected commit into its parent and replays newer history", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await commit(repo, "third commit")
+    const originalHead = await repo.oid("HEAD")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "3")
+    await press(repo.harness, "j")
+    await press(repo.harness, "x")
+    await press(repo.harness, "q")
+
+    expect(frame(repo.harness)).toContain("will be folded into")
+    expect(frame(repo.harness)).toContain("every newer commit will get a new oid")
+
+    await press(repo.harness, "y")
+    await waitForFrame(repo.harness, "Pushed history now needs force-with-lease")
+
+    expect(await repo.oid("HEAD")).not.toBe(originalHead)
+    expect(await repo.run("log", "--format=%s")).toBe("third commit\nfirst commit\n")
+    expect(await repo.run("show", "-s", "--format=%B", "HEAD~1")).toContain("second commit")
+  })
+
+  it("drops the selected commit and replays the commits above it", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await commit(repo, "third commit")
+    const droppedFile = join(repo.harness.directory, "second-commit.txt")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "3")
+    await press(repo.harness, "j")
+    await press(repo.harness, "x")
+    await press(repo.harness, "d")
+
+    expect(frame(repo.harness)).toContain("will be removed and every newer")
+    expect(frame(repo.harness)).toContain("commit replayed")
+    expect(frame(repo.harness)).toContain("history remains recoverable")
+    expect(frame(repo.harness)).toContain("from the reflog")
+
+    await press(repo.harness, "y")
+    await waitForFrame(repo.harness, "Pushed history now needs force-with-lease")
+
+    expect(await repo.run("log", "--format=%s")).toBe("third commit\nfirst commit\n")
+    expect(await Bun.file(droppedFile).exists()).toBe(false)
+  })
+
+  it("rewords an older commit in the full message editor", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await commit(repo, "third commit")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "3")
+    await press(repo.harness, "j")
+    await press(repo.harness, "x")
+    await press(repo.harness, "r")
+    await waitForFrame(repo.harness, "amending the last commit")
+
+    expect(frame(repo.harness)).toContain("amending the last commit")
+    expect(frame(repo.harness)).toContain("second commit")
+    await act(async () => {
+      await repo.harness.setup.mockInput.typeText(" reworded")
+    })
+    await settle(repo.harness)
+    await press(repo.harness, "s", { ctrl: true })
+    await waitForFrame(repo.harness, "Pushed history now needs force-with-lease")
+
+    expect(await repo.run("log", "--format=%s")).toBe("third commit\nsecond commit reworded\nfirst commit\n")
+    expect((await repo.run("status", "--porcelain")).trim()).toBe("")
+  })
+
+  it("restores the original history when rewording is cancelled", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await commit(repo, "third commit")
+    const originalHead = await repo.oid("HEAD")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "3")
+    await press(repo.harness, "j")
+    await press(repo.harness, "x")
+    await press(repo.harness, "r")
+    await waitForFrame(repo.harness, "amending the last commit")
+    await press(repo.harness, "ESCAPE")
+    await waitForFrame(repo.harness, "Reword cancelled; original history restored")
+
+    expect(await repo.oid("HEAD")).toBe(originalHead)
+    expect(await repo.run("log", "--format=%s")).toBe("third commit\nsecond commit\nfirst commit\n")
+    expect((await repo.run("status", "--porcelain")).trim()).toBe("")
+  })
+
+  it("refuses to rewrite while the working tree is dirty", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    const originalHead = await repo.oid("HEAD")
+    await writeFile(join(repo.harness.directory, "first-commit.txt"), "unfinished\n")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "3")
+    await press(repo.harness, "x")
+    await press(repo.harness, "q")
+    await waitForFrame(repo.harness, "Commit rewrites need a clean working tree")
+
+    expect(await repo.oid("HEAD")).toBe(originalHead)
+    expect(await Bun.file(join(repo.harness.directory, "first-commit.txt")).text()).toBe("unfinished\n")
+  })
+
+  it("aborts a conflicting drop and restores the original history", async () => {
+    const repo = await openRepo()
+    const path = join(repo.harness.directory, "shared.txt")
+    await writeFile(path, "base\n")
+    await repo.run("add", "shared.txt")
+    await repo.run("commit", "--quiet", "--message", "first commit")
+    await writeFile(path, "second\n")
+    await repo.run("commit", "--quiet", "--all", "--message", "second commit")
+    await writeFile(path, "third\n")
+    await repo.run("commit", "--quiet", "--all", "--message", "third commit")
+    const originalHead = await repo.oid("HEAD")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "3")
+    await press(repo.harness, "j")
+    await press(repo.harness, "x")
+    await press(repo.harness, "d")
+    await press(repo.harness, "y")
+    await waitForFrame(repo.harness, "Rewrite failed; original history restored")
+
+    expect(await repo.oid("HEAD")).toBe(originalHead)
+    expect(await repo.run("log", "--format=%s")).toBe("third commit\nsecond commit\nfirst commit\n")
+    expect(await Bun.file(path).text()).toBe("third\n")
+    expect((await repo.run("status", "--porcelain")).trim()).toBe("")
   })
 })

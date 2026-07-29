@@ -431,7 +431,12 @@ export class GitService {
   rawEffect(args: readonly string[], options: RawOptions = {}): Effect.Effect<GitOutput, GitError> {
     const mutating = isMutating(args)
     const invocation = this.#withRepository(args, (root) =>
-      execGit(root, args, { stdin: options.stdin, allowFailure: options.allowFailure, write: mutating }),
+      execGit(root, args, {
+        stdin: options.stdin,
+        env: options.env,
+        allowFailure: options.allowFailure,
+        write: mutating,
+      }),
     )
     // Uninterruptible: a hot reload landing mid-`git commit` must not leave the repository
     // half-written. Only the awaited promise is parked (§5.3).
@@ -526,11 +531,20 @@ export class GitService {
     )
   }
 
-  commit(message: string, opts: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean } = {}): Promise<void> {
+  commit(
+    message: string,
+    opts: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; messageOnly?: boolean } = {},
+  ): Promise<void> {
+    // Without `--amend`, git reads `--only` with no paths as "commit no content": an empty
+    // commit would land while the staged index silently stayed behind.
+    if (opts.messageOnly === true && opts.amend !== true) {
+      return Promise.reject(new TypeError("messageOnly rewrites an existing commit, so it requires amend"))
+    }
     return this.#write([
       "commit",
       ...(opts.amend === true ? ["--amend"] : []),
-      ...(opts.allowEmpty === true ? ["--allow-empty"] : []),
+      ...(opts.allowEmpty === true || opts.messageOnly === true ? ["--allow-empty"] : []),
+      ...(opts.messageOnly === true ? ["--only"] : []),
       ...(opts.signoff === true ? ["--signoff"] : []),
       "--message",
       message,

@@ -279,6 +279,33 @@ it("stages, commits, and refreshes before the caller's await resolves", async ()
   expect(state(service).status.isClean).toBe(true)
 })
 
+it("rewords a commit without folding the current index into it", async () => {
+  const repo = await createSeededRepo()
+  const service = await open(repo.path)
+  await repo.write("seed.txt", "staged for later\n")
+  await service.stage(["seed.txt"])
+
+  await service.commit("reworded first commit", { amend: true, messageOnly: true })
+
+  expect(state(service).commits.map((commit) => commit.subject)).toEqual(["reworded first commit"])
+  expect(stagedPaths(service)).toEqual(["seed.txt"])
+  expect(await repo.git("show", "HEAD:seed.txt")).toBe("seed\n")
+})
+
+it("rejects a message-only commit that is not an amend", async () => {
+  const repo = await createSeededRepo()
+  const service = await open(repo.path)
+  await repo.write("seed.txt", "staged\n")
+  await service.stage(["seed.txt"])
+
+  // git reads `--only` with no paths as "commit no content", which would land an empty
+  // commit while the staged index stayed behind.
+  const failure = await service.commit("not an amend", { messageOnly: true }).catch((error: unknown) => error)
+  if (!(failure instanceof TypeError)) throw new Error(`Expected a TypeError, got ${String(failure)}`)
+  expect(failure.message).toContain("requires amend")
+  expect(state(service).commits.map((commit) => commit.subject)).toEqual(["first commit"])
+})
+
 it("runs the branch and stash porcelain", async () => {
   const repo = await createSeededRepo()
   const service = await open(repo.path)
@@ -528,6 +555,17 @@ it("passes stdin through to git", async () => {
   const output = await service.raw(["hash-object", "-w", "--stdin"], { stdin: "hello\n" })
   expect(output.stdout.trim()).toMatch(/^[0-9a-f]{40}$/)
   expect((await service.raw(["cat-file", "-p", output.stdout.trim()])).stdout).toBe("hello\n")
+})
+
+it("passes operation-specific environment variables to git", async () => {
+  const repo = await createSeededRepo()
+  const service = await open(repo.path)
+
+  const output = await service.raw(["var", "GIT_EDITOR"], {
+    env: { GIT_EDITOR: "laziergit-sequence-editor" },
+  })
+
+  expect(output.stdout.trim()).toBe("laziergit-sequence-editor")
 })
 
 /**
