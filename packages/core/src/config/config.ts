@@ -43,6 +43,8 @@ export interface GitConfig {
 }
 
 export interface CoreConfig {
+  /** Whether OpenTUI captures and dispatches terminal mouse events. */
+  readonly mouse: boolean
   /** `null` when the user declared no Layout — placement hints then decide everything. */
   readonly layout: LayoutConfig | null
   /** Command id → the keys bound to it. An empty array unbinds the Command's defaults. */
@@ -93,6 +95,7 @@ export function defaultConfigFiles(repoRoot: string): ConfigFiles {
 
 export const emptyConfig: LoadedConfig = Object.freeze({
   core: Object.freeze({
+    mouse: true,
     layout: null,
     keybindings: new Map<string, readonly string[]>(),
     theme: defaultTheme,
@@ -312,6 +315,12 @@ function readLeader(value: unknown, log: ProblemLog): string {
   return value
 }
 
+function readMouse(value: unknown, log: ProblemLog): boolean {
+  if (value === undefined) return true
+  if (typeof value === "boolean") return value
+  return log.reject("mouse", "mouse must be a boolean") ?? true
+}
+
 function readGitSetting(
   value: unknown,
   key: keyof GitConfig,
@@ -378,6 +387,7 @@ function readExtensionSections(
 
 const coreSectionKeys = new Set([
   "$schema",
+  "mouse",
   "layout",
   "keybindings",
   "theme",
@@ -402,6 +412,7 @@ export function readConfig(document: unknown): LoadedConfig {
 
   return {
     core: {
+      mouse: readMouse(document.mouse, log),
       layout: readLayout(document.layout, log),
       keybindings: readKeybindings(document.keybindings, log),
       theme: readTheme(document.theme, log),

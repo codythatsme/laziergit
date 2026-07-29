@@ -48,12 +48,26 @@ repository — commit it or ignore it as you like.
 
 ## What a change costs
 
-Editing `layout`, `keybindings`, `theme`, `statusline`, `leader`, or `git` rearranges the
+Editing `mouse`, `layout`, `keybindings`, `theme`, `statusline`, `leader`, or `git` rearranges the
 running screen — no Extension is reloaded and no Pane loses its cursor. Editing anything under
 `extensions` reloads every Extension, because `ctx.config` is a constant snapshot for the
 lifetime of an activation (see [extension-api.md §5.6](./extension-api.md)) and reload is
 how a new snapshot is delivered. Reformatting the file — reordering keys, changing comments
 or whitespace — costs nothing: only the values are compared.
+
+## `mouse` — terminal mouse capture
+
+```jsonc
+{ "mouse": true }
+```
+
+Mouse capture defaults to `true`. It lets the wheel scroll whatever `<scrollbox>` is under the
+pointer, clicking a Pane gives that Pane the keyboard, and clicking a list row moves its cursor.
+Set it to `false` to leave every mouse gesture to the terminal. The change applies immediately.
+
+While capture is enabled, OpenTUI owns ordinary drags for its text selection. Most terminals
+provide a modifier that bypasses application mouse capture when native terminal selection is
+needed.
 
 ## `layout` — where Panes go
 

@@ -125,6 +125,15 @@ it("treats an empty or comments-only file as contributing nothing", () => {
   expect(loadConfig(documents("", "")).core.leader).toBe("space")
 })
 
+it("defaults mouse capture on, accepts false, and rejects other values", () => {
+  expect(loadConfig(documents(null, null)).core.mouse).toBe(true)
+  expect(loadConfig(documents(`{ "mouse": false }`, null)).core.mouse).toBe(false)
+
+  const rejected = loadConfig(documents(`{ "mouse": "sometimes" }`, null))
+  expect(rejected.core.mouse).toBe(true)
+  expect(rejected.problems).toEqual([{ path: "mouse", message: "mouse must be a boolean" }])
+})
+
 it("cannot be made to reparent the merged document with a __proto__ key", () => {
   const loaded = loadConfig(documents(`{ "leader": "comma" }`, `{ "__proto__": { "leader": "x", "typo": 1 } }`))
 

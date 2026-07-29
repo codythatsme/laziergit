@@ -301,7 +301,7 @@ export interface ListCursor<T> {
    *
    * ```tsx
    * {items.map((item, index) => (
-   *   <box key={item.id} id={cursor.rowId(index)}>…</box>
+   *   <box key={item.id} id={cursor.rowId(index)} onMouseDown={() => cursor.setIndex(index)}>…</box>
    * ))}
    * ```
    */
