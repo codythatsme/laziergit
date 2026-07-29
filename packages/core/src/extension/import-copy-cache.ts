@@ -34,6 +34,9 @@ const CACHE_NAME = /^(\d+)-(\d+)-(\d+)-(.+)$/
 /** `*` matches the ignore file too, so the container hides itself with no outside cooperation. */
 const CONTAINER_IGNORE_CONTENT = "*\n"
 
+/** Node retries Windows' transient EPERM/EBUSY/ENOTEMPTY failures only when these are set. */
+const REMOVE_OPTIONS = { recursive: true, force: true, maxRetries: 5, retryDelay: 50 } as const
+
 function defaultProcessState(pid: number): ProcessState {
   if (pid === process.pid) return "live"
   try {
@@ -60,6 +63,28 @@ async function linkPath(sourcePath: string, targetPath: string, platform: NodeJS
   await fs.symlink(sourcePath, targetPath, metadata.isDirectory() ? directoryLinkType(platform) : "file")
 }
 
+/**
+ * Promise.all returns as soon as one operation rejects, even though its siblings keep running.
+ * Import-copy cleanup must not begin until every filesystem operation it started has stopped.
+ */
+async function settleConcurrentOperations(operations: readonly Promise<void>[]): Promise<void> {
+  let firstError: unknown
+  let failed = false
+  await Promise.all(
+    operations.map(async (operation) => {
+      try {
+        await operation
+      } catch (error) {
+        if (!failed) {
+          failed = true
+          firstError = error
+        }
+      }
+    }),
+  )
+  if (failed) throw firstError
+}
+
 async function linkDirectoryEntries(
   sourcePath: string,
   targetPath: string,
@@ -75,7 +100,7 @@ async function linkDirectoryEntries(
   }
 
   await fs.mkdir(targetPath, { recursive: true })
-  await Promise.all(
+  await settleConcurrentOperations(
     entries
       .filter((entry) => !omitted.has(entry.name))
       .map((entry) => linkPath(join(sourcePath, entry.name), join(targetPath, entry.name), platform)),
@@ -109,7 +134,7 @@ async function createNodeModulesOverlay(
   }
 
   await fs.mkdir(join(overlayPath, "@opentui"), { recursive: true })
-  await Promise.all([
+  await settleConcurrentOperations([
     linkPath(hostPackageRoot("react"), join(overlayPath, "react"), platform),
     linkPath(hostPackageRoot("@opentui/react"), join(overlayPath, "@opentui", "react"), platform),
     linkPath(hostPackageRoot("@opentui/core"), join(overlayPath, "@opentui", "core"), platform),
@@ -303,7 +328,7 @@ export class ImportCopyCache {
 
     const cleanup = (async () => {
       try {
-        await fs.rm(path, { recursive: true, force: true })
+        await fs.rm(path, REMOVE_OPTIONS)
         this.#ownedPaths.delete(path)
       } catch (error) {
         this.#report(`Failed to clean import copy ${path}`, error)

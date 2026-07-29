@@ -177,7 +177,14 @@ describe("ImportCopyCache leases", () => {
     const cache = new ImportCopyCache({ directories: [extensions], diagnose: (entry) => diagnostics.push(entry) })
     const primaryError = new Error("overlay failed")
     const cleanupError = new Error("cleanup failed")
+    let symlinkCalls = 0
+    let delayedSymlinksSettled = 0
     const symlinkSpy = spyOn(fs, "symlink").mockImplementation(async () => {
+      symlinkCalls += 1
+      if (symlinkCalls > 1) {
+        await Bun.sleep(25)
+        delayedSymlinksSettled += 1
+      }
       throw primaryError
     })
     const removeSpy = spyOn(fs, "rm").mockImplementation(async () => {
@@ -197,6 +204,9 @@ describe("ImportCopyCache leases", () => {
     expect(copyError).toBe(primaryError)
     expect(cache.activeLeaseCount).toBe(0)
     expect(diagnostics).toEqual([expect.objectContaining({ phase: "cache", error: cleanupError })])
+    // A first failure cannot let cleanup race filesystem operations that were already started.
+    expect(symlinkCalls).toBe(3)
+    expect(delayedSymlinksSettled).toBe(2)
     await cache.releaseAll()
     // The failed copy must be gone. The empty bookkeeping container is explicitly
     // best-effort: Windows can keep it busy briefly after removing its junctions.

@@ -210,6 +210,13 @@ async function pressCtrl(session: Session, key: string): Promise<void> {
   await pressKittyModifier(session, key, 5)
 }
 
+async function openCommandPalette(session: Session): Promise<void> {
+  await pressCtrl(session, "p")
+  // Keyboard writes only acknowledge PTY delivery. Wait until the popup's input owns
+  // subsequent keys so a fast runner cannot send the query into the underlying Pane.
+  await waitForText(session, "Filter commands")
+}
+
 async function pressEscape(session: Session): Promise<void> {
   // With Kitty disambiguation enabled, a physical Escape key is reported as its Unicode
   // codepoint rather than the ambiguous lone ESC byte.
@@ -301,7 +308,7 @@ describe("laziergit through a real terminal", () => {
       await waitForText(session, "?? alpha.txt")
       await waitForSelectedRow(session, "?? needle-file.txt")
 
-      await pressCtrl(session, "p")
+      await openCommandPalette(session)
       await session.keyboard.type("Focus commits")
       await waitForText(session, "Focus commits")
       await session.keyboard.press("Enter")
@@ -404,8 +411,7 @@ describe("laziergit through a real terminal", () => {
     await inTerminal(repo, async (session) => {
       await waitForText(session, "working tree clean")
 
-      await pressCtrl(session, "p")
-      await waitForText(session, "Commands")
+      await openCommandPalette(session)
       await session.keyboard.type("Focus branches")
       await waitForText(session, "Focus branches")
       await session.keyboard.press("Enter")
@@ -443,7 +449,7 @@ describe("laziergit through a real terminal", () => {
 
     await inTerminal(repo, async (session) => {
       await waitForText(session, "working tree clean")
-      await pressCtrl(session, "p")
+      await openCommandPalette(session)
       await session.keyboard.type("Focus branches")
       await waitForText(session, "Focus branches")
       await session.keyboard.press("Enter")
@@ -516,8 +522,11 @@ describe("laziergit through a real terminal", () => {
         await waitForSelectedRow(session, "✓ verify — first run")
         // `hint` on the user's own Command reaches the bottom row, like any bundled one.
         await waitForText(session, "o open")
+        // The highlighted frame can arrive before the focus transition has gone quiet at the
+        // PTY boundary. Do not let the next key race the tail of that transition.
+        await session.screen.waitForIdle({ quietForMs: 100 })
 
-        await session.keyboard.type("j")
+        await session.keyboard.press("ArrowDown")
         await waitForSelectedRow(session, "✗ verify — second run")
         await session.keyboard.type("G")
         await waitForSelectedRow(session, "●")
