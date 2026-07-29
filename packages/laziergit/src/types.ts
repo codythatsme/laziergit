@@ -189,6 +189,7 @@ export interface GitActivity {
 export interface GitState {
   readonly head: Head
   readonly branches: readonly Branch[]
+  readonly remoteBranches: readonly RemoteBranch[]
   readonly remotes: readonly Remote[]
   readonly tags: readonly Tag[]
   readonly status: WorkingTreeStatus
@@ -241,6 +242,13 @@ export interface Branch {
   readonly isHead: boolean
   readonly upstream: UpstreamInfo | null
   readonly lastCommit: CommitSummary
+}
+
+export interface RemoteBranch {
+  /** Branch name without the remote prefix. */
+  readonly name: string
+  readonly remote: string
+  readonly oid: string
 }
 
 export interface CommitSummary {
@@ -488,6 +496,7 @@ export interface Theme {
 
 export interface MenuMap {
   "branches.actions": Branch
+  "remote-branches.actions": RemoteBranch
   "files.actions": FileChange
   "commits.actions": Commit
   "stash.actions": StashEntry
@@ -556,6 +565,7 @@ export interface Statusline<TName extends string = string> {
 
 export interface ExtensionApis {
   branches: BranchesApi
+  "remote-branches": RemoteBranchesApi
   files: FilesApi
   commits: CommitsApi
   stash: StashApi
@@ -583,6 +593,7 @@ export interface RowSource<Row> {
 }
 
 export type BranchesApi = RowSource<Branch>
+export type RemoteBranchesApi = RowSource<RemoteBranch>
 export type FilesApi = RowSource<FileChange>
 export type CommitsApi = RowSource<Commit>
 export type StashApi = RowSource<StashEntry>

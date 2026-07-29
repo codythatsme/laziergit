@@ -6,6 +6,7 @@ import type {
   FileChange,
   Head,
   Remote,
+  RemoteBranch,
   StashEntry,
   Tag,
   UpstreamInfo,
@@ -288,6 +289,31 @@ export function parseBranches(stdout: string, headBranch: string | null): readon
   // HEAD first, then most-recently-committed first, which `--sort` already gave us.
   const headIndex = branches.findIndex((branch) => branch.isHead)
   if (headIndex > 0) branches.unshift(...branches.splice(headIndex, 1))
+  return branches
+}
+
+// ---- remote branches ---------------------------------------------------------------
+
+export function parseRemoteBranches(stdout: string, remotes: readonly Remote[]): readonly RemoteBranch[] {
+  const remoteNames = remotes.map((remote) => remote.name).sort((left, right) => right.length - left.length)
+  const branches: RemoteBranch[] = []
+
+  for (const line of lines(stdout)) {
+    const separator = line.indexOf(" ")
+    if (separator < 1) continue
+    const oid = line.slice(0, separator)
+    const refname = line.slice(separator + 1)
+    const qualified = withoutPrefix(refname, "refs/remotes/")
+    if (qualified === refname) continue
+    const remote = remoteNames.find((name) => qualified.startsWith(`${name}/`))
+    if (remote === undefined) continue
+    const name = qualified.slice(remote.length + 1)
+    // `git show-ref` resolves symbolic refs, so the conventional remote HEAD must be
+    // recognized by name rather than by inspecting its target.
+    if (name.length === 0 || name === "HEAD") continue
+    branches.push({ name, remote, oid })
+  }
+
   return branches
 }
 

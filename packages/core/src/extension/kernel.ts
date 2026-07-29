@@ -393,6 +393,11 @@ export class ExtensionKernel {
       head: () => this.#emitCoreEvent("git.head.changed", { current: current.head, previous: previous.head }),
       branches: () =>
         this.#emitCoreEvent("git.branches.changed", { current: current.branches, previous: previous.branches }),
+      remoteBranches: () =>
+        this.#emitCoreEvent("git.remoteBranches.changed", {
+          current: current.remoteBranches,
+          previous: previous.remoteBranches,
+        }),
       remotes: () =>
         this.#emitCoreEvent("git.remotes.changed", { current: current.remotes, previous: previous.remotes }),
       tags: () => this.#emitCoreEvent("git.tags.changed", { current: current.tags, previous: previous.tags }),

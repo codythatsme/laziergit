@@ -81,8 +81,10 @@ or whitespace — costs nothing: only the values are compared.
 Ids nothing has registered are skipped, `focus` included. A Pane the Layout never mentions
 still appears — it lands wherever its Extension's `placement` hint asks (`column`, `order`,
 `tabWith`), which is the whole point of hints: config wins where it speaks, hints decide the
-rest. Omit `columns` and every Pane is placed by its hint, which is why `{ "focus": "files" }`
-alone is a valid Layout. Omit `layout` entirely and both apply.
+rest. When the repository has a configured remote, the `remote-branches` Pane uses
+`tabWith: "branches"`, so it automatically appears as a tab wherever the local Branches Pane
+is placed. Omit `columns` and every Pane is placed by its hint, which is why
+`{ "focus": "files" }` alone is a valid Layout. Omit `layout` entirely and both apply.
 
 ## `keybindings` — rebinding Commands
 
@@ -120,9 +122,10 @@ Every query-enabled list gets Commands under the prefix it passes to `useListCur
 | `.query.clear` | `escape` | Clear an applied filter or search |
 | `.query.next` / `.query.previous` | `n` / `shift+n` | Move between matches in a search-mode list; absent for filters |
 
-The Bundled Extension prefixes are `files`, `branches`, `commits`, and `stash`. Files,
-Branches, and Stash filter their rows live. Commits searches without removing history, so
-`j`/`k` still move through the commits around the match.
+The Bundled Extension prefixes are `files`, `branches`, `remote-branches.list`,
+`remote-branches.remotes`, `commits`, and `stash`. Files, Branches, both Remote branches
+views, and Stash filter their rows live. Commits searches without removing history, so `j`/`k`
+still move through the commits around the match.
 
 Core's own Commands, all rebindable:
 

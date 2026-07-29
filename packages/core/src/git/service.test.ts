@@ -208,6 +208,26 @@ it("tracks divergence from an upstream, and reports a branch with none as null",
   )
 })
 
+it("loads cached remote-tracking branches even when no local branch has that name", async () => {
+  const repo = await createSeededRepo()
+  await addOrigin(repo)
+  await repo.git("checkout", "--quiet", "-b", "remote-only")
+  await repo.write("remote.txt", "remote\n")
+  await repo.git("add", "remote.txt")
+  await repo.commit("remote work")
+  await repo.git("push", "--quiet", "origin", "remote-only")
+  await repo.git("checkout", "--quiet", "main")
+  await repo.git("branch", "-D", "remote-only")
+
+  const service = await open(repo.path)
+  expect(state(service).remoteBranches.map((branch) => `${branch.remote}/${branch.name}`)).toEqual(
+    expect.arrayContaining(["origin/main", "origin/remote-only"]),
+  )
+  expect(state(service).remoteBranches.find((branch) => branch.name === "remote-only")).toMatchObject({
+    remote: "origin",
+  })
+})
+
 it("tells an unborn HEAD apart from the branch it used to be indistinguishable from", async () => {
   const unborn = state(await open((await createTestRepo()).path)).head
   const born = state(await open((await createSeededRepo()).path)).head

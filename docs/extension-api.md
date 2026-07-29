@@ -569,6 +569,8 @@ tagged with the extension name, and routed to the log file / debug pane.
     readonly head: Head;
     /** Local branches, HEAD first, then most-recently-committed first. */
     readonly branches: readonly Branch[];
+    /** Cached remote-tracking branches. */
+    readonly remoteBranches: readonly RemoteBranch[];
     readonly remotes: readonly Remote[];
     readonly tags: readonly Tag[];
     readonly status: WorkingTreeStatus;
@@ -630,6 +632,13 @@ tagged with the extension name, and routed to the log file / debug pane.
     readonly isHead: boolean;
     readonly upstream: UpstreamInfo | null;
     readonly lastCommit: CommitSummary;
+  }
+
+  export interface RemoteBranch {
+    /** Branch name without the remote prefix. */
+    readonly name: string;
+    readonly remote: string;
+    readonly oid: string;
   }
 
   export interface CommitSummary {
@@ -1828,6 +1837,7 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
    */
   export interface ExtensionApis {
     branches: BranchesApi;
+    "remote-branches": RemoteBranchesApi;
     files: FilesApi;
     commits: CommitsApi;
     stash: StashApi;
@@ -1961,16 +1971,18 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
     useDecoration(row: Row): RowDecoration | undefined;
   }
 
-  // The seven Bundled Extensions are `files`, `branches`, `commits`, `stash`,
-  // `diff`, `commit-flow`, and `sync` (push/pull/fetch, and the repository
-  // itself). Every one of the seven declares an `.actions` menu id below — the
-  // universal splice seam. The four list extensions additionally export
-  // RowSource APIs; `diff` and `commit-flow` export the small APIs beneath.
+  // The eight Bundled Extensions are `files`, `branches`, `remote-branches`,
+  // `commits`, `stash`, `diff`, `commit-flow`, and `sync` (push/pull/fetch,
+  // and the repository itself). Every one of the eight declares an `.actions`
+  // menu id below — the universal splice seam. The five list extensions
+  // additionally export RowSource APIs; `diff` and `commit-flow` export the
+  // small APIs beneath.
   // `sync` exports no API: it has no rows and nothing to consume — its seam IS
   // its menu, and an ExtensionApis entry exists only where there is an API
   // worth calling.
 
   export type BranchesApi = RowSource<Branch>;
+  export type RemoteBranchesApi = RowSource<RemoteBranch>;
   export type FilesApi = RowSource<FileChange>;
   export type CommitsApi = RowSource<Commit>;
   export type StashApi = RowSource<StashEntry>;
@@ -2036,6 +2048,7 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
   // is fully typed out of the box:
   export interface MenuMap {
     "branches.actions": Branch;
+    "remote-branches.actions": RemoteBranch;
     "files.actions": FileChange;
     "commits.actions": Commit;
     "stash.actions": StashEntry;
