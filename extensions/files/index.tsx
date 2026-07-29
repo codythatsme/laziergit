@@ -611,8 +611,20 @@ export default defineExtension({
         () => (view === "tree" ? buildTree(status.files) : buildFlatList(status.files)),
         [status.files, view],
       )
-      const rows = useMemo(() => visibleRows(nodes, folds, threshold), [nodes, folds, threshold])
-      const cursor = useListCursor({ items: rows, idPrefix: "files", noun: "file" })
+      const sourceRows = useMemo(() => visibleRows(nodes, folds, threshold), [nodes, folds, threshold])
+      const cursor = useListCursor({
+        items: sourceRows,
+        idPrefix: "files",
+        noun: "file",
+        query: {
+          mode: "filter",
+          fields: (row) =>
+            filesUnder(row.node).flatMap((change) =>
+              change.previousPath === null ? [change.path] : [change.path, change.previousPath],
+            ),
+        },
+      })
+      const rows = cursor.items
 
       /**
        * The cursor follows the node it was on, not the index: collapsing a directory above the
@@ -719,6 +731,7 @@ export default defineExtension({
 
       // Measured on the file count, not the row count: they differ once something is folded.
       if (status.files.length === 0) return <text fg={theme.textMuted} content="working tree clean" />
+      if (rows.length === 0) return <text fg={theme.textMuted} content="no matching files" />
 
       return (
         // Not focusable: OpenTUI has a single focus slot, and laziergit's own focus model
@@ -726,24 +739,24 @@ export default defineExtension({
         // `flexBasis={0}` sizes the box to the Pane rather than to its content, so a long list
         // scrolls instead of overflowing the frame.
         <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
-          {rows.map((row) =>
+          {rows.map((row, rowIndex) =>
             row.node.kind === "file" ? (
               <FileLine
                 key={row.node.path}
-                id={cursor.rowId(row.index)}
+                id={cursor.rowId(rowIndex)}
                 node={row.node}
                 depth={row.depth}
-                selected={row.index === index}
+                selected={rowIndex === index}
                 focused={focused}
               />
             ) : (
               <DirectoryLine
                 key={row.node.path}
-                id={cursor.rowId(row.index)}
+                id={cursor.rowId(rowIndex)}
                 node={row.node}
                 depth={row.depth}
                 folded={isFolded(row.node, folds, threshold)}
-                selected={row.index === index}
+                selected={rowIndex === index}
                 focused={focused}
               />
             ),

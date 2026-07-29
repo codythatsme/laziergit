@@ -1,7 +1,8 @@
 import { PaneRuntimeContext, RuntimeContext } from "@laziergit/runtime-bridge"
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 
-import type { HostRuntime, PaneRuntime } from "./host"
+import type { HostListQueryRegistration, HostListQueryState, HostRuntime, PaneRuntime } from "./host"
+import { filterMatchIndices, searchMatchIndices } from "./list-query"
 import type { Cell, CommandSpec, EventMap, GitActivity, GitState, Theme } from "./types"
 
 // The bridge's contexts carry `unknown`, so this file is where they become typed — parsed
@@ -22,6 +23,7 @@ function isHostRuntime(value: unknown): value is HostRuntime {
     hasMethods(value.events, ["subscribe"]) &&
     hasMethods(value.commands, ["registerComponent"]) &&
     hasMethods(value.keys, ["capture"]) &&
+    hasMethods(value.listQuery, ["register"]) &&
     hasMethods(value.theme, ["getSnapshot", "subscribe"])
   )
 }
@@ -129,19 +131,24 @@ export function useEvent<K extends keyof EventMap & string>(
  * resolution, which is insertion-ordered, letting a recomputed title take a key from another
  * Pane mid-session. A Command whose identity changes should change its `id`.
  */
-export function useCommand(spec: Omit<CommandSpec, "pane">): void {
+function useOptionalCommand(spec: Omit<CommandSpec, "pane"> | null): void {
   const runtime = useRuntime()
   const pane = useEnclosingPane("useCommand")
   const latest = useRef(spec)
   latest.current = spec
 
   useEffect(() => {
+    if (latest.current === null) return
     const registered = runtime.commands.registerComponent(pane.extension, pane.paneId, {
       ...latest.current,
-      run: () => latest.current.run(),
+      run: () => latest.current?.run(),
     })
     return () => registered.dispose()
-  }, [pane.extension, pane.paneId, runtime, spec.id])
+  }, [pane.extension, pane.paneId, runtime, spec?.id])
+}
+
+export function useCommand(spec: Omit<CommandSpec, "pane">): void {
+  useOptionalCommand(spec)
 }
 
 /**
@@ -244,13 +251,37 @@ export interface ListCursorOptions<T> {
   idPrefix: string
   /** Singular noun for the cheat-sheet titles, e.g. `"file"` → "Next file". */
   noun: string
+  /**
+   * Optional `/` query behavior. A filter projects the list live; a search retains every row
+   * and moves among matches with `n` / `N`.
+   */
+  query?: ListQueryOptions<T>
+}
+
+export interface ListQueryOptions<T> {
+  readonly mode: "filter" | "search"
+  /** Complete searchable values, including text a clipped row does not draw. */
+  readonly fields: (item: T) => string | readonly string[]
+}
+
+export interface ListQuery {
+  readonly mode: "filter" | "search"
+  readonly value: string
+  readonly editing: boolean
+  readonly matchCount: number
+  /** Zero-based search match position; null for filters and searches with no matches. */
+  readonly currentMatch: number | null
+  clear(): void
 }
 
 /** A cursor over a list, and the row it points at. */
 export interface ListCursor<T> {
+  /** The rows to render: projected matches for a filter, the source rows for a search. */
+  readonly items: readonly T[]
   /** Always in range: 0 while the list is empty, never past its end. */
   readonly index: number
   readonly selected: T | undefined
+  readonly query: ListQuery | undefined
   /** Move the cursor (clicking a row, or jumping to a row your Extension just created). */
   setIndex(index: number): void
   /**
@@ -285,20 +316,291 @@ export interface ListCursor<T> {
  * Half-page motions are left out: a Pane that wants them measures with
  * {@link ScrollView.viewportRows} and moves with {@link ListCursor.setIndex}.
  */
-export function useListCursor<T>({ items, idPrefix, noun }: ListCursorOptions<T>): ListCursor<T> {
+interface QueryState {
+  readonly applied: string
+  readonly draft: string
+  readonly editing: boolean
+  readonly searchPosition: number
+}
+
+const emptyQueryState: QueryState = { applied: "", draft: "", editing: false, searchPosition: 0 }
+
+function firstMatchAfter(matches: readonly number[], index: number): number {
+  const after = matches.findIndex((candidate) => candidate > index)
+  return after === -1 ? 0 : after
+}
+
+function nearestMatch(matches: readonly number[], index: number): number {
+  let nearest = 0
+  for (const [position, match] of matches.entries()) {
+    if (match === index) return position
+    if (match > index) break
+    nearest = position
+  }
+  return nearest
+}
+
+export function useListCursor<T>({ items, idPrefix, noun, query: queryOptions }: ListCursorOptions<T>): ListCursor<T> {
+  const runtime = useRuntime()
+  const pane = useEnclosingPane("useListCursor")
   const [requested, setRequested] = useState(0)
+  const [queryState, setQueryState] = useState<QueryState>(emptyQueryState)
   const surface = useRef<ScrollSurface | null>(null)
-  const last = items.length - 1
+  const mode = queryOptions?.mode
+  const fields = queryOptions?.fields
+  const filterIndices = useMemo(
+    () =>
+      mode === "filter" && fields && queryState.applied.length > 0
+        ? filterMatchIndices(items, queryState.applied, fields)
+        : undefined,
+    [fields, items, mode, queryState.applied],
+  )
+  const searchIndices = useMemo(
+    () =>
+      mode === "search" && fields && queryState.applied.length > 0
+        ? searchMatchIndices(items, queryState.applied, fields)
+        : [],
+    [fields, items, mode, queryState.applied],
+  )
+  const visibleItems = useMemo(
+    () => (filterIndices === undefined ? items : filterIndices.flatMap((source) => items[source] ?? [])),
+    [filterIndices, items],
+  )
+  const last = visibleItems.length - 1
   // Clamped on read, so the render where the list shrank already draws a valid cursor.
   const index = last < 0 ? 0 : Math.min(Math.max(requested, 0), last)
+  const searchPosition =
+    searchIndices.length === 0 ? 0 : Math.min(Math.max(queryState.searchPosition, 0), searchIndices.length - 1)
+  const currentSearchMatch = searchIndices[searchPosition]
+
+  const request = useCallback((next: number) => {
+    setRequested(next)
+  }, [])
 
   // ...and written back, or the clamp would resurrect the old position once the list grew
   // again. Revealing rides along here because this effect runs on exactly the renders that can
   // move the cursor out of the viewport: a keypress, and a clamp.
   useEffect(() => {
-    if (requested !== index) setRequested(index)
+    if (requested !== index) request(index)
     surface.current?.scrollChildIntoView(`${idPrefix}.row.${index}`)
-  }, [requested, index, idPrefix])
+  }, [requested, index, idPrefix, request])
+
+  const latest = useRef({
+    items,
+    visibleItems,
+    filterIndices,
+    searchIndices,
+    currentSearchMatch,
+    index,
+    queryState,
+    mode,
+    fields,
+  })
+  latest.current = {
+    items,
+    visibleItems,
+    filterIndices,
+    searchIndices,
+    currentSearchMatch,
+    index,
+    queryState,
+    mode,
+    fields,
+  }
+
+  const updateQueryState = useCallback((next: QueryState) => {
+    latest.current = { ...latest.current, queryState: next }
+    setQueryState(next)
+  }, [])
+
+  // Lazygit advances the active search position as ordinary cursor movement crosses matches.
+  // This makes `n` / `N` continue from the cursor's neighbourhood rather than from the commit
+  // the original search happened to land on.
+  useEffect(() => {
+    if (mode !== "search" || searchIndices.length === 0) return
+    const nearest = nearestMatch(searchIndices, index)
+    if (nearest === searchPosition) return
+    updateQueryState({ ...queryState, searchPosition: nearest })
+  }, [index, mode, queryState, searchIndices, searchPosition, updateQueryState])
+
+  const clearQuery = useCallback(() => {
+    const current = latest.current
+    const sourceIndex = current.filterIndices?.[current.index] ?? current.index
+    request(sourceIndex)
+    updateQueryState(emptyQueryState)
+  }, [request, updateQueryState])
+
+  const inputQuery = useCallback(
+    (value: string) => {
+      const current = latest.current
+      if (current.mode === "filter") {
+        request(0)
+        updateQueryState({ applied: value, draft: value, editing: true, searchPosition: 0 })
+        return
+      }
+      updateQueryState({ ...current.queryState, draft: value, editing: true })
+    },
+    [request, updateQueryState],
+  )
+
+  const openQuery = useCallback(() => {
+    const current = latest.current
+    if (current.mode === "filter") {
+      request(0)
+      updateQueryState({ applied: "", draft: "", editing: true, searchPosition: 0 })
+      return
+    }
+    updateQueryState({ ...current.queryState, draft: "", editing: true })
+  }, [request, updateQueryState])
+
+  const acceptQuery = useCallback(() => {
+    const current = latest.current
+    const value = current.queryState.draft
+    if (value.length === 0 || current.mode === undefined || current.fields === undefined) {
+      clearQuery()
+      return
+    }
+    if (current.mode === "filter") {
+      updateQueryState({ applied: value, draft: value, editing: false, searchPosition: 0 })
+      return
+    }
+
+    const matches = searchMatchIndices(current.items, value, current.fields)
+    const position = matches.length === 0 ? 0 : firstMatchAfter(matches, current.index)
+    const target = matches[position]
+    if (target !== undefined) request(target)
+    updateQueryState({ applied: value, draft: value, editing: false, searchPosition: position })
+  }, [clearQuery, request, updateQueryState])
+
+  const moveSearch = useCallback(
+    (delta: -1 | 1) => {
+      const current = latest.current
+      const matches = current.searchIndices
+      if (matches.length === 0) return
+      const position = Math.min(Math.max(current.queryState.searchPosition, 0), matches.length - 1)
+      const match = matches[position]
+      if (match === undefined) return
+
+      if ((delta > 0 && current.index < match) || (delta < 0 && current.index > match)) {
+        request(match)
+        return
+      }
+
+      const next = (position + delta + matches.length) % matches.length
+      const target = matches[next]
+      if (target === undefined) return
+      request(target)
+      updateQueryState({ ...current.queryState, searchPosition: next })
+    },
+    [request, updateQueryState],
+  )
+
+  useKeyCapture(queryOptions !== undefined && queryState.editing)
+
+  useOptionalCommand(
+    queryOptions
+      ? {
+          id: `${idPrefix}.query.open`,
+          title: `${queryOptions.mode === "filter" ? "Filter" : "Search"} this ${noun} list`,
+          hint: queryOptions.mode,
+          keys: "/",
+          run: openQuery,
+        }
+      : null,
+  )
+  useOptionalCommand(
+    queryOptions
+      ? {
+          id: `${idPrefix}.query.accept`,
+          title: `Apply ${queryOptions.mode}`,
+          keys: "return",
+          capture: true,
+          hidden: true,
+          run: acceptQuery,
+        }
+      : null,
+  )
+  useOptionalCommand(
+    queryOptions
+      ? {
+          id: `${idPrefix}.query.cancel`,
+          title: `Cancel ${queryOptions.mode}`,
+          keys: "escape",
+          capture: true,
+          hidden: true,
+          run: clearQuery,
+        }
+      : null,
+  )
+  useOptionalCommand(
+    queryOptions && !queryState.editing && queryState.applied.length > 0
+      ? {
+          id: `${idPrefix}.query.clear`,
+          title: `Clear ${queryOptions.mode}`,
+          keys: "escape",
+          hidden: true,
+          run: clearQuery,
+        }
+      : null,
+  )
+  useOptionalCommand(
+    mode === "search" && !queryState.editing && queryState.applied.length > 0
+      ? {
+          id: `${idPrefix}.query.next`,
+          title: `Next matching ${noun}`,
+          keys: "n",
+          hidden: true,
+          run: () => moveSearch(1),
+        }
+      : null,
+  )
+  useOptionalCommand(
+    mode === "search" && !queryState.editing && queryState.applied.length > 0
+      ? {
+          id: `${idPrefix}.query.previous`,
+          title: `Previous matching ${noun}`,
+          keys: "shift+n",
+          hidden: true,
+          run: () => moveSearch(-1),
+        }
+      : null,
+  )
+
+  const hostState: HostListQueryState = {
+    mode: mode ?? "filter",
+    value: queryState.editing ? queryState.draft : queryState.applied,
+    editing: queryState.editing,
+    matchCount: mode === "search" ? searchIndices.length : visibleItems.length,
+    totalCount: items.length,
+    currentMatch:
+      mode === "search"
+        ? currentSearchMatch === undefined
+          ? null
+          : searchPosition
+        : visibleItems.length === 0
+          ? null
+          : index,
+  }
+  const queryRegistration = useRef<HostListQueryRegistration | null>(null)
+  useEffect(() => {
+    if (queryOptions === undefined) return
+    const registration = runtime.listQuery.register(pane.paneId, idPrefix, inputQuery, hostState)
+    queryRegistration.current = registration
+    return () => {
+      if (queryRegistration.current === registration) queryRegistration.current = null
+      registration.dispose()
+    }
+  }, [idPrefix, inputQuery, pane.paneId, queryOptions === undefined, runtime])
+  useEffect(() => {
+    queryRegistration.current?.update(hostState)
+  }, [
+    hostState.currentMatch,
+    hostState.editing,
+    hostState.matchCount,
+    hostState.mode,
+    hostState.totalCount,
+    hostState.value,
+  ])
 
   // Each motion binds the vim key and its arrow/nav twin. A config rebind replaces the whole
   // list for that Command (§1.7), which is the way to get only one of the two.
@@ -307,21 +609,21 @@ export function useListCursor<T>({ items, idPrefix, noun }: ListCursorOptions<T>
     title: `Next ${noun}`,
     keys: ["j", "down"],
     hidden: true,
-    run: () => setRequested(Math.min(index + 1, Math.max(last, 0))),
+    run: () => request(Math.min(index + 1, Math.max(last, 0))),
   })
   useCommand({
     id: `${idPrefix}.cursor.up`,
     title: `Previous ${noun}`,
     keys: ["k", "up"],
     hidden: true,
-    run: () => setRequested(Math.max(index - 1, 0)),
+    run: () => request(Math.max(index - 1, 0)),
   })
   useCommand({
     id: `${idPrefix}.cursor.first`,
     title: `First ${noun}`,
     keys: ["g", "home"],
     hidden: true,
-    run: () => setRequested(0),
+    run: () => request(0),
   })
   useCommand({
     id: `${idPrefix}.cursor.last`,
@@ -329,16 +631,27 @@ export function useListCursor<T>({ items, idPrefix, noun }: ListCursorOptions<T>
     // `shift+g`, not `G`: the parser lowercases a bare letter, colliding with `g` above.
     keys: ["shift+g", "end"],
     hidden: true,
-    run: () => setRequested(Math.max(last, 0)),
+    run: () => request(Math.max(last, 0)),
   })
 
   const scrollRef = useCallback((node: ScrollSurface | null) => {
     surface.current = node
   }, [])
 
-  const setIndex = useCallback((next: number) => setRequested(next), [])
+  const setIndex = request
   const rowId = useCallback((row: number) => `${idPrefix}.row.${row}`, [idPrefix])
-  return { index, selected: items[index], setIndex, scrollRef, rowId }
+  const query =
+    queryOptions === undefined
+      ? undefined
+      : {
+          mode: queryOptions.mode,
+          value: queryState.applied,
+          editing: queryState.editing,
+          matchCount: hostState.matchCount,
+          currentMatch: mode === "search" && currentSearchMatch !== undefined ? searchPosition : null,
+          clear: clearQuery,
+        }
+  return { items: visibleItems, index, selected: visibleItems[index], query, setIndex, scrollRef, rowId }
 }
 
 export function createCell<T>(initial: T): Cell<T> {

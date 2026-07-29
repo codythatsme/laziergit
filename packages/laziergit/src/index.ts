@@ -16,6 +16,8 @@ export {
   useTheme,
   type ListCursor,
   type ListCursorOptions,
+  type ListQuery,
+  type ListQueryOptions,
   type ScrollSurface,
   type ScrollView,
 } from "./react"

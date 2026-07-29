@@ -267,10 +267,10 @@ export function filesUnder(node: TreeNode): readonly FileChange[] {
 export function rowIndexFor(rows: readonly VisibleRow[], path: string): number {
   let best = -1
   let bestLength = -1
-  for (const row of rows) {
-    if (row.node.path === path) return row.index
+  for (const [index, row] of rows.entries()) {
+    if (row.node.path === path) return index
     if (path.startsWith(`${row.node.path}/`) && row.node.path.length > bestLength) {
-      best = row.index
+      best = index
       bestLength = row.node.path.length
     }
   }

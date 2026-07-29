@@ -1,9 +1,11 @@
+import type { InputKeyBinding } from "@opentui/core"
 import { Slot } from "@opentui/react"
 import { usePendingSequence } from "@opentui/keymap/react"
 import { useTheme, type Theme } from "laziergit"
 
 import type { PaneHost } from "../extension/pane-host"
 import type { LiveBinding } from "./keybindings"
+import type { ListQueryHost, ListQuerySnapshot } from "./list-query-host"
 import type { NotificationHost, Toast } from "./notification-host"
 import { segmentSlotName } from "./slots"
 import type { StatusSegment, StatuslineHost } from "./statusline-host"
@@ -35,6 +37,10 @@ function Segments({ panes, segments }: { panes: PaneHost; segments: readonly Sta
 
 /** Between two hints, and wide enough to read as a gap rather than as punctuation. */
 const hintSeparator = "  ·  "
+const queryInputKeyBindings = [
+  { name: "backspace", super: true, action: "delete-to-line-start" },
+  { name: "delete", super: true, action: "delete-to-line-end" },
+] satisfies InputKeyBinding[]
 
 /**
  * What the focused Pane can do, in the keys that would do it. Only Commands whose author wrote
@@ -67,6 +73,39 @@ function HintBar({ keys }: { keys: ExternalStore<readonly LiveBinding[]> }) {
   )
 }
 
+function queryStatus(query: ListQuerySnapshot): string {
+  const escaped = query.value.replaceAll("'", "\\'")
+  if (query.mode === "filter") {
+    return `matches for '${escaped}' (${query.matchCount} of ${query.totalCount})  ·  escape clear`
+  }
+  const position = query.currentMatch === null ? 0 : query.currentMatch + 1
+  return `matches for '${escaped}' (${position} of ${query.matchCount})  ·  n next  ·  N previous  ·  escape clear`
+}
+
+function HintOrQuery({ host, keys }: { host: ListQueryHost; keys: ExternalStore<readonly LiveBinding[]> }) {
+  const theme = useTheme()
+  const query = useStore(host)
+  if (query === null) return <HintBar keys={keys} />
+
+  if (!query.editing) {
+    return <text wrapMode="none" content={queryStatus(query)} style={{ fg: theme.textMuted }} />
+  }
+
+  return (
+    <box flexDirection="row" flexGrow={1}>
+      <text content={query.mode === "filter" ? "Filter: " : "Search: "} style={{ fg: theme.accent }} />
+      <input
+        key={`${query.paneId}:${query.id}`}
+        focused
+        flexGrow={1}
+        value={query.value}
+        keyBindings={queryInputKeyBindings}
+        onInput={query.input}
+      />
+    </box>
+  )
+}
+
 /**
  * The bottom row: what you can press on the left, Extension-owned segments on the right. Core
  * adds the pending key sequence, because "what did I just press" is the one piece of state no
@@ -76,10 +115,12 @@ export function StatuslineView({
   statusline,
   panes,
   keys,
+  listQuery,
 }: {
   statusline: StatuslineHost
   panes: PaneHost
   keys: ExternalStore<readonly LiveBinding[]>
+  listQuery: ListQueryHost
 }) {
   const theme = useTheme()
   const segments = useStore(statusline)
@@ -90,8 +131,8 @@ export function StatuslineView({
     // the column every Pane row starts on. `gap={2}` keeps the two halves apart: `space-between`
     // alone lets a long hint run touch the branch name.
     <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={2} paddingRight={2} gap={2}>
-      <box flexDirection="row" gap={2} flexShrink={1}>
-        <HintBar keys={keys} />
+      <box flexDirection="row" gap={2} flexGrow={1} flexBasis={0}>
+        <HintOrQuery host={listQuery} keys={keys} />
         <Segments panes={panes} segments={segments.left} />
       </box>
       <box flexDirection="row" gap={2} flexShrink={0}>

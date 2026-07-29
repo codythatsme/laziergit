@@ -47,7 +47,12 @@ function AppShell({ kernel }: { kernel: ExtensionKernel }) {
           the Pane content column. */}
       <box flexGrow={1} flexDirection="column">
         <LayoutView layout={kernel.layout} panes={kernel.panes} fallback={<ExtensionStatusList kernel={kernel} />} />
-        <StatuslineView statusline={kernel.statusline} panes={kernel.panes} keys={kernel.keybindings} />
+        <StatuslineView
+          statusline={kernel.statusline}
+          panes={kernel.panes}
+          keys={kernel.keybindings}
+          listQuery={kernel.listQuery}
+        />
       </box>
       <ToastLayer notifications={kernel.notifications} />
       <PopupLayer popups={kernel.popups} />

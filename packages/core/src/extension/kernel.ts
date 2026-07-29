@@ -25,6 +25,7 @@ import {
 import { buildConfigSchema } from "../config/schema"
 import { LayoutHost } from "../ui/layout"
 import { installKeymap, KeybindingHost } from "../ui/keybindings"
+import { ListQueryHost } from "../ui/list-query-host"
 import { MenuHost } from "../ui/menu-host"
 import { NotificationHost } from "../ui/notification-host"
 import { PopupHost, type CheatSheetEntry, type CheatSheetSection } from "../ui/popup-host"
@@ -151,6 +152,7 @@ export class ExtensionKernel {
   readonly layout = new LayoutHost()
   readonly popups = new PopupHost()
   readonly notifications = new NotificationHost()
+  readonly listQuery = new ListQueryHost()
   readonly statusline: StatuslineHost
   readonly menus: MenuHost
   readonly events: EventHost
@@ -263,6 +265,9 @@ export class ExtensionKernel {
       keys: {
         capture: (paneId) => this.#captureKeys(paneId),
       },
+      listQuery: {
+        register: (paneId, id, input, initial) => this.listQuery.register(paneId, id, input, initial),
+      },
       theme: this.theme,
     }
 
@@ -271,6 +276,7 @@ export class ExtensionKernel {
     this.git.store.onPublish((publication) => this.#emitGitEvents(publication))
     this.layout.setFocusListener((paneId, previous) => {
       this.keybindings.setFocusedPane(paneId)
+      this.listQuery.setFocusedPane(paneId)
       if (paneId !== null) this.events.emit("app.pane.focused", { paneId, previous })
     })
     this.commands.subscribe(() => this.keybindings.sync(this.commands.getSnapshot()))

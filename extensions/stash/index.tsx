@@ -165,7 +165,16 @@ export default defineExtension({
       const theme = useTheme()
       const entries = useGit((state) => state.stash)
       const repository = useGit((state) => state.head.kind !== "noRepository")
-      const cursor = useListCursor({ items: entries, idPrefix: "stash", noun: "stash" })
+      const cursor = useListCursor({
+        items: entries,
+        idPrefix: "stash",
+        noun: "stash",
+        query: {
+          mode: "filter",
+          fields: (entry) => [entry.message, entry.branch ?? ""],
+        },
+      })
+      const visibleEntries = cursor.items
       const selected = cursor.selected
 
       useEffect(() => {
@@ -220,12 +229,13 @@ export default defineExtension({
 
       if (!repository) return <text fg={theme.textMuted}>no repository here</text>
       if (entries.length === 0) return <text fg={theme.textMuted}>no stashes yet — s in the files Pane saves one</text>
+      if (visibleEntries.length === 0) return <text fg={theme.textMuted}>no matching stashes</text>
 
       return (
         // `flexBasis={0}` sizes the box to the Pane rather than to its content, so a long list
         // scrolls instead of overflowing the frame.
         <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
-          {entries.map((entry, index) => (
+          {visibleEntries.map((entry, index) => (
             // Keyed by ref rather than oid: identical content stashed twice is one object.
             <StashRow
               key={stashRef(entry)}

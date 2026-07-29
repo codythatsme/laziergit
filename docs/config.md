@@ -111,6 +111,19 @@ The files Pane's tree Commands, for reference — all rebindable the same way:
 | `files.toggle-view` | `` ` `` | Switch between the tree and a flat list of full paths |
 | `files.open` | `o` | Hand the row under the cursor to the OS opener. `e` is deliberately unbound: in lazygit it means *edit in `$EDITOR`*, which needs a full-screen suspend laziergit does not have yet, and binding it to something else would teach the wrong half of the pair |
 
+Every query-enabled list gets Commands under the prefix it passes to `useListCursor`:
+
+| Command suffix | Default | |
+|---|---|---|
+| `.query.open` | `/` | Open that list's filter or search editor |
+| `.query.accept` / `.query.cancel` | `return` / `escape` | Apply or cancel while the editor captures the keyboard |
+| `.query.clear` | `escape` | Clear an applied filter or search |
+| `.query.next` / `.query.previous` | `n` / `shift+n` | Move between matches in a search-mode list; absent for filters |
+
+The Bundled Extension prefixes are `files`, `branches`, `commits`, and `stash`. Files,
+Branches, and Stash filter their rows live. Commits searches without removing history, so
+`j`/`k` still move through the commits around the match.
+
 Core's own Commands, all rebindable:
 
 | Command | Default | |

@@ -34,7 +34,12 @@ const rowsSource = `
 
       function RowsPane({ focused }: PaneProps) {
         const [items, setItems] = useState<readonly Row[]>([{ name: "one" }, { name: "two" }, { name: "three" }])
-        const cursor = useListCursor({ items, idPrefix: "rows", noun: "row" })
+        const cursor = useListCursor({
+          items,
+          idPrefix: "rows",
+          noun: "row",
+          query: { mode: "filter", fields: (row) => row.name },
+        })
 
         useEffect(() => {
           host.setSelected(cursor.selected)
@@ -50,7 +55,7 @@ const rowsSource = `
 
         return (
           <box flexDirection="column">
-            {items.map((row, index) => (
+            {cursor.items.map((row, index) => (
               <RowLine key={row.name} row={row} selected={index === cursor.index && focused} />
             ))}
             <text content={"cursor=" + cursor.index + " selected=" + (cursor.selected?.name ?? "none")} />
@@ -198,6 +203,123 @@ describe("useListCursor", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("r"))
 
     expect(frame(harness)).toContain("cursor=1 selected=two")
+  })
+
+  it("filters live under capture, keeps the filter on Enter, and preserves selection when cleared", async () => {
+    const harness = await createHarness()
+    await withExtensions(harness, { "rows.tsx": rowsSource })
+
+    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    expect(frame(harness)).toContain("Filter:")
+
+    // `s` is also the Pane's destructive shrink Command. Capture makes it query text only.
+    await press(harness, () => void harness.setup.mockInput.typeText("two"))
+    let rendered = frame(harness)
+    expect(rendered).toContain("two")
+    expect(rendered).not.toContain("one")
+    expect(rendered).not.toContain("three")
+    expect(rendered).toContain("cursor=0 selected=two")
+
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+    expect(frame(harness)).toContain("matches for 'two' (1 of 3)")
+
+    await press(harness, () => harness.setup.mockInput.pressEscape())
+    rendered = frame(harness)
+    expect(rendered).toContain("one")
+    expect(rendered).toContain("three")
+    expect(rendered).toContain("cursor=1 selected=two")
+    expect(rendered).not.toContain("matches for")
+  })
+
+  it("renders an honest empty filter and Escape cancels it", async () => {
+    const harness = await createHarness()
+    await withExtensions(harness, { "rows.tsx": rowsSource })
+
+    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, () => void harness.setup.mockInput.typeText("missing"))
+    expect(frame(harness)).toContain("cursor=0 selected=none")
+
+    await press(harness, () => harness.setup.mockInput.pressEscape())
+    expect(frame(harness)).toContain("cursor=0 selected=one")
+  })
+
+  it("applies text pasted in the same render tick as Enter", async () => {
+    const harness = await createHarness()
+    await withExtensions(harness, { "rows.tsx": rowsSource })
+
+    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, () => {
+      void harness.setup.mockInput.typeText("three")
+      harness.setup.mockInput.pressEnter()
+    })
+
+    const rendered = frame(harness)
+    expect(rendered).toContain("matches for 'three' (1 of 3)")
+    expect(rendered).toContain("cursor=0 selected=three")
+    expect(rendered).not.toContain("one")
+  })
+
+  it("searches without removing rows and cycles relative to ordinary cursor movement", async () => {
+    const harness = await createHarness()
+    const searchSource = rowsSource.replace('mode: "filter"', 'mode: "search"')
+    await withExtensions(harness, { "rows.tsx": searchSource })
+
+    await press(harness, () => harness.setup.mockInput.pressKey("j"))
+    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, () => void harness.setup.mockInput.typeText("e"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+
+    let rendered = frame(harness)
+    expect(rendered).toContain("one")
+    expect(rendered).toContain("two")
+    expect(rendered).toContain("three")
+    expect(rendered).toContain("cursor=2 selected=three")
+    expect(rendered).toContain("matches for 'e' (2 of 2)")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("n"))
+    expect(frame(harness)).toContain("cursor=0 selected=one")
+
+    // Move below the current match. Previous first returns to that match, matching lazygit,
+    // rather than skipping straight to the match at the other end of the list.
+    await press(harness, () => harness.setup.mockInput.pressKey("j"))
+    await press(harness, () => harness.setup.mockInput.pressKey("N"))
+    rendered = frame(harness)
+    expect(rendered).toContain("cursor=0 selected=one")
+    expect(rendered).toContain("matches for 'e' (1 of 2)")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("N"))
+    expect(frame(harness)).toContain("cursor=2 selected=three")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, () => {
+      void harness.setup.mockInput.typeText("missing")
+      harness.setup.mockInput.pressEnter()
+    })
+    rendered = frame(harness)
+    expect(rendered).toContain("matches for 'missing' (0 of 0)")
+    expect(rendered).toContain("cursor=2 selected=three")
+    expect(rendered).toContain("one")
+    expect(rendered).toContain("two")
+  })
+
+  it("continues search from the nearest match crossed by ordinary movement", async () => {
+    const harness = await createHarness()
+    const threeRows = '[{ name: "one" }, { name: "two" }, { name: "three" }]'
+    const fiveRows = '[{ name: "one" }, { name: "two" }, { name: "three" }, { name: "four" }, { name: "five" }]'
+    const searchSource = rowsSource.replaceAll(threeRows, fiveRows).replace('mode: "filter"', 'mode: "search"')
+    await withExtensions(harness, { "rows.tsx": searchSource })
+
+    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, () => void harness.setup.mockInput.typeText("o"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+    expect(frame(harness)).toContain("cursor=1 selected=two")
+
+    // Moving past `four` makes it the nearest search result. Previous returns there first;
+    // retaining the original landing at `two` would incorrectly jump all the way back to it.
+    await press(harness, () => harness.setup.mockInput.pressKey("G"))
+    await press(harness, () => harness.setup.mockInput.pressKey("N"))
+    expect(frame(harness)).toContain("cursor=3 selected=four")
+    expect(frame(harness)).toContain("matches for 'o' (3 of 3)")
   })
 })
 
