@@ -163,18 +163,26 @@ retints every Pane at once.
 
 | Preset | |
 |---|---|
-| `nocturne` | The default. Violet-black, three stacked surfaces. |
+| `nocturne` | The default. Violet accents over the terminal's native background. |
 | `midnight` | Cool blue-black — laziergit's original palette. |
 | `ember` | Warm dark: umber neutrals, apricot accent. |
 | `daybreak` | Light: warm paper, deep ink-jewel semantics. |
 | `beacon` | High contrast: pure black, white text, every semantic above 9:1. |
 
-Every shipped preset is held to contrast floors by test, not by eye: body text at 7:1 on both
-the background and the selected row, every semantic color and `textMuted` at 4.5:1, a focused
-border at least twice the strength of an unfocused one, and staged-green separated from
-unstaged-red in *luminance* as well as hue — because the files Pane draws those two columns
-side by side, and hue alone is not readable to everyone. Overriding a token is not checked
-against any of that; the floors govern what laziergit ships, not what you choose.
+The default `nocturne` canvas is transparent, so terminal opacity, wallpaper, and profile
+colors remain visible. Set `theme.background` to a color such as `"#0b0b12"` to request a
+solid canvas instead.
+
+Every known surface in a shipped preset is held to contrast floors by test, not by eye. Solid
+canvases keep body text at 7:1 and semantic colors at 4.5:1; the transparent default keeps the
+same guarantees on its selected rows and raised panel. Staged-green is also separated from
+unstaged-red in *luminance* as well as hue, because the files Pane draws those two columns
+side by side and hue alone is not readable to everyone.
+
+No palette can guarantee contrast against an arbitrary native terminal background:
+`nocturne` expects a dark terminal profile. On a light profile, use `daybreak` with
+`"background": "transparent"`. Overriding a token is not checked against the shipped floors;
+they govern what laziergit ships, not what you choose.
 
 ## `git` — how the repository is watched
 
