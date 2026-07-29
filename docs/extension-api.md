@@ -1599,6 +1599,7 @@ positional jump cannot.
     readonly warning: string;
     readonly danger: string;
     readonly info: string;
+    /** The Layout canvas. `"transparent"` preserves the terminal's native background. */
     readonly background: string;
     readonly backgroundPanel: string;
     readonly border: string;
