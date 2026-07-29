@@ -10,6 +10,7 @@ import { App } from "./app"
 import { defaultExtensionDirectories } from "./extension/discovery"
 import { ExtensionKernel } from "./extension/kernel"
 import { discoverRepository } from "./git/repository"
+import { createMacModifierReader, enableLegacyModifiedKeys, recoverModifiedBackspace } from "./terminal-keyboard"
 
 /**
  * Bundled Extensions ship next to core inside the installation, so they are located relative
@@ -29,6 +30,7 @@ export async function main() {
   let renderer: Awaited<ReturnType<typeof createCliRenderer>> | undefined
   let terminalControl: ReturnType<typeof provideTerminalControl> | undefined
   let kernel: ExtensionKernel | undefined
+  const macModifiers = await createMacModifierReader()
   let rendererDestroyed = false
   let resolveRendererDestroyed: () => void = () => undefined
   const rendererDestruction = new Promise<void>((resolve) => {
@@ -38,15 +40,28 @@ export async function main() {
   try {
     renderer = await createCliRenderer({
       exitOnCtrlC: true,
+      // Match Pi's three requested Kitty enhancements. Its working Warp path differs from
+      // OpenTUI's default only by event reporting, so keep the negotiation equivalent here.
+      useKittyKeyboard: { events: true },
+      prependInputHandlers: [
+        (sequence) =>
+          renderer?.capabilities?.remote === true
+            ? false
+            : recoverModifiedBackspace(sequence, macModifiers, renderer?.keyInput),
+      ],
       // laziergit owns focus policy: a click must not move focus out from under a popup.
       autoFocus: false,
       onDestroy() {
+        macModifiers.close()
         terminalControl?.close()
         rendererDestroyed = true
         resolveRendererDestroyed()
       },
     })
     const activeRenderer = renderer
+    // OpenTUI starts at modifyOtherKeys level 1. Match Pi's level-2 fallback until a Kitty
+    // response arrives; if one does, OpenTUI disables this mode before pushing Kitty flags.
+    enableLegacyModifiedKeys(activeRenderer.capabilities, (sequence) => process.stdout.write(sequence))
     terminalControl = provideTerminalControl(activeRenderer, {
       application: { name: "laziergit", version: "0.0.0" },
     })
@@ -80,6 +95,7 @@ export async function main() {
     try {
       await kernel?.stop()
     } finally {
+      macModifiers.close()
       if (renderer && !rendererDestroyed) renderer.destroy()
       if (renderer) await rendererDestruction
     }
