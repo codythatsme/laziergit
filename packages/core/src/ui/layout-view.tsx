@@ -1,4 +1,4 @@
-import type { PluginErrorEvent } from "@opentui/core"
+import { MouseButton, type PluginErrorEvent } from "@opentui/core"
 import { Slot } from "@opentui/react"
 import type { ReactNode } from "react"
 import { useTheme, type Theme } from "laziergit"
@@ -26,6 +26,7 @@ function cellTitle(entries: readonly PaneEntry[], activeId: string): string {
 
 function PaneFrame({
   cell,
+  layout,
   panes,
   entries,
   activeId,
@@ -33,6 +34,7 @@ function PaneFrame({
   theme,
 }: {
   cell: ResolvedCell
+  layout: LayoutHost
   panes: PaneHost
   entries: readonly PaneEntry[]
   activeId: string
@@ -54,6 +56,9 @@ function PaneFrame({
       titleColor={focused ? theme.accent : theme.textMuted}
       paddingLeft={1}
       paddingRight={1}
+      onMouseDown={(event) => {
+        if (event.button === MouseButton.LEFT) layout.focus(active.id)
+      }}
     >
       {active.state === "reloading" ? (
         // Top-left and muted, in the slot the Pane's first row just vacated: centring it made
@@ -124,6 +129,7 @@ export function LayoutView({ layout, panes, fallback }: { layout: LayoutHost; pa
               <PaneFrame
                 key={cell.key}
                 cell={cell}
+                layout={layout}
                 panes={panes}
                 entries={entries}
                 activeId={activeId}

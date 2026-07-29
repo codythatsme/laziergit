@@ -369,11 +369,13 @@ export default defineExtension({
       id,
       selected,
       focused,
+      onSelect,
     }: {
       readonly branch: Branch
       readonly id: string
       readonly selected: boolean
       readonly focused: boolean
+      readonly onSelect: () => void
     }) {
       const theme = useTheme()
       const decoration = rows.useDecoration(branch)
@@ -382,7 +384,7 @@ export default defineExtension({
       const badge = decoration?.badge
 
       return (
-        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
+        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined} onMouseDown={onSelect}>
           <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "*" : " "}</span>
           <span fg={nameColor(branch, theme, dim)}>{` ${branch.name}`}</span>
           {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}
@@ -484,6 +486,7 @@ export default defineExtension({
               branch={branch}
               selected={index === cursor.index}
               focused={focused}
+              onSelect={() => cursor.setIndex(index)}
             />
           ))}
         </scrollbox>

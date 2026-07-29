@@ -300,6 +300,7 @@ export default defineExtension({
                 id={cursor.rowId(i)}
                 wrapMode="none"
                 bg={selected && focused ? theme.selection : undefined}
+                onMouseDown={() => cursor.setIndex(i)}
               >
                 {/* The highlight is the whole of the cursor — no `❯` beside it. Every
                     bundled list Pane made the same trade: a marker said a second time what
