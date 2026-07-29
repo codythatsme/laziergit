@@ -27,6 +27,7 @@ function plural(count: number, noun: string): string {
 }
 
 type ResetMode = "soft" | "mixed" | "hard"
+type RewriteAction = "squash" | "drop" | "edit"
 
 /** Why there is no log to draw. All three read as zero rows and mean different things. */
 type EmptyReason = "noRepository" | "unborn" | "loaded"
@@ -36,13 +37,43 @@ function emptyReason(head: Head): EmptyReason {
   return head.kind === "unborn" ? "unborn" : "loaded"
 }
 
+/**
+ * Git runs a sequence editor as a shell command and appends the todo path. Keeping the
+ * transformer inside the Bun process avoids a platform-specific sed invocation.
+ */
+const sequenceEditorProgram = String.raw`
+const [oid, action, path] = Bun.argv.slice(1)
+const source = await Bun.file(path).text()
+let changed = false
+const lines = source.split("\n").map((line) => {
+  const parsed = /^(\s*)(pick|p)(\s+)([0-9a-f]+)(.*)$/.exec(line)
+  if (parsed === null || parsed[4] === undefined || !oid.startsWith(parsed[4])) return line
+  if (changed) throw new Error("Commit " + oid + " appears more than once in the rebase todo")
+  changed = true
+  return (parsed[1] ?? "") + action + (parsed[3] ?? " ") + parsed[4] + (parsed[5] ?? "")
+})
+if (!changed) throw new Error("Commit " + oid + " was not found in the rebase todo")
+await Bun.write(path, lines.join("\n"))
+`
+
+function shellWord(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'"
+}
+
+function bunCommand(program: string, args: readonly string[] = []): string {
+  return [process.execPath, "-e", program, "--", ...args].map(shellWord).join(" ")
+}
+
+const noOpEditor = bunCommand("void 0")
+
 export default defineExtension({
   name: "commits",
   description: "Commit log for the current branch",
-  needs: ["diff"],
+  needs: ["diff", "commit-flow"],
 
   activate(ctx): CommitsApi {
     const diff = ctx.extensions.get("diff")
+    const commitFlow = ctx.extensions.get("commit-flow")
     const rows = createRowSource<Commit>({ key: (row) => row.oid })
 
     function report(error: unknown): void {
@@ -108,6 +139,193 @@ export default defineExtension({
       )
     }
 
+    function firstParentChain(): readonly Commit[] {
+      const head = ctx.git.state.head
+      if (head.kind !== "onBranch") return []
+
+      const byOid = new Map(ctx.git.state.commits.map((commit) => [commit.oid, commit]))
+      const chain: Commit[] = []
+      let oid: string | undefined = head.oid
+      while (oid !== undefined) {
+        const commit = byOid.get(oid)
+        if (commit === undefined) break
+        chain.push(commit)
+        oid = commit.parents[0]
+      }
+      return chain
+    }
+
+    function canRewrite(commit: Commit): boolean {
+      return !isMerge(commit) && firstParentChain().some((candidate) => candidate.oid === commit.oid)
+    }
+
+    function canSquash(commit: Commit): boolean {
+      return canRewrite(commit) && commit.parents.length === 1
+    }
+
+    function canDrop(commit: Commit): boolean {
+      if (!canRewrite(commit)) return false
+      return commit.parents.length > 0 || firstParentChain().length > 1
+    }
+
+    async function refExists(ref: string): Promise<boolean> {
+      const output = await ctx.git.raw(["rev-parse", "--verify", "--quiet", ref], { allowFailure: true })
+      return output.exitCode === 0
+    }
+
+    async function rewriteReady(commit: Commit): Promise<boolean> {
+      if (!canRewrite(commit)) {
+        ctx.popups.notify("Only non-merge commits on the checked-out branch can be rewritten", "warning")
+        return false
+      }
+      if (!ctx.git.state.status.isClean) {
+        ctx.popups.notify("Commit rewrites need a clean working tree; stash or commit your changes first", "warning")
+        return false
+      }
+
+      const refs = ["REBASE_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] as const
+      if ((await Promise.all(refs.map(refExists))).some(Boolean)) {
+        ctx.popups.notify("Finish or abort the current Git operation before rewriting commits", "warning")
+        return false
+      }
+      return true
+    }
+
+    function editorEnv(commit: Commit, action: RewriteAction): Readonly<Record<string, string>> {
+      return {
+        GIT_EDITOR: noOpEditor,
+        GIT_SEQUENCE_EDITOR: bunCommand(sequenceEditorProgram, [commit.oid, action]),
+      }
+    }
+
+    function continueEnv(): Readonly<Record<string, string>> {
+      return { GIT_EDITOR: noOpEditor, GIT_SEQUENCE_EDITOR: noOpEditor }
+    }
+
+    async function parentsOf(oid: string): Promise<readonly string[]> {
+      const output = await ctx.git.raw(["show", "-s", "--format=%P", oid])
+      const parents = output.stdout.trim()
+      return parents.length === 0 ? [] : parents.split(" ")
+    }
+
+    async function rebaseBase(commit: Commit, action: RewriteAction): Promise<string | null> {
+      if (action !== "squash") return commit.parents[0] ?? null
+      const target = commit.parents[0]
+      if (target === undefined) return null
+      return (await parentsOf(target))[0] ?? null
+    }
+
+    async function beginRebase(commit: Commit, action: RewriteAction): Promise<void> {
+      const base = await rebaseBase(commit, action)
+      await ctx.git.raw(
+        [
+          "-c",
+          "rebase.updateRefs=false",
+          "rebase",
+          "--interactive",
+          "--keep-empty",
+          "--no-autosquash",
+          "--rebase-merges",
+          ...(base === null ? ["--root"] : [base]),
+        ],
+        { env: editorEnv(commit, action) },
+      )
+    }
+
+    async function headOid(): Promise<string | null> {
+      const output = await ctx.git.raw(["rev-parse", "--verify", "--quiet", "HEAD"], { allowFailure: true })
+      return output.exitCode === 0 ? output.stdout.trim() : null
+    }
+
+    async function reportRewriteFailure(error: unknown, originalHead: string): Promise<void> {
+      const ownsRebase = (await refExists("REBASE_HEAD")) || (await headOid()) !== originalHead
+      if (!ownsRebase) {
+        report(error)
+        return
+      }
+
+      const aborted = await ctx.git.raw(["rebase", "--abort"], {
+        allowFailure: true,
+        env: continueEnv(),
+      })
+      if (aborted.exitCode === 0) {
+        ctx.popups.notify(`Rewrite failed; original history restored.\n${describeGitFailure(error)}`, "error")
+        return
+      }
+      ctx.popups.notify(
+        `${describeGitFailure(error)}\nAutomatic rollback failed: ${aborted.stderr.trim() || "git rebase --abort failed"}`,
+        "error",
+      )
+    }
+
+    async function runRewrite(commit: Commit, action: Exclude<RewriteAction, "edit">, done: string): Promise<void> {
+      if (!(await rewriteReady(commit))) return
+      const head = ctx.git.state.head
+      if (head.kind !== "onBranch") return
+
+      try {
+        await beginRebase(commit, action)
+      } catch (error) {
+        await reportRewriteFailure(error, head.oid)
+        return
+      }
+      ctx.popups.notify(`${done}. Pushed history now needs force-with-lease`, "success")
+    }
+
+    async function fullMessage(commit: Commit): Promise<string> {
+      const output = await ctx.git.raw(["show", "-s", "--format=%B", commit.oid])
+      return output.stdout.replace(/\n+$/, "")
+    }
+
+    async function reword(commit: Commit): Promise<void> {
+      if (!(await rewriteReady(commit))) return
+      const head = ctx.git.state.head
+      if (head.kind !== "onBranch") return
+
+      let message: string
+      try {
+        message = await fullMessage(commit)
+      } catch (error) {
+        report(error)
+        return
+      }
+
+      const rebasing = commit.oid !== head.oid
+      if (rebasing) {
+        try {
+          await beginRebase(commit, "edit")
+        } catch (error) {
+          await reportRewriteFailure(error, head.oid)
+          return
+        }
+      }
+
+      const result = await commitFlow.begin({ message, amend: true, messageOnly: true })
+      if (result === "abandoned") {
+        if (rebasing) {
+          const aborted = await ctx.git.raw(["rebase", "--abort"], {
+            allowFailure: true,
+            env: continueEnv(),
+          })
+          ctx.popups.notify(
+            aborted.exitCode === 0 ? "Reword cancelled; original history restored" : "Reword cancelled; abort failed",
+            aborted.exitCode === 0 ? "info" : "error",
+          )
+        }
+        return
+      }
+
+      if (rebasing) {
+        try {
+          await ctx.git.raw(["rebase", "--continue"], { env: continueEnv() })
+        } catch (error) {
+          await reportRewriteFailure(error, head.oid)
+          return
+        }
+      }
+      ctx.popups.notify(`Reworded ${commit.shortOid}. Pushed history now needs force-with-lease`, "success")
+    }
+
     ctx.menus.register({
       id: "commits.actions",
       title: (commit) => `Commit ${commit.shortOid}`,
@@ -164,6 +382,60 @@ export default defineExtension({
               key: "y",
               label: "Copy the full oid",
               run: (commit) => attempt(`Copied ${commit.shortOid}`, () => ctx.copy(commit.oid)),
+            },
+          ],
+        },
+        {
+          id: "rewrite",
+          title: "Rewrite history",
+          items: [
+            {
+              key: "q",
+              label: "Squash into the parent commit",
+              when: canSquash,
+              run: async (commit) => {
+                const parent = commit.parents[0]
+                if (parent === undefined || !(await rewriteReady(commit))) return
+                if (
+                  !(await ctx.popups.confirm({
+                    title: "Squash commit",
+                    message:
+                      `${commit.shortOid} — ${commit.subject} will be folded into ${parent.slice(0, 7)}. ` +
+                      "It and every newer commit will get a new oid.",
+                    confirmLabel: "squash",
+                  }))
+                ) {
+                  return
+                }
+                await runRewrite(commit, "squash", `Squashed ${commit.shortOid} into ${parent.slice(0, 7)}`)
+              },
+            },
+            {
+              key: "r",
+              label: "Reword this commit",
+              when: canRewrite,
+              run: reword,
+            },
+            {
+              key: "d",
+              label: "Drop this commit",
+              when: canDrop,
+              run: async (commit) => {
+                if (!(await rewriteReady(commit))) return
+                if (
+                  !(await ctx.popups.confirm({
+                    title: "Drop commit",
+                    message:
+                      `${commit.shortOid} — ${commit.subject} will be removed and every newer commit replayed. ` +
+                      "The original history remains recoverable from the reflog.",
+                    confirmLabel: "drop",
+                    danger: true,
+                  }))
+                ) {
+                  return
+                }
+                await runRewrite(commit, "drop", `Dropped ${commit.shortOid}`)
+              },
             },
           ],
         },

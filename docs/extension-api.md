@@ -755,6 +755,11 @@ tagged with the extension name, and routed to the log file / debug pane.
     stdin?: string;
     /** Resolve with a nonzero-exit GitOutput instead of throwing {@link GitError}. */
     allowFailure?: boolean;
+    /**
+     * Operation-specific environment variables. Laziergit's non-interactive
+     * credential policy and C locale remain authoritative.
+     */
+    env?: Readonly<Record<string, string>>;
   }
 
   /**
@@ -914,7 +919,13 @@ tagged with the extension name, and routed to the log file / debug pane.
     /** Create a commit from the index. */
     commit(
       message: string,
-      opts?: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean },
+      opts?: {
+        amend?: boolean;
+        allowEmpty?: boolean;
+        signoff?: boolean;
+        /** Amend the message without including anything currently staged. */
+        messageOnly?: boolean;
+      },
     ): Promise<void>;
 
     /** Push HEAD (or `ref`). `force: "with-lease"` is the only force most extensions should use. */
@@ -2013,6 +2024,8 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
       message?: string;
       amend?: boolean;
       signoff?: boolean;
+      /** Amend only the message, leaving the current index out of the commit. */
+      messageOnly?: boolean;
     }): Promise<CommitFlowResult>;
   }
 

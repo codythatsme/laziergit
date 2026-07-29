@@ -45,6 +45,7 @@ interface CommitDraft {
   readonly initial: string
   readonly amend: boolean
   readonly signoff: boolean
+  readonly messageOnly: boolean
   /** Settles the promise `begin` handed its caller. Idempotent: a flow closes exactly once. */
   readonly close: (result: CommitFlowResult) => void
 }
@@ -55,6 +56,7 @@ interface OpenOptions {
   readonly message?: string
   readonly amend?: boolean
   readonly signoff?: boolean
+  readonly messageOnly?: boolean
 }
 
 function countLabel(count: number): string {
@@ -198,6 +200,7 @@ export default defineExtension({
           initial,
           amend,
           signoff: options.signoff === true,
+          messageOnly: options.messageOnly === true,
           close: (result) => {
             if (closed) return
             closed = true
@@ -234,7 +237,11 @@ export default defineExtension({
       }
 
       try {
-        await ctx.git.commit(message, { amend: draft.amend, signoff: draft.signoff })
+        await ctx.git.commit(message, {
+          amend: draft.amend,
+          signoff: draft.signoff,
+          messageOnly: draft.messageOnly,
+        })
       } catch (error) {
         ctx.popups.notify(describeGitFailure(error), "error")
         return
@@ -440,7 +447,13 @@ export default defineExtension({
     })
 
     return {
-      begin: (opts) => open({ message: opts?.message, amend: opts?.amend, signoff: opts?.signoff }),
+      begin: (opts) =>
+        open({
+          message: opts?.message,
+          amend: opts?.amend,
+          signoff: opts?.signoff,
+          messageOnly: opts?.messageOnly,
+        }),
     }
   },
 })
