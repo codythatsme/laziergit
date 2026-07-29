@@ -1,7 +1,8 @@
 import { expect, it } from "bun:test"
 import { option } from "laziergit"
 
-import { defaultTheme, findThemePreset } from "../extension/theme"
+import { defaultTheme, findThemePreset, themePresets } from "../extension/theme"
+import { buildThemeCatalog } from "../theme"
 import { loadConfig, resolveExtensionConfig, type ConfigDocument } from "./config"
 
 function documents(global: string | null, repo: string | null): readonly ConfigDocument[] {
@@ -9,6 +10,12 @@ function documents(global: string | null, repo: string | null): readonly ConfigD
     { path: "/global/config.jsonc", text: global },
     { path: "/repo/config.jsonc", text: repo },
   ]
+}
+
+function preset(name: string) {
+  const found = findThemePreset(name)
+  if (!found) throw new Error(`Missing test theme "${name}"`)
+  return found
 }
 
 it("merges repo settings over global ones, replacing arrays and merging objects", () => {
@@ -164,6 +171,56 @@ it("falls back to the default palette when the named preset does not exist", () 
   // A typo costs the user that field: the rest come from the default rather than nothing.
   expect(loaded.core.theme.accent).toBe("#123456")
   expect(loaded.core.theme.background).toBe(defaultTheme.background)
+})
+
+it("resolves discovered themes and follows an automatic dark/light selection", () => {
+  const catalog = buildThemeCatalog(themePresets, [
+    {
+      scope: "global",
+      path: "/themes/custom.json",
+      text: JSON.stringify({
+        name: "custom",
+        appearance: "dark",
+        extends: "nocturne",
+        tokens: { accent: "#123456" },
+      }),
+    },
+  ])
+  const source = documents(
+    `{ "theme": { "preset": { "dark": "custom", "light": "daybreak" }, "borderFocused": "#ABCDEF" } }`,
+    null,
+  )
+  const dark = loadConfig(source, { catalog, appearance: "dark" })
+  const light = loadConfig(source, { catalog, appearance: "light" })
+
+  expect(dark.problems).toEqual([])
+  expect(dark.core.theme.accent).toBe("#123456")
+  expect(dark.core.theme.borderFocused).toBe("#abcdef")
+  expect(light.core.theme.background).toBe(preset("daybreak").tokens.background)
+  expect(light.core.theme.borderFocused).toBe("#abcdef")
+  expect(dark.core.themeConfiguration.selection).toEqual({ dark: "custom", light: "daybreak" })
+})
+
+it("requires six-digit hex inline overrides and validates both sides of an automatic selection", () => {
+  const loaded = loadConfig(
+    documents(
+      `{ "theme": {
+        "preset": { "dark": "missing", "light": "daybreak", "extra": "ember" },
+        "accent": "#fff",
+        "danger": "red"
+      } }`,
+      null,
+    ),
+  )
+
+  expect(loaded.problems.map((problem) => problem.path)).toEqual([
+    "theme.preset.extra",
+    "theme.preset.dark",
+    "theme.accent",
+    "theme.danger",
+  ])
+  expect(loaded.core.theme.accent).toBe(defaultTheme.accent)
+  expect(loaded.core.themeConfiguration.selection).toEqual({ dark: "nocturne", light: "daybreak" })
 })
 
 it("reports a misspelled key in the Layout, in a Layout column, and in the status line", () => {

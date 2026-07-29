@@ -19,6 +19,7 @@
     "@opentui/keymap": "catalog:",
     "@opentui/react": "catalog:",
     "effect": "catalog:",
+    "jsonc-parser": "catalog:",
     "laziergit": "workspace:*",
     "react": "catalog:"
   },

@@ -2,27 +2,29 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { pathToFileURL } from "node:url"
 import { CliRenderEvents } from "@opentui/core"
-import type { CliRenderer, KeyEvent, PluginContext, Renderable } from "@opentui/core"
+import type { CliRenderer, KeyEvent, PluginContext, Renderable, TerminalColors, ThemeMode } from "@opentui/core"
 import type { Keymap } from "@opentui/keymap"
 import { registerLeader } from "@opentui/keymap/addons"
 import { createOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { createReactSlotRegistry } from "@opentui/react"
 import { assertExtensionDefinition } from "@laziergit/runtime-bridge"
 import type { HostRuntime } from "laziergit/host"
-import type { CommandSpec, Disposable, EventMap, Extension, GitState } from "laziergit"
+import type { CommandSpec, ConfigSchema, Disposable, EventMap, Extension, GitState } from "laziergit"
 
 import {
   defaultConfigFiles,
   emptyConfig,
   loadConfig,
   readConfigDocuments,
+  resolveThemeConfiguration,
   resolveExtensionConfig,
   type ConfigDocument,
   type ConfigFiles,
   type CoreConfig,
   type LoadedConfig,
 } from "../config/config"
-import { buildConfigSchema } from "../config/schema"
+import { writeThemeSelection } from "../config/theme-config-writer"
+import { buildConfigSchema, buildThemeDocumentSchema } from "../config/schema"
 import { LayoutHost } from "../ui/layout"
 import { installKeymap, KeybindingHost } from "../ui/keybindings"
 import { ListQueryHost } from "../ui/list-query-host"
@@ -54,8 +56,20 @@ import type { GitPublication } from "../git/store"
 import { ImportCopyCache, type ImportCopyLease } from "./import-copy-cache"
 import { createNotifier } from "./notifier"
 import { PaneHost } from "./pane-host"
-import { ThemeStore } from "./theme"
+import { defaultTheme, findThemePreset, themePresets, ThemeStore } from "./theme"
 import { publishTypeEnvironment } from "./type-environment"
+import {
+  buildThemeCatalog,
+  createSystemTheme,
+  defaultThemeDirectories,
+  loadThemeCatalog,
+  retainLastValidThemes,
+  themeFilesFingerprint,
+  type ThemeAppearance,
+  type ThemeCatalog,
+  type ThemeDirectories,
+  type ThemeSelection,
+} from "../theme"
 
 export type ExtensionLoadState = "loading" | "active" | "failed" | "shadowed"
 
@@ -88,6 +102,10 @@ export interface ExtensionKernelOptions {
    * lives wherever laziergit was installed, which only the caller can know.
    */
   readonly directories: ExtensionDirectories
+  /** Declarative Theme resources, independently watched from executable Extensions. */
+  readonly themeDirectories?: ThemeDirectories
+  /** Disable filesystem Theme resources for constrained embedders; bundled themes still work. */
+  readonly themeResources?: boolean
   readonly configFiles?: ConfigFiles
   readonly watch?: boolean
   /** How long to wait for edits to settle before acting on them. */
@@ -144,6 +162,12 @@ function cheatSheetEntries(entries: readonly CommandEntry[]): readonly CheatShee
   return entries.filter((entry) => entry.keys.length > 0).map((entry) => ({ keys: entry.keys, title: entry.title }))
 }
 
+interface ThemePickerEntry {
+  readonly label: string
+  readonly hint: string
+  readonly selection: ThemeSelection
+}
+
 export class ExtensionKernel {
   readonly diagnostics = new Diagnostics()
   readonly theme = new ThemeStore()
@@ -164,6 +188,8 @@ export class ExtensionKernel {
   readonly #repoRoot: string
   readonly #clipboardWriters: readonly ClipboardWriterSpec[] | undefined
   readonly #directories: ExtensionDirectories
+  readonly #themeDirectories: ThemeDirectories
+  readonly #themeResourcesEnabled: boolean
   /** Every Extension directory in precedence order; the search path, in one place. */
   readonly #searchPath: readonly string[]
   readonly #configFiles: ConfigFiles
@@ -180,6 +206,7 @@ export class ExtensionKernel {
   readonly #disposeSlotErrors: () => void
   readonly #importCopies: ImportCopyCache
   readonly #disposeKeymap: () => void
+  readonly #disposeThemeBackground: () => void
   /** Live `useKeyCapture` claims, most recent last — React unmounts in no particular order. */
   readonly #captureClaims: { readonly paneId: string }[] = []
   /** The `1`–`9` Commands, in the order they number the Layout. */
@@ -187,6 +214,11 @@ export class ExtensionKernel {
   /** What the live jump Commands were built from; re-registration is skipped while it holds. */
   #jumpSignature = ""
   #config: LoadedConfig = emptyConfig
+  #themeCatalog: ThemeCatalog = buildThemeCatalog(themePresets, [])
+  #appearance: ThemeAppearance
+  #systemTheme = defaultTheme
+  #paletteRefresh: Promise<void> | undefined
+  #paletteGeneration = 0
   #modalFocus: { readonly renderable: Renderable | null } | undefined
   #leader: string | undefined
   #disposeLeader: (() => void) | undefined
@@ -196,22 +228,32 @@ export class ExtensionKernel {
   #watchTimer: ReturnType<typeof setInterval> | undefined
   #watchTree = ""
   #watchConfig = ""
+  #watchThemes = ""
   #activatedTree = ""
+  #activatedThemes = ""
   #activatedSections = ""
   #watchScan: Promise<void> | undefined
   #reloadTail: Promise<void> = Promise.resolve()
   #stopPromise: Promise<void> | undefined
   #stopped = false
+  #schemaContributions: readonly {
+    readonly name: string
+    readonly description?: string
+    readonly config?: ConfigSchema
+  }[] = []
 
   constructor(options: ExtensionKernelOptions) {
     this.#repoRoot = options.repoRoot
     this.#directories = options.directories
+    this.#themeDirectories = options.themeDirectories ?? defaultThemeDirectories(options.repoRoot)
+    this.#themeResourcesEnabled = options.themeResources ?? true
     this.#searchPath = extensionScopePrecedence.map((scope) => this.#directories[scope])
     this.#configFiles = options.configFiles ?? defaultConfigFiles(options.repoRoot)
     this.#watchEnabled = options.watch ?? true
     this.#debounceMs = options.debounceMs ?? 80
     this.#pollMs = options.pollMs ?? 250
     this.#renderer = options.renderer
+    this.#appearance = options.renderer.themeMode ?? "dark"
     this.#onQuit = options.onQuit
     this.#clipboardWriters = options.clipboardWriters
 
@@ -271,6 +313,8 @@ export class ExtensionKernel {
       theme: this.theme,
     }
 
+    this.#disposeThemeBackground = this.theme.subscribe(() => this.#syncRendererBackground())
+    this.#syncRendererBackground()
     this.panes.subscribe(() => this.layout.setPanes(this.panes.getSnapshot()))
     this.layout.subscribe(() => this.#syncJumpKeys())
     this.git.store.onPublish((publication) => this.#emitGitEvents(publication))
@@ -298,7 +342,10 @@ export class ExtensionKernel {
   async start(): Promise<void> {
     // The bundled directory is absent on purpose: it ships inside the installation.
     const userDirectories = userWritableExtensionScopes.map((scope) => this.#directories[scope])
-    await Promise.all(userDirectories.map((directory) => mkdir(directory, { recursive: true })))
+    const writableDirectories = this.#themeResourcesEnabled
+      ? [...userDirectories, ...Object.values(this.#themeDirectories)]
+      : userDirectories
+    await Promise.all(writableDirectories.map((directory) => mkdir(directory, { recursive: true })))
     if (this.#stopped) return
 
     // Before the first fingerprint, so the files this writes are part of the tree the reload
@@ -319,11 +366,29 @@ export class ExtensionKernel {
     // Regaining focus is when the screen is most likely to be stale, and the worst moment to
     // wait out a poll interval.
     this.#renderer.on(CliRenderEvents.FOCUS, this.#refreshOnFocus)
+    this.#renderer.on(CliRenderEvents.THEME_MODE, this.#onThemeMode)
+    this.#renderer.on(CliRenderEvents.PALETTE, this.#onPalette)
+    if (this.#usesSystemTheme()) void this.#refreshSystemPalette()
     if (this.#watchEnabled) this.#startWatcher()
   }
 
   readonly #refreshOnFocus = (): void => {
     void this.git.refresh()
+  }
+
+  readonly #onThemeMode = (mode: ThemeMode): void => {
+    if (this.#stopped || mode === this.#appearance) return
+    this.#appearance = mode
+    this.#systemTheme = mode === "light" ? (findThemePreset("daybreak")?.tokens ?? defaultTheme) : defaultTheme
+    this.#refreshConfiguredTheme()
+    this.#renderer.clearPaletteCache()
+    if (this.#usesSystemTheme()) void this.#refreshSystemPalette()
+  }
+
+  readonly #onPalette = (colors: TerminalColors): void => {
+    if (this.#stopped) return
+    this.#systemTheme = createSystemTheme(colors, this.#appearance, this.#systemTheme)
+    if (this.#usesSystemTheme()) this.#refreshConfiguredTheme()
   }
 
   reload(): Promise<void> {
@@ -372,6 +437,86 @@ export class ExtensionKernel {
     if (entry) await this.commands.execute(entry.id)
   }
 
+  async openThemePicker(): Promise<void> {
+    const automaticPairs = [
+      ["Laziergit", "nocturne", "daybreak"],
+      ["Catppuccin", "catppuccin-mocha", "catppuccin-latte"],
+      ["Gruvbox", "gruvbox-dark", "gruvbox-light"],
+      ["Solarized", "solarized-dark", "solarized-light"],
+    ] as const
+    const entries: ThemePickerEntry[] = [
+      {
+        label: "system",
+        hint: "terminal palette · automatic",
+        selection: "system",
+      },
+      ...automaticPairs
+        .filter(([, dark, light]) => this.#themeCatalog.has(dark) && this.#themeCatalog.has(light))
+        .map(([label, dark, light]) => ({
+          label: `Automatic · ${label}`,
+          hint: `${dark} / ${light}`,
+          selection: { dark, light },
+        })),
+      ...this.#themeCatalog.list().map((entry) => ({
+        label: entry.name,
+        hint: `${entry.appearance ?? "any"} · ${entry.description}`,
+        selection: entry.name,
+      })),
+    ]
+    const previous = this.theme.getSnapshot()
+    const overrides = this.#config.core.themeConfiguration.overrides
+    const preview = (selection: ThemeSelection): void => {
+      this.theme.replace(resolveThemeConfiguration({ selection, overrides }, this.#themeOptions()))
+    }
+
+    const index = await this.popups.choose(coreOwner, {
+      title: "Theme",
+      placeholder: "Filter themes",
+      choices: entries,
+      onHighlight: (highlighted) => {
+        const entry = highlighted === undefined ? undefined : entries[highlighted]
+        if (entry) preview(entry.selection)
+        else this.theme.replace(previous)
+      },
+    }).promise
+    const picked = index === undefined ? undefined : entries[index]
+    if (!picked) {
+      this.theme.replace(previous)
+      return
+    }
+
+    // `choose` clears its temporary preview when it settles. Keep the selected palette visible
+    // while the user decides which layered config owns it.
+    preview(picked.selection)
+    const scope = await this.popups.choose(coreOwner, {
+      title: "Save theme",
+      choices: [
+        { label: "All repositories", hint: this.#configFiles.global },
+        { label: "This repository", hint: this.#configFiles.repo },
+      ],
+    }).promise
+    if (scope === undefined) {
+      this.theme.replace(previous)
+      return
+    }
+
+    const path = scope === 0 ? this.#configFiles.global : this.#configFiles.repo
+    try {
+      await writeThemeSelection(path, picked.selection)
+      await this.#applyChanges()
+      this.#notifier({
+        extension: coreOwner,
+        level: "success",
+        message: `Theme saved to ${scope === 0 ? "global" : "repository"} config`,
+      })
+    } catch (error) {
+      this.theme.replace(previous)
+      const normalized = normalizeError(error)
+      this.#diagnose({ phase: "config", message: `${path}: ${normalized.message}`, error: normalized })
+      this.#notifier({ extension: coreOwner, level: "error", message: `Could not save theme: ${normalized.message}` })
+    }
+  }
+
   openCheatSheet(): Promise<void> {
     const focused = this.layout.focusedPaneId
     const title = focused === null ? "Keybindings" : `Keybindings — ${focused}`
@@ -417,6 +562,7 @@ export class ExtensionKernel {
     // Never `mod+` (ADR-0004): a terminal that can report cmd is also free to keep it, and
     // Warp keeps cmd+p for its own palette.
     register({ id: "app.palette", title: "Command palette", keys: ["ctrl+p", ":"], run: () => this.openPalette() })
+    register({ id: "app.theme", title: "Choose theme", run: () => this.openThemePicker() })
     register({ id: "app.cheatsheet", title: "Keybindings", keys: "?", run: () => this.openCheatSheet() })
     register({ id: "app.focus.next", title: "Focus next pane", keys: "tab", run: () => this.layout.focusStep(1) })
     register({
@@ -561,6 +707,57 @@ export class ExtensionKernel {
     })
   }
 
+  #themeOptions() {
+    return {
+      catalog: this.#themeCatalog,
+      appearance: this.#appearance,
+      systemTheme: this.#systemTheme,
+    } as const
+  }
+
+  #usesSystemTheme(): boolean {
+    const selection = this.#config.core.themeConfiguration.selection
+    return typeof selection === "string" ? selection === "system" : selection[this.#appearance] === "system"
+  }
+
+  #refreshConfiguredTheme(): void {
+    this.theme.replace(resolveThemeConfiguration(this.#config.core.themeConfiguration, this.#themeOptions()))
+  }
+
+  #syncRendererBackground(): void {
+    try {
+      this.#renderer.setBackgroundColor(this.theme.getSnapshot().background)
+    } catch (error) {
+      const normalized = normalizeError(error)
+      this.#diagnose({
+        phase: "render",
+        message: `Applying renderer background: ${normalized.message}`,
+        error: normalized,
+      })
+    }
+  }
+
+  #refreshSystemPalette(): Promise<void> {
+    const generation = ++this.#paletteGeneration
+    const refresh = this.#renderer
+      .getPalette({ size: 16, timeout: 300 })
+      .then((colors) => {
+        if (this.#stopped || generation !== this.#paletteGeneration) return
+        this.#systemTheme = createSystemTheme(colors, this.#appearance, this.#systemTheme)
+        if (this.#usesSystemTheme()) this.#refreshConfiguredTheme()
+      })
+      .catch((error: unknown) => {
+        if (this.#stopped || generation !== this.#paletteGeneration) return
+        const normalized = normalizeError(error)
+        this.#diagnose({ phase: "config", message: `system theme: ${normalized.message}`, error: normalized })
+      })
+      .finally(() => {
+        if (this.#paletteRefresh === refresh) this.#paletteRefresh = undefined
+      })
+    this.#paletteRefresh = refresh
+    return refresh
+  }
+
   #applyCoreConfig(core: CoreConfig): void {
     this.theme.replace(core.theme)
     this.layout.setConfig(core.layout)
@@ -581,6 +778,31 @@ export class ExtensionKernel {
     }
   }
 
+  async #loadThemes(): Promise<void> {
+    let fingerprint = ""
+    try {
+      fingerprint = await themeFilesFingerprint(this.#themeDirectories)
+      const loaded = await loadThemeCatalog({
+        presets: themePresets,
+        directories: this.#themeDirectories,
+      })
+      this.#themeCatalog = retainLastValidThemes(this.#themeCatalog, loaded)
+    } catch (error) {
+      const normalized = normalizeError(error)
+      this.#diagnose({ phase: "config", message: `Loading themes: ${normalized.message}`, error: normalized })
+      this.#themeCatalog = buildThemeCatalog(themePresets, [])
+    }
+
+    this.#watchThemes = fingerprint
+    this.#activatedThemes = fingerprint
+    for (const diagnostic of this.#themeCatalog.diagnostics) {
+      this.#diagnose({
+        phase: "config",
+        message: `${diagnostic.path}${diagnostic.property ? ` (${diagnostic.property})` : ""}: ${diagnostic.message}`,
+      })
+    }
+  }
+
   async #loadConfig(): Promise<LoadedConfig> {
     let documents: readonly ConfigDocument[] = []
     try {
@@ -590,11 +812,12 @@ export class ExtensionKernel {
       this.#diagnose({ phase: "config", message: normalized.message, error: normalized })
     }
 
-    const loaded = loadConfig(documents)
+    const loaded = loadConfig(documents, this.#themeOptions())
     this.#config = loaded
     this.#watchConfig = documentFingerprint(documents)
     this.#activatedSections = sectionFingerprint(loaded)
     this.#applyCoreConfig(loaded.core)
+    if (this.#usesSystemTheme()) void this.#refreshSystemPalette()
     for (const problem of loaded.problems) {
       this.#diagnose({
         phase: "config",
@@ -626,6 +849,7 @@ export class ExtensionKernel {
       if (this.#stopped) return
 
       this.#publish(this.#snapshot.map((status) => ({ ...status, state: "loading" as const, message: undefined })))
+      if (this.#themeResourcesEnabled) await this.#loadThemes()
       await this.#loadConfig()
       // `ctx.git.state` is documented as always present, so the store loads before any
       // Extension activates. Idempotent, so a reload publishes no spurious change.
@@ -658,21 +882,40 @@ export class ExtensionKernel {
   }
 
   async #publishSchema(selected: ReadonlyMap<string, ImportedExtension>): Promise<void> {
-    const schema = buildConfigSchema(
-      [...selected.values()].map((item) => ({
-        name: item.extension.spec.name,
-        description: item.extension.spec.description,
-        config: item.extension.spec.config,
-      })),
+    this.#schemaContributions = [...selected.values()].map((item) => ({
+      name: item.extension.spec.name,
+      description: item.extension.spec.description,
+      config: item.extension.spec.config,
+    }))
+    await this.#publishSchemas()
+  }
+
+  async #publishSchemas(): Promise<void> {
+    const publications = [
+      {
+        path: `${dirname(this.#configFiles.global)}/config.schema.json`,
+        value: buildConfigSchema(this.#schemaContributions, this.#themeCatalog),
+      },
+      ...(this.#themeResourcesEnabled
+        ? [
+            {
+              path: `${dirname(this.#configFiles.global)}/theme.schema.json`,
+              value: buildThemeDocumentSchema(this.#themeCatalog),
+            },
+          ]
+        : []),
+    ]
+    await Promise.all(
+      publications.map(async ({ path, value }) => {
+        try {
+          await mkdir(dirname(path), { recursive: true })
+          await writeFile(path, `${JSON.stringify(value, null, 2)}\n`)
+        } catch (error) {
+          const normalized = normalizeError(error)
+          this.#diagnose({ phase: "config", message: `${path}: ${normalized.message}`, error: normalized })
+        }
+      }),
     )
-    const path = `${dirname(this.#configFiles.global)}/config.schema.json`
-    try {
-      await mkdir(dirname(path), { recursive: true })
-      await writeFile(path, `${JSON.stringify(schema, null, 2)}\n`)
-    } catch (error) {
-      const normalized = normalizeError(error)
-      this.#diagnose({ phase: "config", message: `${path}: ${normalized.message}`, error: normalized })
-    }
   }
 
   async #discover(directory: string, scope: ExtensionSourceScope): Promise<ExtensionDiscoveryResult> {
@@ -969,12 +1212,18 @@ export class ExtensionKernel {
 
   async #scanForChanges(): Promise<void> {
     try {
-      const [tree, documents] = await Promise.all([this.#treeFingerprint(), readConfigDocuments(this.#configFiles)])
+      const [tree, documents, themes] = await Promise.all([
+        this.#treeFingerprint(),
+        readConfigDocuments(this.#configFiles),
+        this.#themeResourcesEnabled ? themeFilesFingerprint(this.#themeDirectories) : Promise.resolve(""),
+      ])
       const config = documentFingerprint(documents)
-      if (this.#stopped || (tree === this.#watchTree && config === this.#watchConfig)) return
+      if (this.#stopped || (tree === this.#watchTree && config === this.#watchConfig && themes === this.#watchThemes))
+        return
 
       this.#watchTree = tree
       this.#watchConfig = config
+      this.#watchThemes = themes
       if (this.#reloadTimer) clearTimeout(this.#reloadTimer)
       if (this.#stopped) return
       this.#reloadTimer = setTimeout(() => {
@@ -994,8 +1243,17 @@ export class ExtensionKernel {
    */
   async #applyChanges(): Promise<void> {
     try {
-      const [tree, documents] = await Promise.all([this.#treeFingerprint(), readConfigDocuments(this.#configFiles)])
-      const loaded = loadConfig(documents)
+      const [tree, documents, themes] = await Promise.all([
+        this.#treeFingerprint(),
+        readConfigDocuments(this.#configFiles),
+        this.#themeResourcesEnabled ? themeFilesFingerprint(this.#themeDirectories) : Promise.resolve(""),
+      ])
+      const themesChanged = themes !== this.#activatedThemes
+      if (themesChanged) await this.#loadThemes()
+      const loaded = loadConfig(documents, this.#themeOptions())
+      this.#watchTree = tree
+      this.#watchConfig = documentFingerprint(documents)
+      this.#watchThemes = themes
       if (tree !== this.#activatedTree || sectionFingerprint(loaded) !== this.#activatedSections) {
         await this.reload()
         return
@@ -1003,6 +1261,8 @@ export class ExtensionKernel {
 
       this.#config = loaded
       this.#applyCoreConfig(loaded.core)
+      if (this.#usesSystemTheme()) void this.#refreshSystemPalette()
+      if (themesChanged) await this.#publishSchemas()
       for (const problem of loaded.problems) {
         this.#diagnose({
           phase: "config",
@@ -1023,6 +1283,9 @@ export class ExtensionKernel {
     })
     await this.#attemptShutdown("reload queue", async () => {
       await this.#reloadTail
+    })
+    await this.#attemptShutdown("terminal palette query", async () => {
+      await this.#paletteRefresh
     })
     await this.#attemptShutdown("Extension deactivation", async () => {
       await this.#deactivateAll("quit")
@@ -1053,6 +1316,9 @@ export class ExtensionKernel {
     })
     await this.#attemptShutdown("focus listener cleanup", () => {
       this.#renderer.off(CliRenderEvents.FOCUS, this.#refreshOnFocus)
+      this.#renderer.off(CliRenderEvents.THEME_MODE, this.#onThemeMode)
+      this.#renderer.off(CliRenderEvents.PALETTE, this.#onPalette)
+      this.#disposeThemeBackground()
     })
     await this.#attemptShutdown("keybinding cleanup", () => {
       this.keybindings.stop()

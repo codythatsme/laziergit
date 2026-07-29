@@ -180,7 +180,6 @@ const theme: Theme = {
   selection: "#selection",
   diffAdded: "#added",
   diffRemoved: "#removed",
-  diffHunkHeader: "#hunk",
 }
 
 describe("toneColor", () => {

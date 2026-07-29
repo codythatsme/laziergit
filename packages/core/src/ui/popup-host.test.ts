@@ -86,6 +86,47 @@ it("stacks a choose popup and resolves it with the chosen index", async () => {
   expect(host.getSnapshot()).toEqual([])
 })
 
+it("reports choose highlights and clears a preview when the popup settles", async () => {
+  const host = new PopupHost()
+  const highlights: Array<number | undefined> = []
+  const chosen = host.choose("owner", {
+    title: "Theme",
+    choices: [{ label: "Nocturne" }, { label: "Daybreak" }],
+    onHighlight: (index) => highlights.push(index),
+  })
+  const popup = choosePopup(host.top)
+
+  popup.highlight(0)
+  popup.highlight(1)
+  popup.choose(1)
+  popup.highlight(0)
+
+  expect(await chosen.promise).toBe(1)
+  expect(highlights).toEqual([0, 1, undefined])
+})
+
+it("clears a choose preview exactly once on cancellation and contains observer failures", async () => {
+  const host = new PopupHost()
+  const highlights: Array<number | undefined> = []
+  const cancelled = host.choose("owner", {
+    title: "Theme",
+    choices: [{ label: "Nocturne" }],
+    onHighlight: (index) => {
+      highlights.push(index)
+      throw new Error("preview failed")
+    },
+  })
+  const popup = choosePopup(host.top)
+
+  popup.highlight(0)
+  cancelled.dismiss()
+  cancelled.dismiss()
+
+  expect(await cancelled.promise).toBeUndefined()
+  expect(highlights).toEqual([0, undefined])
+  expect(host.getSnapshot()).toEqual([])
+})
+
 it("stacks an actions popup carrying its groups until it is closed", async () => {
   const host = new PopupHost()
   const groups = [{ title: "Branch", items: [{ key: "d", label: "Delete", run: () => undefined }] }]

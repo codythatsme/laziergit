@@ -1587,9 +1587,9 @@ positional jump cannot.
   export function useTheme(): Theme;
 
   /**
-   * Semantic color tokens (hex strings) resolved from the user's theme config.
-   * Use these for fg/bg props so extensions match every theme. Theming is
-   * config-only in v1: extensions consume tokens, they don't define themes.
+   * Semantic #RRGGBB color tokens resolved from the active declarative theme.
+   * Use these for fg/bg props so extensions match every theme. Extensions
+   * consume themes; they do not register them or depend on one by name.
    */
   export interface Theme {
     readonly text: string;
@@ -1600,6 +1600,7 @@ positional jump cannot.
     readonly danger: string;
     readonly info: string;
     readonly background: string;
+    /** Raised chrome such as popups and the status line, not a Pane background. */
     readonly backgroundPanel: string;
     readonly border: string;
     readonly borderFocused: string;
@@ -1607,9 +1608,21 @@ positional jump cannot.
     readonly selection: string;
     readonly diffAdded: string;
     readonly diffRemoved: string;
-    readonly diffHunkHeader: string;
   }
 ```
+
+Themes stay outside the executable Extension lifecycle. A reusable theme is a strict JSON
+resource in `~/.config/laziergit/themes/*.json` or `<repo>/.laziergit/themes/*.json`; it may
+declare `$schema`, `name`, `description`, `appearance`, `extends`, a named `palette`, and
+semantic `tokens`. Built-ins, global resources, and repository resources resolve in that
+precedence order, including inheritance. See [config.md §theme](./config.md#theme--select-extend-and-preview-palettes)
+for the document format, all twelve built-ins, automatic dark/light selection, the generated
+terminal-palette `system` theme, diagnostics, and the live-preview picker.
+
+`useTheme()` subscribes to the kernel's theme store. Config changes, terminal appearance
+changes, picker previews, and valid theme-resource edits replace its snapshot and re-render
+consumers without reactivating the Extension or remounting its component tree. Keep local Pane
+state local: it survives every one of those changes.
 
 **OpenTUI intrinsics quick reference.** Pane and segment components are built from OpenTUI's
 JSX intrinsics, fully typed in `@opentui/react` once `jsxImportSource` is set — your editor
@@ -2944,8 +2957,9 @@ renderer still handles ctrl+C independently of the kernel, so the process itself
 - **Semver ranges on `needs`** — extensions are source-compiled TS checked against the host's
   declarations at import; a version-negotiation layer buys nothing an activation error doesn't.
 - **Config-change / theme-change events** — config changes reload affected Extensions (§5.6),
-  while Theme replacement publishes through a per-kernel external store and reflows through
-  `useTheme` without reactivation or remount. `ctx.config` is a constant plain object.
+  while config theme selection, terminal appearance, picker preview, and theme-resource hot
+  reload all publish through a per-kernel external store and reflow through `useTheme` without
+  reactivation or remount. `ctx.config` is a constant plain object.
 - **An imperative statusline API** (`set(key, {text, tone})`) — segments are React components
   like every other UI surface; one paradigm, and `useGit` replaces manual event wiring.
 - **A blessed list/table component kit** — OpenTUI's primitives plus `useCommand` cover the

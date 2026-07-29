@@ -483,7 +483,6 @@ export interface Theme {
   readonly selection: string
   readonly diffAdded: string
   readonly diffRemoved: string
-  readonly diffHunkHeader: string
 }
 
 export interface MenuMap {

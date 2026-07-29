@@ -16,6 +16,7 @@ import {
 import { Fragment, useCallback, useEffect, useRef, useState } from "react"
 
 import { fetchFor } from "./fetch"
+import { diffThemeProps } from "./theme"
 
 /** The `<diff>` layouts, as one list so the config enum and the `v` toggle cannot drift apart. */
 const views = ["unified", "split"] as const
@@ -181,6 +182,7 @@ export default defineExtension({
 
     function DiffPane() {
       const theme = useTheme()
+      const diffTheme = diffThemeProps(theme)
       const current = target.use()
       const layout = view.use()
       const [state, setState] = useState<DiffState>({ kind: "empty" })
@@ -350,7 +352,23 @@ export default defineExtension({
                       </text>
                     ) : null}
                     {file.hasHunks ? (
-                      <diff diff={file.patch} view={layout} filetype={filetypeOf(file.path ?? state.target.path)} />
+                      <diff
+                        diff={file.patch}
+                        view={layout}
+                        filetype={filetypeOf(file.path ?? state.target.path)}
+                        fg={diffTheme.fg}
+                        lineNumberFg={diffTheme.lineNumberFg}
+                        lineNumberBg={diffTheme.lineNumberBg}
+                        addedBg={diffTheme.addedBg}
+                        removedBg={diffTheme.removedBg}
+                        contextBg={diffTheme.contextBg}
+                        addedSignColor={diffTheme.addedSignColor}
+                        removedSignColor={diffTheme.removedSignColor}
+                        addedLineNumberBg={diffTheme.addedLineNumberBg}
+                        removedLineNumberBg={diffTheme.removedLineNumberBg}
+                        selectionBg={diffTheme.selectionBg}
+                        selectionFg={diffTheme.selectionFg}
+                      />
                     ) : (
                       <text fg={theme.textMuted}>no textual diff (binary, mode or rename only)</text>
                     )}
