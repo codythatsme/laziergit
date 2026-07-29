@@ -120,6 +120,11 @@ export function buildConfigSchema(contributions: readonly SchemaContribution[]):
     type: "object",
     properties: {
       $schema: { type: "string" },
+      mouse: {
+        type: "boolean",
+        default: true,
+        description: "Capture mouse events for clicking, scrolling, and text selection",
+      },
       layout: {
         type: "object",
         description: "Columns of Panes. Panes left out fall back to their Extension's placement hint.",
