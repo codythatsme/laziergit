@@ -58,6 +58,8 @@ export interface ChoosePopup extends PopupBase {
   readonly kind: "choose"
   readonly choices: readonly PopupChoice[]
   readonly placeholder: string | undefined
+  /** Reports an index into the ORIGINAL choices, or undefined when no filtered row is highlighted. */
+  highlight(index: number | undefined): void
   /** Resolves with the index into the ORIGINAL choices, whatever the filter showed. */
   choose(index: number): void
 }
@@ -92,6 +94,11 @@ export interface ChooseOptions {
   readonly title: string
   readonly choices: readonly PopupChoice[]
   readonly placeholder?: string
+  /**
+   * Called as the cursor moves, then once with undefined when the popup settles. This makes
+   * previews temporary: the caller explicitly commits the returned choice after awaiting it.
+   */
+  onHighlight?(index: number | undefined): void
 }
 
 export interface ActionsOptions {
@@ -161,13 +168,34 @@ export class PopupHost {
   }
 
   choose(owner: string, options: ChooseOptions): PopupHandle<number | undefined> {
-    return this.#open<number | undefined>(owner, options.title, undefined, (base, settle) => ({
-      ...base,
-      kind: "choose",
-      choices: options.choices,
-      placeholder: options.placeholder,
-      choose: (index) => settle(index),
-    }))
+    let active = true
+    const notify = (index: number | undefined): void => {
+      try {
+        options.onHighlight?.(index)
+      } catch {
+        // A preview observer cannot poison the modal stack.
+      }
+    }
+    const highlight = (index: number | undefined): void => {
+      if (active) notify(index)
+    }
+    return this.#open<number | undefined>(
+      owner,
+      options.title,
+      undefined,
+      (base, settle) => ({
+        ...base,
+        kind: "choose",
+        choices: options.choices,
+        placeholder: options.placeholder,
+        highlight,
+        choose: (index) => settle(index),
+      }),
+      () => {
+        active = false
+        notify(undefined)
+      },
+    )
   }
 
   actions(owner: string, options: ActionsOptions): PopupHandle<void> {
@@ -205,15 +233,17 @@ export class PopupHost {
     title: string,
     cancelled: T,
     build: (base: PopupBase, settle: (value: T) => void) => Popup,
+    cleanup?: () => void,
   ): PopupHandle<T> {
     const id = this.#nextId++
     let settle: (value: T) => void = () => undefined
+    let settled = false
 
     const promise = new Promise<T>((resolve) => {
-      let settled = false
       settle = (value) => {
         if (settled) return
         settled = true
+        cleanup?.()
         this.#remove(id)
         resolve(value)
       }

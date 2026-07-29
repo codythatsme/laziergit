@@ -4,7 +4,14 @@ import { join } from "node:path"
 import type { ConfigSchema, ConfigValue, Theme } from "laziergit"
 
 import { errorCode } from "../extension/diagnostics"
-import { defaultTheme, findThemePreset, themePresets } from "../extension/theme"
+import { defaultTheme, defaultThemePreset, themePresets } from "../extension/theme"
+import {
+  buildThemeCatalog,
+  type ThemeAppearance,
+  type ThemeCatalog,
+  type ThemeConfiguration,
+  type ThemeSelection,
+} from "../theme"
 import { parseJsonc } from "./jsonc"
 
 /** One cell of the Layout: a single Pane id, or a tab group sharing one cell. */
@@ -48,6 +55,8 @@ export interface CoreConfig {
   /** Command id → the keys bound to it. An empty array unbinds the Command's defaults. */
   readonly keybindings: ReadonlyMap<string, readonly string[]>
   readonly theme: Theme
+  /** Retained independently from the resolved Theme so terminal appearance can change in place. */
+  readonly themeConfiguration: ThemeConfiguration
   readonly statusline: StatuslineConfig
   /** The key `<leader>` expands to in a {@link KeySpec}. */
   readonly leader: string
@@ -96,6 +105,10 @@ export const emptyConfig: LoadedConfig = Object.freeze({
     layout: null,
     keybindings: new Map<string, readonly string[]>(),
     theme: defaultTheme,
+    themeConfiguration: Object.freeze({
+      selection: defaultThemePreset,
+      overrides: Object.freeze({}),
+    }),
     statusline: Object.freeze({ left: Object.freeze([]), right: Object.freeze([]), hidden: new Set<string>() }),
     leader: defaultLeader,
     git: defaultGitConfig,
@@ -110,6 +123,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+}
+
+const builtinThemeCatalog = buildThemeCatalog(themePresets, [])
+const hexColorPattern = /^#[0-9a-fA-F]{6}$/
+
+export interface ConfigThemeOptions {
+  readonly catalog?: ThemeCatalog
+  readonly appearance?: ThemeAppearance
+  readonly systemTheme?: Theme
 }
 
 class ProblemLog {
@@ -238,25 +260,67 @@ function readKeybindings(value: unknown, log: ProblemLog): ReadonlyMap<string, r
   return keybindings
 }
 
-function readTheme(value: unknown, log: ProblemLog): Theme {
-  if (value === undefined) return defaultTheme
+function knownThemeNames(catalog: ThemeCatalog): readonly string[] {
+  return [...catalog.list().map((entry) => entry.name), "system"].toSorted()
+}
+
+function readThemeName(value: unknown, path: string, fallback: string, catalog: ThemeCatalog, log: ProblemLog): string {
+  if (typeof value === "string" && (value === "system" || catalog.has(value))) return value
+  log.reject(path, `Unknown theme preset — pick one of: ${knownThemeNames(catalog).join(", ")}`)
+  return fallback
+}
+
+function readThemeSelection(value: unknown, catalog: ThemeCatalog, log: ProblemLog): ThemeSelection {
+  if (typeof value === "string") return readThemeName(value, "theme.preset", defaultThemePreset, catalog, log)
   if (!isRecord(value)) {
-    log.reject("theme", 'theme must be an object — a "preset" name, color tokens, or both')
-    return defaultTheme
+    log.reject("theme.preset", "theme.preset must be a theme name or an object with dark and light theme names")
+    return defaultThemePreset
   }
 
-  // The preset resolves first, since it is the base every token override lands on. An
-  // unregistered name falls back to the default rather than to nothing.
-  let base = defaultTheme
-  const { preset, ...tokens } = value
-  if (preset !== undefined) {
-    const known = typeof preset === "string" ? findThemePreset(preset) : undefined
-    if (known) base = known.tokens
-    else {
-      const names = themePresets.map((entry) => entry.name).join(", ")
-      log.reject("theme.preset", `Unknown theme preset — pick one of: ${names}`)
+  for (const key of Object.keys(value)) {
+    if (key !== "dark" && key !== "light") log.reject(`theme.preset.${key}`, "Unknown automatic theme setting")
+  }
+  return Object.freeze({
+    dark: readThemeName(value.dark, "theme.preset.dark", defaultThemePreset, catalog, log),
+    light: readThemeName(value.light, "theme.preset.light", "daybreak", catalog, log),
+  })
+}
+
+export function resolveThemeConfiguration(configuration: ThemeConfiguration, options: ConfigThemeOptions = {}): Theme {
+  const catalog = options.catalog ?? builtinThemeCatalog
+  const appearance = options.appearance ?? "dark"
+  const selectedName =
+    typeof configuration.selection === "string" ? configuration.selection : configuration.selection[appearance]
+  const fallbackName = appearance === "light" ? "daybreak" : defaultThemePreset
+  const base =
+    selectedName === "system"
+      ? (options.systemTheme ?? catalog.get(fallbackName)?.tokens ?? defaultTheme)
+      : (catalog.get(selectedName)?.tokens ?? catalog.get(fallbackName)?.tokens ?? defaultTheme)
+  return Object.freeze({ ...base, ...configuration.overrides })
+}
+
+function readTheme(
+  value: unknown,
+  log: ProblemLog,
+  options: ConfigThemeOptions,
+): Pick<CoreConfig, "theme" | "themeConfiguration"> {
+  const catalog = options.catalog ?? builtinThemeCatalog
+  if (value === undefined) {
+    return {
+      theme: resolveThemeConfiguration(emptyConfig.core.themeConfiguration, options),
+      themeConfiguration: emptyConfig.core.themeConfiguration,
     }
   }
+  if (!isRecord(value)) {
+    log.reject("theme", 'theme must be an object — a "preset" name, color tokens, or both')
+    return {
+      theme: resolveThemeConfiguration(emptyConfig.core.themeConfiguration, options),
+      themeConfiguration: emptyConfig.core.themeConfiguration,
+    }
+  }
+
+  const { preset, ...tokens } = value
+  const selection = preset === undefined ? defaultThemePreset : readThemeSelection(preset, catalog, log)
 
   const overrides: Record<string, string> = {}
   for (const [token, color] of Object.entries(tokens)) {
@@ -264,13 +328,20 @@ function readTheme(value: unknown, log: ProblemLog): Theme {
       log.reject(`theme.${token}`, "Unknown theme token")
       continue
     }
-    if (typeof color !== "string" || color.trim().length === 0) {
-      log.reject(`theme.${token}`, "A theme token must be a non-empty color string")
+    if (typeof color !== "string" || !hexColorPattern.test(color)) {
+      log.reject(`theme.${token}`, "A theme token must use #RRGGBB")
       continue
     }
-    overrides[token] = color
+    overrides[token] = color.toLowerCase()
   }
-  return Object.freeze({ ...base, ...overrides })
+  const themeConfiguration = Object.freeze({
+    selection,
+    overrides: Object.freeze(overrides),
+  })
+  return {
+    theme: resolveThemeConfiguration(themeConfiguration, options),
+    themeConfiguration,
+  }
 }
 
 function readStatusline(value: unknown, log: ProblemLog): StatuslineConfig {
@@ -388,7 +459,7 @@ const coreSectionKeys = new Set([
 ])
 
 /** Splits one merged document into the core sections and the raw per-Extension sections. */
-export function readConfig(document: unknown): LoadedConfig {
+export function readConfig(document: unknown, themeOptions: ConfigThemeOptions = {}): LoadedConfig {
   const log = new ProblemLog()
   if (document === undefined) return emptyConfig
   if (!isRecord(document)) {
@@ -400,16 +471,25 @@ export function readConfig(document: unknown): LoadedConfig {
     if (!coreSectionKeys.has(key)) log.reject(key, "Unknown config section")
   }
 
+  // Read in schema order so diagnostics stay deterministic and match the document's conceptual
+  // sections even though the returned object also carries Theme resolution metadata.
+  const layout = readLayout(document.layout, log)
+  const keybindings = readKeybindings(document.keybindings, log)
+  const configuredTheme = readTheme(document.theme, log, themeOptions)
+  const statusline = readStatusline(document.statusline, log)
+  const leader = readLeader(document.leader, log)
+  const git = readGit(document.git, log)
+  const extensions = readExtensionSections(document.extensions, log)
   return {
     core: {
-      layout: readLayout(document.layout, log),
-      keybindings: readKeybindings(document.keybindings, log),
-      theme: readTheme(document.theme, log),
-      statusline: readStatusline(document.statusline, log),
-      leader: readLeader(document.leader, log),
-      git: readGit(document.git, log),
+      layout,
+      keybindings,
+      ...configuredTheme,
+      statusline,
+      leader,
+      git,
     },
-    extensions: readExtensionSections(document.extensions, log),
+    extensions,
     problems: log.problems,
   }
 }
@@ -506,7 +586,7 @@ export async function readConfigDocuments(files: ConfigFiles): Promise<readonly 
  * Parses and merges the documents in global → repo order. A file that fails to parse is
  * skipped with a problem recorded; the other file still applies.
  */
-export function loadConfig(documents: readonly ConfigDocument[]): LoadedConfig {
+export function loadConfig(documents: readonly ConfigDocument[], themeOptions: ConfigThemeOptions = {}): LoadedConfig {
   const parseProblems: ConfigProblem[] = []
   let merged: unknown = undefined
 
@@ -526,6 +606,6 @@ export function loadConfig(documents: readonly ConfigDocument[]): LoadedConfig {
     }
   }
 
-  const loaded = readConfig(merged)
+  const loaded = readConfig(merged, themeOptions)
   return parseProblems.length === 0 ? loaded : { ...loaded, problems: [...parseProblems, ...loaded.problems] }
 }

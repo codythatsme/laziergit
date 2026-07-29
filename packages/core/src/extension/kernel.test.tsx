@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test"
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises"
+import { CliRenderEvents } from "@opentui/core"
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { act } from "react"
 import { StaleContextError, type ExtensionContext, type PaneHandle } from "laziergit"
 
-import { createHarness, installHarnessLifecycle, renderApp, type Harness } from "../test-harness"
+import { parseJsonc } from "../config/jsonc"
+import { createHarness, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
 import { importCopyContainerName, importCopyIgnoreName } from "./discovery"
+import { findThemePreset } from "./theme"
+import type { ChoosePopup } from "../ui/popup-host"
 
 installHarnessLifecycle()
 
@@ -99,6 +103,18 @@ function paneSource(body: string): string {
       },
     })
   `
+}
+
+function topChoice(harness: Harness): ChoosePopup {
+  const popup = harness.kernel.popups.top
+  if (popup?.kind !== "choose") throw new Error(`Expected a chooser, found ${popup?.kind ?? "nothing"}`)
+  return popup
+}
+
+function themePreset(name: string) {
+  const found = findThemePreset(name)
+  if (!found) throw new Error(`Missing test theme "${name}"`)
+  return found
 }
 
 describe("ExtensionKernel lifecycle", () => {
@@ -723,6 +739,117 @@ describe("serialized reload recovery", () => {
     } finally {
       errorSpy.mockRestore()
     }
+  })
+})
+
+describe("Theme resources", () => {
+  it("hot reloads a repository theme without remounting its consumers", async () => {
+    const harness = await createHarness({ watch: true, debounceMs: 20, pollMs: 10, themes: true })
+    testGlobals().__laziergitThemeMounts = 0
+    const themePath = join(harness.themeRepo, "custom.json")
+    await Promise.all([
+      writeFile(
+        themePath,
+        JSON.stringify({
+          name: "custom",
+          appearance: "dark",
+          extends: "nocturne",
+          tokens: { accent: "#123456" },
+        }),
+      ),
+      writeFile(harness.configFiles.repo, `{ "theme": { "preset": "custom" } }`),
+      writeFile(
+        join(harness.repo, "theme-resource-pane.tsx"),
+        `
+          /** @jsxImportSource @opentui/react */
+          import { defineExtension, useTheme } from "laziergit"
+          import { useState } from "react"
+          export default defineExtension({
+            name: "theme-resource-pane",
+            activate(ctx) {
+              function Pane() {
+                const theme = useTheme()
+                const [mount] = useState(() => ++(globalThis as any).__laziergitThemeMounts)
+                return <text>{theme.accent + ":mount:" + mount}</text>
+              }
+              ctx.panes.register({ id: "theme-resource-pane", title: "Theme", component: Pane })
+            },
+          })
+        `,
+      ),
+    ])
+
+    await renderApp(harness)
+    expect(harness.setup.captureCharFrame()).toContain("#123456:mount:1")
+
+    await act(async () => {
+      await writeFile(
+        themePath,
+        JSON.stringify({
+          name: "custom",
+          appearance: "dark",
+          extends: "nocturne",
+          tokens: { accent: "#abcdef" },
+        }),
+      )
+      await Bun.sleep(120)
+    })
+    await settle(harness)
+
+    expect(harness.setup.captureCharFrame()).toContain("#abcdef:mount:1")
+    expect(testGlobals().__laziergitThemeMounts).toBe(1)
+
+    await act(async () => {
+      await writeFile(themePath, `{ "name": "custom", "tokens": }`)
+      await Bun.sleep(120)
+    })
+    await settle(harness)
+    expect(harness.setup.captureCharFrame()).toContain("#abcdef:mount:1")
+    expect(harness.kernel.diagnostics.getSnapshot().some((entry) => entry.message.includes(themePath))).toBeTrue()
+
+    const configSchema = JSON.parse(await readFile(join(harness.configDirectory, "config.schema.json"), "utf8")) as {
+      properties: { theme: { properties: { preset: { oneOf: [{ enum: string[] }] } } } }
+    }
+    expect(configSchema.properties.theme.properties.preset.oneOf[0].enum).toContain("custom")
+    expect(await readFile(join(harness.configDirectory, "theme.schema.json"), "utf8")).toContain('"laziergit theme"')
+  })
+
+  it("follows terminal appearance for a dark/light pair without reloading config", async () => {
+    const harness = await createHarness()
+    await writeFile(harness.configFiles.repo, `{ "theme": { "preset": { "dark": "nocturne", "light": "daybreak" } } }`)
+    await harness.kernel.start()
+
+    expect(harness.kernel.theme.getSnapshot().background).toBe(themePreset("nocturne").tokens.background)
+    harness.setup.renderer.emit(CliRenderEvents.THEME_MODE, "light")
+    expect(harness.kernel.theme.getSnapshot().background).toBe(themePreset("daybreak").tokens.background)
+    harness.setup.renderer.emit(CliRenderEvents.THEME_MODE, "dark")
+    expect(harness.kernel.theme.getSnapshot().background).toBe(themePreset("nocturne").tokens.background)
+  })
+
+  it("previews a picker choice and persists it to the selected JSONC scope", async () => {
+    const harness = await createHarness()
+    await harness.kernel.start()
+    const before = harness.kernel.theme.getSnapshot()
+
+    const flow = harness.kernel.openThemePicker()
+    const themes = topChoice(harness)
+    const emberIndex = themes.choices.findIndex((choice) => choice.label === "ember")
+    expect(emberIndex).toBeGreaterThanOrEqual(0)
+    themes.highlight(emberIndex)
+    expect(harness.kernel.theme.getSnapshot().accent).toBe(themePreset("ember").tokens.accent)
+    themes.choose(emberIndex)
+
+    await Promise.resolve()
+    const scope = topChoice(harness)
+    expect(scope.title).toBe("Save theme")
+    scope.choose(1)
+    await flow
+
+    expect(parseJsonc(await readFile(harness.configFiles.repo, "utf8"))).toEqual({
+      theme: { preset: "ember" },
+    })
+    expect(harness.kernel.theme.getSnapshot().accent).toBe(themePreset("ember").tokens.accent)
+    expect(harness.kernel.theme.getSnapshot()).not.toBe(before)
   })
 })
 

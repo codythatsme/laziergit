@@ -59,12 +59,15 @@ export function createFakeSlotRegistry() {
 
 export interface Harness {
   readonly directory: string
+  readonly configDirectory: string
   /** Bundled-scope Extension directory; created empty, so tests opt in by writing to it. */
   readonly bundled: string
   /** Global-scope Extension directory. */
   readonly global: string
   /** Repo-scope Extension directory. */
   readonly repo: string
+  readonly themeGlobal: string
+  readonly themeRepo: string
   readonly configFiles: { readonly global: string; readonly repo: string }
   readonly setup: Awaited<ReturnType<typeof createTestRenderer>>
   readonly kernel: ExtensionKernel
@@ -79,6 +82,8 @@ export interface HarnessOptions {
   readonly height?: number
   readonly onQuit?: () => void
   readonly clipboardWriters?: readonly ClipboardWriterSpec[]
+  /** Opt into filesystem Theme discovery/schema publication for tests that exercise it. */
+  readonly themes?: boolean
   /**
    * Initialise the harness directory as a git repository with one commit. Off by default:
    * a harness without one exercises the degraded path, where the store serves the empty
@@ -151,27 +156,33 @@ export function installHarnessLifecycle(): void {
         harness.setup.renderer.destroy()
       }
       await rm(harness.directory, { recursive: true, force: true })
+      await rm(harness.configDirectory, { recursive: true, force: true })
     }
   })
 }
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), "laziergit-"))
+  const configDirectory = await mkdtemp(join(tmpdir(), "laziergit-config-"))
   const bundled = join(directory, "bundled")
   const global = join(directory, "global")
   const repo = join(directory, "repo")
-  await Promise.all([mkdir(bundled), mkdir(global), mkdir(repo)])
+  const themeGlobal = join(configDirectory, "themes")
+  const themeRepo = join(directory, "repo-themes")
+  await Promise.all([mkdir(bundled), mkdir(global), mkdir(repo), mkdir(themeGlobal), mkdir(themeRepo)])
   if (options.git === true) await initRepository(directory)
 
   let setup!: Awaited<ReturnType<typeof createTestRenderer>>
   await act(async () => {
     setup = await createTestRenderer({ width: options.width ?? 100, height: options.height ?? 28 })
   })
-  const configFiles = { global: join(directory, "global.jsonc"), repo: join(directory, "repo.jsonc") }
+  const configFiles = { global: join(configDirectory, "config.jsonc"), repo: join(directory, "repo.jsonc") }
   const kernel = new ExtensionKernel({
     repoRoot: directory,
     renderer: setup.renderer,
     directories: { bundled, global, repo },
+    themeDirectories: { global: themeGlobal, repo: themeRepo },
+    themeResources: options.themes ?? false,
     configFiles,
     watch: options.watch ?? false,
     debounceMs: options.debounceMs,
@@ -179,7 +190,19 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     onQuit: options.onQuit,
     clipboardWriters: options.clipboardWriters,
   })
-  const harness: Harness = { directory, bundled, global, repo, configFiles, setup, kernel, root: null }
+  const harness: Harness = {
+    directory,
+    configDirectory,
+    bundled,
+    global,
+    repo,
+    themeGlobal,
+    themeRepo,
+    configFiles,
+    setup,
+    kernel,
+    root: null,
+  }
   harnesses.push(harness)
   return harness
 }

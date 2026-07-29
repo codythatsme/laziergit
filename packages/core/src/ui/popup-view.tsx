@@ -1,7 +1,7 @@
 import { useTerminalDimensions } from "@opentui/react"
 import { useBindings } from "@opentui/keymap/react"
 import type { InputKeyBinding } from "@opentui/core"
-import { useMemo, useRef, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useTheme, type Theme } from "laziergit"
 
 import { fuzzyFilter, type FuzzyResult } from "./fuzzy"
@@ -175,6 +175,10 @@ function ChooseView({ popup, theme }: { popup: ChoosePopup; theme: Theme }) {
 
   const matches = useMemo(() => filterChoices(popup, query), [popup, query])
   const clamped = Math.min(cursor, Math.max(0, matches.length - 1))
+
+  useEffect(() => {
+    popup.highlight(matches[clamped]?.index)
+  }, [clamped, matches, popup])
 
   /**
    * The filter and the row the key handlers act on, written by those handlers rather than

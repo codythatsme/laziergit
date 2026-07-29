@@ -15,11 +15,13 @@ export interface ThemePreset {
   readonly name: string
   /** One line, published into the config JSON Schema so editors describe the choice. */
   readonly description: string
+  /** Used by the picker and by automatic dark/light selections. */
+  readonly appearance: "dark" | "light"
   readonly tokens: Theme
 }
 
-function preset(name: string, description: string, tokens: Theme): ThemePreset {
-  return Object.freeze({ name, description, tokens: freezeTheme(tokens) })
+function preset(name: string, description: string, appearance: ThemePreset["appearance"], tokens: Theme): ThemePreset {
+  return Object.freeze({ name, description, appearance, tokens: freezeTheme(tokens) })
 }
 
 export const themePresets: readonly ThemePreset[] = Object.freeze([
@@ -29,7 +31,7 @@ export const themePresets: readonly ThemePreset[] = Object.freeze([
    * `backgroundPanel` lifted enough that a popup reads as a card, and a `selection` bar you
    * can find without hunting. The diff pair separates in luminance as well as hue.
    */
-  preset("nocturne", "Violet-black night with three stacked surfaces — laziergit's default", {
+  preset("nocturne", "Violet-black night with three stacked surfaces — laziergit's default", "dark", {
     text: "#e9ebf7",
     textMuted: "#9da2be",
     accent: "#bca4ff",
@@ -44,9 +46,8 @@ export const themePresets: readonly ThemePreset[] = Object.freeze([
     selection: "#2e3663",
     diffAdded: "#7bedb0",
     diffRemoved: "#f2708c",
-    diffHunkHeader: "#8fa3e8",
   }),
-  preset("midnight", "Cool blue-black — laziergit's original palette, kept", {
+  preset("midnight", "Cool blue-black — laziergit's original palette, kept", "dark", {
     text: "#c0caf5",
     textMuted: "#989fbd",
     accent: "#7aa2f7",
@@ -61,9 +62,8 @@ export const themePresets: readonly ThemePreset[] = Object.freeze([
     selection: "#283457",
     diffAdded: "#9ece6a",
     diffRemoved: "#f7768e",
-    diffHunkHeader: "#7dcfff",
   }),
-  preset("ember", "Warm dark: umber neutrals under an apricot accent, for long sessions", {
+  preset("ember", "Warm dark: umber neutrals under an apricot accent, for long sessions", "dark", {
     text: "#f4ece3",
     textMuted: "#b1a093",
     accent: "#f2ac6c",
@@ -78,9 +78,8 @@ export const themePresets: readonly ThemePreset[] = Object.freeze([
     selection: "#43372a",
     diffAdded: "#9ae8a6",
     diffRemoved: "#f2807f",
-    diffHunkHeader: "#93aec0",
   }),
-  preset("daybreak", "Light: warm paper with deep ink-jewel semantics", {
+  preset("daybreak", "Light: warm paper with deep ink-jewel semantics", "light", {
     text: "#1a1922",
     textMuted: "#57555f",
     accent: "#6340d6",
@@ -95,9 +94,8 @@ export const themePresets: readonly ThemePreset[] = Object.freeze([
     selection: "#d2c7f2",
     diffAdded: "#0e7046",
     diffRemoved: "#8a0820",
-    diffHunkHeader: "#453f8c",
   }),
-  preset("beacon", "High contrast: pure black, white body text, every semantic above 9:1", {
+  preset("beacon", "High contrast: pure black, white body text, every semantic above 9:1", "dark", {
     text: "#ffffff",
     textMuted: "#c3c6d2",
     accent: "#dcc0ff",
@@ -112,7 +110,118 @@ export const themePresets: readonly ThemePreset[] = Object.freeze([
     selection: "#3a3f6b",
     diffAdded: "#6bfaae",
     diffRemoved: "#ff7e97",
-    diffHunkHeader: "#b4beee",
+  }),
+  preset("catppuccin-mocha", "Catppuccin Mocha: soft pastels over a deep lavender-black", "dark", {
+    text: "#cdd6f4",
+    textMuted: "#a6adc8",
+    accent: "#cba6f7",
+    success: "#a6e3a1",
+    warning: "#f9e2af",
+    danger: "#f38ba8",
+    info: "#89dceb",
+    background: "#1e1e2e",
+    backgroundPanel: "#313244",
+    border: "#585b70",
+    borderFocused: "#cba6f7",
+    selection: "#36384a",
+    diffAdded: "#a6e3a1",
+    diffRemoved: "#f38ba8",
+  }),
+  preset("catppuccin-latte", "Catppuccin Latte: calm lavender accents on a pale surface", "light", {
+    text: "#34364a",
+    textMuted: "#5c5f77",
+    accent: "#8839ef",
+    success: "#145c0a",
+    warning: "#75490a",
+    danger: "#c42a4f",
+    info: "#075a78",
+    background: "#eff1f5",
+    backgroundPanel: "#dce0e8",
+    border: "#9ca0b0",
+    borderFocused: "#8839ef",
+    selection: "#e1e3ea",
+    diffAdded: "#145c0a",
+    diffRemoved: "#b60d32",
+  }),
+  preset("gruvbox-dark", "Gruvbox Dark: warm retro earth tones with bright semantics", "dark", {
+    text: "#fbf1c7",
+    textMuted: "#d5c4a1",
+    accent: "#fabd2f",
+    success: "#b8bb26",
+    warning: "#fabd2f",
+    danger: "#fb7061",
+    info: "#83c9c5",
+    background: "#282828",
+    backgroundPanel: "#3c3836",
+    border: "#665c54",
+    borderFocused: "#fabd2f",
+    selection: "#3c3836",
+    diffAdded: "#b8bb26",
+    diffRemoved: "#fb7061",
+  }),
+  preset("gruvbox-light", "Gruvbox Light: warm paper with grounded retro accents", "light", {
+    text: "#282828",
+    textMuted: "#665c54",
+    accent: "#8f3f71",
+    success: "#326747",
+    warning: "#7b4800",
+    danger: "#9d0006",
+    info: "#076678",
+    background: "#fbf1c7",
+    backgroundPanel: "#ebdbb2",
+    border: "#bdae93",
+    borderFocused: "#8f3f71",
+    selection: "#ebdbb2",
+    diffAdded: "#326747",
+    diffRemoved: "#9d0006",
+  }),
+  preset("nord", "Nord: arctic blue-grey surfaces with frost accents", "dark", {
+    text: "#eceff4",
+    textMuted: "#bac2de",
+    accent: "#88c0d0",
+    success: "#a3d08f",
+    warning: "#ebcb8b",
+    danger: "#ed8790",
+    info: "#81a1c1",
+    background: "#2e3440",
+    backgroundPanel: "#3b4252",
+    border: "#4c566a",
+    borderFocused: "#88c0d0",
+    selection: "#434c5e",
+    diffAdded: "#a3d08f",
+    diffRemoved: "#ed8790",
+  }),
+  preset("solarized-dark", "Solarized Dark: low-glare blue-green with calibrated accents", "dark", {
+    text: "#fdf6e3",
+    textMuted: "#a6b3b3",
+    accent: "#49c6bd",
+    success: "#a8c85b",
+    warning: "#e5b94c",
+    danger: "#ff746b",
+    info: "#5fcce0",
+    background: "#002b36",
+    backgroundPanel: "#073642",
+    border: "#586e75",
+    borderFocused: "#49c6bd",
+    selection: "#164752",
+    diffAdded: "#a8c85b",
+    diffRemoved: "#ff746b",
+  }),
+  preset("solarized-light", "Solarized Light: warm ivory with deep cyan and amber semantics", "light", {
+    text: "#073642",
+    textMuted: "#4c6269",
+    accent: "#005f87",
+    success: "#466c00",
+    warning: "#7a5300",
+    danger: "#a51d1d",
+    info: "#006b85",
+    background: "#fdf6e3",
+    backgroundPanel: "#eee8d5",
+    border: "#b8b09b",
+    borderFocused: "#005f87",
+    selection: "#e2dbc8",
+    diffAdded: "#466c00",
+    diffRemoved: "#a51d1d",
   }),
 ])
 

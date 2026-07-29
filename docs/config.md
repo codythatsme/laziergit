@@ -49,11 +49,13 @@ repository — commit it or ignore it as you like.
 ## What a change costs
 
 Editing `layout`, `keybindings`, `theme`, `statusline`, `leader`, or `git` rearranges the
-running screen — no Extension is reloaded and no Pane loses its cursor. Editing anything under
-`extensions` reloads every Extension, because `ctx.config` is a constant snapshot for the
-lifetime of an activation (see [extension-api.md §5.6](./extension-api.md)) and reload is
-how a new snapshot is delivered. Reformatting the file — reordering keys, changing comments
-or whitespace — costs nothing: only the values are compared.
+running screen — no Extension is reloaded and no Pane loses its cursor. The same is true of a
+valid edit under either `themes/` directory: the catalog is rebuilt and `useTheme()` consumers
+repaint in place. Editing anything under `extensions` reloads every Extension, because
+`ctx.config` is a constant snapshot for the lifetime of an activation (see
+[extension-api.md §5.6](./extension-api.md)) and reload is how a new snapshot is delivered.
+Reformatting the config file — reordering keys, changing comments or whitespace — costs
+nothing: only the values are compared.
 
 ## `layout` — where Panes go
 
@@ -133,6 +135,7 @@ Core's own Commands, all rebindable:
 | `app.focus.next` / `app.focus.previous` | `tab` / `shift+tab` | Move between Panes |
 | `app.focus.1` … `app.focus.9` | `1` … `9` | Jump to the nth Pane of the Layout, in reading order — columns left to right, cells top to bottom, tabs in their cell's order. A Pane behind a tab is reached the same way, and the jump brings it forward. The numbering follows your `layout`, so moving a Pane moves its digit; the cheat sheet (`?`) always names which is which |
 | `app.tab.next` / `app.tab.previous` | `]` / `[` | Cycle tabs inside the focused cell |
+| `app.theme` | — | Preview every available theme, then save the choice globally or for this repository |
 | `app.reload` | — | Reload every Extension |
 | `app.quit` | `q` | Quit |
 
@@ -144,30 +147,128 @@ Core's own Commands, all rebindable:
 
 The key that `<leader>` expands to in any key spec. Defaults to `space`.
 
-## `theme` — a preset, and semantic color tokens
+## `theme` — select, extend, and preview palettes
 
 ```jsonc
 {
   "theme": {
-    "preset": "ember",
+    "preset": "catppuccin-mocha",
     "accent": "#f2ac6c",
   },
 }
 ```
 
-`preset` names the palette everything else is built on; any other key is a token on `Theme`
-([§1.8](./extension-api.md)) overriding that palette. Both halves are optional — a `theme`
-with only tokens overrides the default palette, and no `theme` at all is the default.
-Extensions consume tokens through `useTheme()` and never pick raw colors, so one override
-retints every Pane at once.
+`preset` names the palette every inline token is applied on top of. A string is a fixed
+selection, regardless of the terminal's appearance:
 
-| Preset | |
+```jsonc
+{ "theme": { "preset": "gruvbox-dark" } }
+```
+
+To follow the terminal, select one theme for each appearance:
+
+```jsonc
+{
+  "theme": {
+    "preset": {
+      "dark": "catppuccin-mocha",
+      "light": "catppuccin-latte",
+    },
+  },
+}
+```
+
+The dark side is used until the terminal reports its appearance; subsequent changes repaint
+the screen without an Extension reload or Pane remount. `"system"` is a generated choice that
+uses the terminal's reported palette for the current appearance, with laziergit's matching
+built-in colors as the fallback when the terminal does not report a usable value.
+
+Any other key under `theme` is a token on `Theme` ([§1.8](./extension-api.md)) overriding the
+selected palette. Both halves are optional — a `theme` with only tokens overrides `nocturne`,
+and no `theme` at all selects it unchanged. Inline colors are strict six-digit RGB strings:
+`#RRGGBB`. Shorthand such as `#fff`, alpha colors, terminal names, and bare palette references
+are rejected with a diagnostic. Extensions consume the result through `useTheme()` and never
+pick a preset by name, so one override retints every Pane at once.
+
+The twelve built-in presets are:
+
+| Preset | Appearance | |
+|---|---|---|
+| `nocturne` | dark | The default. Violet-black with three stacked surfaces. |
+| `midnight` | dark | Cool blue-black — laziergit's original palette. |
+| `ember` | dark | Umber neutrals under an apricot accent. |
+| `daybreak` | light | Warm paper with deep ink-jewel semantics. |
+| `beacon` | dark | Pure black, white body text, and deliberately high contrast. |
+| `catppuccin-mocha` | dark | Soft pastels over a deep lavender-black. |
+| `catppuccin-latte` | light | Calm lavender accents on a pale surface. |
+| `gruvbox-dark` | dark | Warm retro earth tones with bright semantics. |
+| `gruvbox-light` | light | Warm paper with grounded retro accents. |
+| `nord` | dark | Arctic blue-grey surfaces with frost accents. |
+| `solarized-dark` | dark | Low-glare blue-green with calibrated accents. |
+| `solarized-light` | light | Warm ivory with deep cyan and amber semantics. |
+
+### Theme resources
+
+Reusable themes are declarative JSON files in either of these directories:
+
+| Directory | Scope |
 |---|---|
-| `nocturne` | The default. Violet-black, three stacked surfaces. |
-| `midnight` | Cool blue-black — laziergit's original palette. |
-| `ember` | Warm dark: umber neutrals, apricot accent. |
-| `daybreak` | Light: warm paper, deep ink-jewel semantics. |
-| `beacon` | High contrast: pure black, white text, every semantic above 9:1. |
+| `~/.config/laziergit/themes/*.json` (or `$XDG_CONFIG_HOME/laziergit/themes/*.json`) | every repository |
+| `<repo>/.laziergit/themes/*.json` | this repository only |
+
+They use the same precedence as Extensions: built-in < global < repository. A later scope with
+the same `name` shadows the earlier one. An invalid higher-precedence file does not hide a
+valid lower-precedence theme.
+
+laziergit publishes `theme.schema.json` beside the global config. The relative `$schema` below
+therefore works unchanged for a global theme. Repository themes may omit `$schema` or point the
+editor at that global file explicitly; laziergit deliberately does not write generated files
+into the repository.
+
+```json
+{
+  "$schema": "../theme.schema.json",
+  "name": "rose-pine",
+  "description": "Muted dark rose palette",
+  "appearance": "dark",
+  "extends": "nocturne",
+  "palette": {
+    "base": "#191724",
+    "rose": "#ebbcba"
+  },
+  "tokens": {
+    "background": "base",
+    "backgroundPanel": "#26233a",
+    "accent": "rose",
+    "borderFocused": "rose"
+  }
+}
+```
+
+The format is strict:
+
+- `$schema` points an editor at the published theme schema.
+- `name` is the selection name: lowercase letters, digits, `.`, `_`, and `-`.
+- `description` is the one-line explanation shown by the picker.
+- `appearance` is `"dark"` or `"light"` and lets the picker describe and group the theme; a
+  fixed config selection does not switch merely because of this tag.
+- `extends` names any resolved built-in, global, or repository theme. Its palette,
+  `appearance`, and tokens are inherited before this file's values are applied.
+- `palette` maps local names to `#RRGGBB` colors.
+- `tokens` maps semantic `Theme` keys to either `#RRGGBB` or a name in this theme's inherited
+  palette.
+
+Unknown fields, unknown tokens, invalid colors, missing parents, incomplete themes, and
+inheritance cycles are rejected. Diagnostics name the file and field; one bad theme does not
+stop startup or discard the rest of the catalog. If a theme that was already live is saved in
+an invalid intermediate state, its last valid value stays on screen until the file is repaired
+or deleted. Saving a valid resource hot reloads it without reactivating Extensions.
+
+Run `app.theme` from the command palette to explore the catalog. Moving the cursor previews a
+theme immediately; Escape restores the theme that was active before the picker opened. After
+confirmation, choose global or repository scope. laziergit updates only `theme.preset` in the
+corresponding JSONC config, preserving its comments and unrelated formatting, and writes the
+result atomically.
 
 Every shipped preset is held to contrast floors by test, not by eye: body text at 7:1 on both
 the background and the selected row, every semantic color and `textMuted` at 4.5:1, a focused

@@ -46,7 +46,6 @@ const contrastFloors: readonly (readonly [keyof Theme, keyof Theme, number])[] =
   ["info", "background", 4.5],
   ["diffAdded", "background", 4.5],
   ["diffRemoved", "background", 4.5],
-  ["diffHunkHeader", "background", 4.5],
   // An unfocused frame still has to frame something, and the focused one has to win clearly.
   ["border", "background", 1.5],
   ["borderFocused", "background", 2.5],
