@@ -224,7 +224,15 @@ export default defineExtension({
       const theme = useTheme()
       const commits = useGit((state) => state.commits)
       const empty = useGit((state) => emptyReason(state.head))
-      const cursor = useListCursor({ items: commits, idPrefix: "commits", noun: "commit" })
+      const cursor = useListCursor({
+        items: commits,
+        idPrefix: "commits",
+        noun: "commit",
+        query: {
+          mode: "search",
+          fields: (commit) => [commit.oid, commit.shortOid, commit.subject, commit.author.name, commit.author.email],
+        },
+      })
       const selected = cursor.selected
 
       useEffect(() => {
@@ -269,7 +277,7 @@ export default defineExtension({
         // Pane instead of scrolling inside it.
         <box flexDirection="column" flexGrow={1} flexBasis={0}>
           <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
-            {commits.map((commit, index) => (
+            {cursor.items.map((commit, index) => (
               <CommitRow
                 key={commit.oid}
                 id={cursor.rowId(index)}

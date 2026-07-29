@@ -1,5 +1,22 @@
 import type { CommandSpec, Disposable, EventMap, GitActivity, GitState, Theme } from "./types"
 
+export type HostListQueryMode = "filter" | "search"
+
+export interface HostListQueryState {
+  readonly mode: HostListQueryMode
+  /** Draft while editing, applied query otherwise. Empty only while the editor is open. */
+  readonly value: string
+  readonly editing: boolean
+  readonly matchCount: number
+  readonly totalCount: number
+  /** Zero-based search-result position. Filters report the cursor through their visible list. */
+  readonly currentMatch: number | null
+}
+
+export interface HostListQueryRegistration extends Disposable {
+  update(state: HostListQueryState): void
+}
+
 /**
  * What the hooks in this package reach for, and therefore what the host must put on the React
  * context. Not extension-facing: reachable only as `laziergit/host`, since an Extension author
@@ -32,6 +49,14 @@ export interface HostRuntime {
   readonly keys: {
     /** Claim raw keyboard input for a Pane; dispose to hand it back. Claims nest. */
     capture(paneId: string): Disposable
+  }
+  readonly listQuery: {
+    register(
+      paneId: string,
+      id: string,
+      input: (value: string) => void,
+      initial: HostListQueryState,
+    ): HostListQueryRegistration
   }
   readonly theme: {
     getSnapshot(this: void): Theme

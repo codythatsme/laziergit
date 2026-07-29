@@ -153,6 +153,35 @@ function waitForFrame(harness: Harness, expected: string): Promise<void> {
   return waitUntil(harness, JSON.stringify(expected), () => frame(harness).includes(expected))
 }
 
+describe("searching commits", () => {
+  it("jumps to a match without removing the commits around it", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await commit(repo, "third commit")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await press(repo.harness, "/")
+    await act(async () => {
+      await repo.harness.setup.mockInput.typeText("second")
+    })
+    await settle(repo.harness)
+    await act(async () => {
+      repo.harness.setup.mockInput.pressEnter()
+      await Bun.sleep(60)
+    })
+    await settle(repo.harness)
+
+    const rendered = frame(repo.harness)
+    expect(rendered).toContain("first commit")
+    expect(rendered).toContain("second commit")
+    expect(rendered).toContain("third commit")
+    expect(rendered).toContain("matches for 'second' (1 of 1)")
+    expect(rendered).toContain(`diff: commit ${await repo.shortOid("HEAD~1")}`)
+  })
+})
+
 describe("the commits action menu", () => {
   it("checks a commit out after saying that HEAD will be detached", async () => {
     const repo = await openRepo()

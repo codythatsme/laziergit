@@ -272,6 +272,57 @@ describe("laziergit through a real terminal", () => {
     )
   }, 20_000)
 
+  it("filters files and searches commits while preserving commit context", async () => {
+    const repo = await createE2eRepo()
+    await repo.write("tracked.txt", "two\n")
+    await repo.git("commit", "--quiet", "--all", "--message", "middle needle")
+    await repo.write("tracked.txt", "three\n")
+    await repo.git("commit", "--quiet", "--all", "--message", "latest wrapper")
+    await repo.write("alpha.txt", "alpha\n")
+    await repo.write("needle-file.txt", "needle\n")
+
+    await inTerminal(repo, async (session) => {
+      await waitForSelectedRow(session, "?? alpha.txt")
+
+      await session.keyboard.type("/")
+      await waitForText(session, "Filter:")
+      await session.keyboard.type("needle-file")
+      const filtered = await waitForScreen(
+        session,
+        "the files list to filter while the query is being typed",
+        (screen) => screen.includes("?? needle-file.txt") && !screen.includes("?? alpha.txt"),
+      )
+      expect(filtered).toContain("Filter: needle-file")
+      await waitForSelectedRow(session, "?? needle-file.txt")
+
+      await session.keyboard.press("Enter")
+      await waitForText(session, "matches for 'needle-file' (1 of 2)")
+      await pressEscape(session)
+      await waitForText(session, "?? alpha.txt")
+      await waitForSelectedRow(session, "?? needle-file.txt")
+
+      await pressCtrl(session, "p")
+      await session.keyboard.type("Focus commits")
+      await waitForText(session, "Focus commits")
+      await session.keyboard.press("Enter")
+      await waitForSelectedRow(session, "latest wrapper")
+
+      await session.keyboard.type("/")
+      await waitForText(session, "Search:")
+      await session.keyboard.type("middle needle")
+      await session.keyboard.press("Enter")
+      await waitForSelectedRow(session, "middle needle")
+      const history = await session.screen.text()
+      expect(history).toContain("latest wrapper")
+      expect(history).toContain("first commit")
+
+      await session.keyboard.type("j")
+      await waitForSelectedRow(session, "first commit")
+      await session.keyboard.type("n")
+      await waitForSelectedRow(session, "middle needle")
+    })
+  }, 20_000)
+
   /**
    * The only place `keys: "return"` is proven against a real terminal. OpenTUI names the Enter
    * key `return` and core installs no aliases, so `keys: "enter"` would parse, register, and

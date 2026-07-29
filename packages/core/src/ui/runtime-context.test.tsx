@@ -47,6 +47,9 @@ function fakeRuntime(registrations: unknown[][]) {
     theme: store,
     events: { subscribe: () => ({ dispose: () => undefined }) },
     keys: { capture: () => ({ dispose: () => undefined }) },
+    listQuery: {
+      register: () => ({ update: () => undefined, dispose: () => undefined }),
+    },
     commands: {
       registerComponent: (...args: unknown[]) => {
         registrations.push(args)

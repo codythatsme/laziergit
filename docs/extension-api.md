@@ -1354,8 +1354,13 @@ positional jump cannot.
    * pane needs and none of them should write twice (§5.11):
    *
    * ```tsx
-   * const cursor = useListCursor({ items: files, idPrefix: "files", noun: "file" });
-   * // rows: index === cursor.index → highlighted; cursor.selected is the row itself
+   * const cursor = useListCursor({
+   *   items: branches,
+   *   idPrefix: "branches",
+   *   noun: "branch",
+   *   query: { mode: "filter", fields: (branch) => branch.name },
+   * });
+   * // Render cursor.items: filters project it; searches leave it equal to items.
    * ```
    * The index is always in range: clamped when the list shrinks (so the render
    * after a delete already draws a valid cursor rather than highlighting a row
@@ -1372,6 +1377,15 @@ positional jump cannot.
    * `ctrl+u`) remain absent here, but they are no longer impossible: a pane
    * that wants them can measure with {@link ScrollView.viewportRows} and move
    * the cursor with {@link ListCursor.setIndex}.
+   *
+   * `query` adds lazygit's two `/` behaviors without imposing row markup.
+   * `"filter"` applies smart-case, whitespace-separated substring terms live,
+   * selects the first match as the query changes, and maps the selection back
+   * to its source index when Escape clears the filter. `"search"` retains the
+   * full list; Enter jumps to the first match after the cursor (wrapping), and
+   * `n` / `shift+n` walk matches while `j` / `k` remain ordinary contextual
+   * movement. Core draws the editor and match status in the Status Line; the
+   * extension supplies the searchable fields and chooses the behavior.
    */
   export function useListCursor<T>(options: ListCursorOptions<T>): ListCursor<T>;
 
@@ -1387,12 +1401,39 @@ positional jump cannot.
     idPrefix: string;
     /** Singular noun for the cheat-sheet titles: "file" → "Next file". */
     noun: string;
+    query?: ListQueryOptions<T>;
+  }
+
+  export interface ListQueryOptions<T> {
+    readonly mode: "filter" | "search";
+    /**
+     * Complete searchable values for one row. Include values clipped from the
+     * rendered line when a user should still be able to find them.
+     */
+    readonly fields: (item: T) => string | readonly string[];
+  }
+
+  export interface ListQuery {
+    readonly mode: "filter" | "search";
+    /** The applied query; a search draft does not replace it until Enter. */
+    readonly value: string;
+    readonly editing: boolean;
+    readonly matchCount: number;
+    /** Zero-based for searches; null for filters and searches with no matches. */
+    readonly currentMatch: number | null;
+    clear(): void;
   }
 
   export interface ListCursor<T> {
+    /**
+     * The rows to render: matching rows for a filter, the original rows for a
+     * search or a cursor with no query declaration.
+     */
+    readonly items: readonly T[];
     /** Always in range: 0 while the list is empty, never past its end. */
     readonly index: number;
     readonly selected: T | undefined;
+    readonly query: ListQuery | undefined;
     /** Move the cursor — a click, or a row your extension just created. */
     setIndex(index: number): void;
     /**
@@ -1413,11 +1454,11 @@ positional jump cannot.
      */
     readonly scrollRef: (surface: ScrollSurface | null) => void;
     /**
-     * The `id` to put on the element drawn for `items[index]`, so the cursor can
-     * find that row and scroll it into view.
+     * The `id` to put on the element drawn for `cursor.items[index]`, so the
+     * cursor can find that row and scroll it into view.
      *
      * ```tsx
-     * {items.map((item, index) => (
+     * {cursor.items.map((item, index) => (
      *   <box key={item.id} id={cursor.rowId(index)}>…</box>
      * ))}
      * ```

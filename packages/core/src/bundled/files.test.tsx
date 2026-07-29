@@ -608,3 +608,30 @@ describe("what the files pane publishes", () => {
     expect(frame(harness)).toContain("selected src/a.txt")
   })
 })
+
+describe("filtering the files pane", () => {
+  it("filters paths live while retaining the matching file's directory row", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "docs/banana.md", "banana\n")
+    await write(harness, "src/apple.ts", "apple\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    expect(frame(harness)).toContain("banana.md")
+    expect(frame(harness)).toContain("apple.ts")
+
+    await press(harness, "/")
+    await act(async () => {
+      await harness.setup.mockInput.typeText("banana")
+      await Bun.sleep(60)
+    })
+    await settle(harness)
+
+    const rendered = frame(harness)
+    expect(rendered).toContain("Filter: banana")
+    expect(rendered).toContain("docs")
+    expect(rendered).toContain("banana.md")
+    expect(rendered).not.toContain("src")
+    expect(rendered).not.toContain("apple.ts")
+  })
+})

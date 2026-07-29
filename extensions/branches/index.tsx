@@ -395,7 +395,19 @@ export default defineExtension({
       const theme = useTheme()
       const branches = useGit((state) => state.branches)
       const repository = useGit((state) => hasRepository(state.head))
-      const cursor = useListCursor({ items: branches, idPrefix: "branches", noun: "branch" })
+      const cursor = useListCursor({
+        items: branches,
+        idPrefix: "branches",
+        noun: "branch",
+        query: {
+          mode: "filter",
+          fields: (branch) => [
+            branch.name,
+            branch.upstream === null ? "" : `${branch.upstream.remote}/${branch.upstream.branch}`,
+          ],
+        },
+      })
+      const visibleBranches = cursor.items
       const selected = cursor.selected
       // Keyed on the name, not the object: a refresh rebuilds every Branch, and re-issuing an
       // unchanged target would refetch the diff on every poll.
@@ -459,12 +471,13 @@ export default defineExtension({
         const message = repository ? "no branches yet — n creates one" : "no repository here"
         return <text fg={theme.textMuted} content={message} />
       }
+      if (visibleBranches.length === 0) return <text fg={theme.textMuted} content="no matching branches" />
 
       return (
         // `flexBasis={0}` sizes the box to the Pane rather than to its content, so a long list
         // scrolls instead of overflowing the frame.
         <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
-          {branches.map((branch, index) => (
+          {visibleBranches.map((branch, index) => (
             <BranchRow
               key={branch.name}
               id={cursor.rowId(index)}
