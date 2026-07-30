@@ -237,11 +237,14 @@ function ChooseView({ popup, theme }: { popup: ChoosePopup; theme: Theme }) {
         window.map((match, offset) => {
           const selected = start + offset === clamped
           return (
-            <box key={match.index} flexDirection="row" justifyContent="space-between">
-              <text
-                content={`${selected ? "❯ " : "  "}${match.item.label}`}
-                style={{ fg: selected ? theme.text : theme.textMuted, bg: selected ? theme.selection : undefined }}
-              />
+            <box
+              key={match.index}
+              width="100%"
+              flexDirection="row"
+              justifyContent="space-between"
+              backgroundColor={selected ? theme.selection : undefined}
+            >
+              <text content={match.item.label} style={{ fg: selected ? theme.text : theme.textMuted }} />
               {match.item.hint === undefined ? null : (
                 <text content={match.item.hint} style={{ fg: theme.textMuted }} />
               )}

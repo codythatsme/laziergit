@@ -163,6 +163,13 @@ function mergeConfigValues(base: unknown, override: unknown): unknown {
   return merged
 }
 
+function withoutTheme(value: unknown): unknown {
+  if (!isRecord(value)) return value
+  const copy: Record<string, unknown> = Object.assign(Object.create(null), value)
+  delete copy.theme
+  return copy
+}
+
 function readLayoutCell(value: unknown, path: string, log: ProblemLog): LayoutCell | undefined {
   if (typeof value === "string") return [value]
   if (isStringArray(value)) {
@@ -598,21 +605,23 @@ export async function readConfigDocuments(files: ConfigFiles): Promise<readonly 
 }
 
 /**
- * Parses and merges the documents in global → repo order. A file that fails to parse is
- * skipped with a problem recorded; the other file still applies.
+ * Parses and merges the documents in global → repo order. Theme is global-only; the repository
+ * document still contributes every other section. A file that fails to parse is skipped with a
+ * problem recorded; the other file still applies.
  */
 export function loadConfig(documents: readonly ConfigDocument[], themeOptions: ConfigThemeOptions = {}): LoadedConfig {
   const parseProblems: ConfigProblem[] = []
   let merged: unknown = undefined
 
-  for (const document of documents) {
+  for (const [index, document] of documents.entries()) {
     if (document.unreadable !== undefined) parseProblems.push({ path: document.path, message: document.unreadable })
     if (document.text === null) continue
     try {
       const parsed = parseJsonc(document.text)
       // An empty or comments-only file contributes nothing rather than erasing the other.
       if (parsed === undefined) continue
-      merged = merged === undefined ? parsed : mergeConfigValues(merged, parsed)
+      const contribution = index === 0 ? parsed : withoutTheme(parsed)
+      merged = merged === undefined ? contribution : mergeConfigValues(merged, contribution)
     } catch (error) {
       parseProblems.push({
         path: document.path,

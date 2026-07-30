@@ -8,9 +8,10 @@ and trailing commas):
 | `~/.config/laziergit/config.jsonc` (or `$XDG_CONFIG_HOME/laziergit/config.jsonc`) | every repository |
 | `<repo>/.laziergit/config.jsonc` | this repository only |
 
-The repo file is merged over the global one **key by key**: objects merge, so a repo file
-can override one Extension option and leave the rest; arrays replace wholesale, so a repo
-Layout is never a confusing concatenation of two Layouts.
+Except for `theme`, the repo file is merged over the global one **key by key**: objects merge,
+so a repo file can override one Extension option and leave the rest; arrays replace wholesale,
+so a repo Layout is never a confusing concatenation of two Layouts. Theme selection, resources,
+and token overrides are global; a `theme` section in the repo file is ignored.
 
 Every value is validated. A value laziergit cannot use falls back to its default with a
 diagnostic naming the exact path (`extensions.gh-workflows.limit: Must be at most 100`) —
@@ -50,7 +51,7 @@ repository — commit it or ignore it as you like.
 
 Editing `mouse`, `layout`, `keybindings`, `theme`, `statusline`, `leader`, or `git` rearranges the
 running screen — no Extension is reloaded and no Pane loses its cursor. The same is true of a
-valid edit under either `themes/` directory: the catalog is rebuilt and `useTheme()` consumers
+valid edit under the global `themes/` directory: the catalog is rebuilt and `useTheme()` consumers
 repaint in place. Editing anything under `extensions` reloads every Extension, because
 `ctx.config` is a constant snapshot for the lifetime of an activation (see
 [extension-api.md §5.6](./extension-api.md)) and reload is how a new snapshot is delivered.
@@ -152,7 +153,7 @@ Core's own Commands, all rebindable:
 | `app.focus.next` / `app.focus.previous` | `tab` / `shift+tab` | Move between Panes |
 | `app.focus.1` … `app.focus.9` | `1` … `9` | Jump to the nth Pane of the Layout, in reading order — columns left to right, cells top to bottom, tabs in their cell's order. A Pane behind a tab is reached the same way, and the jump brings it forward. The numbering follows your `layout`, so moving a Pane moves its digit; the cheat sheet (`?`) always names which is which |
 | `app.tab.next` / `app.tab.previous` | `]` / `[` | Cycle tabs inside the focused cell |
-| `app.theme` | — | Preview every available theme, then save the choice globally or for this repository |
+| `app.theme` | — | Preview every available theme, then save the choice globally |
 | `app.reload` | — | Reload every Extension |
 | `app.quit` | `q` | Quit |
 
@@ -227,21 +228,13 @@ The twelve built-in presets are:
 
 ### Theme resources
 
-Reusable themes are declarative JSON files in either of these directories:
+Reusable themes are declarative JSON files in
+`~/.config/laziergit/themes/*.json` (or `$XDG_CONFIG_HOME/laziergit/themes/*.json`). A global
+theme with the same `name` shadows the built-in theme; an invalid global file does not hide the
+valid built-in.
 
-| Directory | Scope |
-|---|---|
-| `~/.config/laziergit/themes/*.json` (or `$XDG_CONFIG_HOME/laziergit/themes/*.json`) | every repository |
-| `<repo>/.laziergit/themes/*.json` | this repository only |
-
-They use the same precedence as Extensions: built-in < global < repository. A later scope with
-the same `name` shadows the earlier one. An invalid higher-precedence file does not hide a
-valid lower-precedence theme.
-
-laziergit publishes `theme.schema.json` beside the global config. The relative `$schema` below
-therefore works unchanged for a global theme. Repository themes may omit `$schema` or point the
-editor at that global file explicitly; laziergit deliberately does not write generated files
-into the repository.
+laziergit publishes `theme.schema.json` beside the global config, so the relative `$schema`
+below works unchanged for every theme resource.
 
 ```json
 {
@@ -267,10 +260,10 @@ The format is strict:
 
 - `$schema` points an editor at the published theme schema.
 - `name` is the selection name: lowercase letters, digits, `.`, `_`, and `-`.
-- `description` is the one-line explanation shown by the picker.
-- `appearance` is `"dark"` or `"light"` and lets the picker describe and group the theme; a
-  fixed config selection does not switch merely because of this tag.
-- `extends` names any resolved built-in, global, or repository theme. Its palette,
+- `description` is one-line metadata for the theme and its generated schema.
+- `appearance` is `"dark"` or `"light"` and keeps automatic dark/light config completions
+  honest; a fixed config selection does not switch merely because of this tag.
+- `extends` names any resolved built-in or global theme. Its palette,
   `appearance`, and tokens are inherited before this file's values are applied.
 - `palette` maps local names to `#RRGGBB` colors.
 - `tokens` maps semantic `Theme` keys to either `#RRGGBB` or a name in this theme's inherited
@@ -282,11 +275,10 @@ stop startup or discard the rest of the catalog. If a theme that was already liv
 an invalid intermediate state, its last valid value stays on screen until the file is repaired
 or deleted. Saving a valid resource hot reloads it without reactivating Extensions.
 
-Run `app.theme` from the command palette to explore the catalog. Moving the cursor previews a
-theme immediately; Escape restores the theme that was active before the picker opened. After
-confirmation, choose global or repository scope. laziergit updates only `theme.preset` in the
-corresponding JSONC config, preserving its comments and unrelated formatting, and writes the
-result atomically.
+Run `app.theme` from the command palette to explore the catalog. The picker shows theme names
+only. Moving the cursor previews a theme immediately; Escape restores the theme that was active
+before the picker opened. Confirmation updates only `theme.preset` in the global JSONC config,
+preserving its comments and unrelated formatting, and writes the result atomically.
 
 The default `nocturne` canvas is transparent, so terminal opacity, wallpaper, and profile
 colors remain visible. Set `theme.background` to a color such as `"#0b0b12"` to request a

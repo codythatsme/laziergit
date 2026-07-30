@@ -246,7 +246,7 @@ export function buildConfigSchema(
 }
 
 /**
- * Builds the strict schema shared by global and repository theme documents.
+ * Builds the strict schema for global theme documents.
  *
  * A root theme must provide every token. An extending theme may override any subset because
  * completeness is checked after inheritance. Token values accept either a full hex color or a

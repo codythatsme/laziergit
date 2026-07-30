@@ -34,7 +34,7 @@ it("preserves comments, trailing commas, and unrelated formatting", () => {
 
 it("adds a theme section to an existing JSONC document without disturbing its comments", () => {
   const source = `{
-\t// Repository-specific settings.
+\t// Keep unrelated settings.
 \t"git": {
 \t\t"commitLimit": 100,
 \t},
@@ -42,7 +42,7 @@ it("adds a theme section to an existing JSONC document without disturbing its co
 `
   const updated = setThemeSelection(source, "ember")
 
-  expect(updated).toContain("// Repository-specific settings.")
+  expect(updated).toContain("// Keep unrelated settings.")
   expect(updated).toContain('"commitLimit": 100,')
   expect(updated).toContain('\n\t"theme": {')
   expect(parseJsonc(updated)).toEqual({
@@ -53,7 +53,7 @@ it("adds a theme section to an existing JSONC document without disturbing its co
 
 it("creates parent directories and atomically writes an automatic light/dark selection", async () => {
   const root = await temporaryDirectory()
-  const path = join(root, ".laziergit", "config.jsonc")
+  const path = join(root, "config", "config.jsonc")
 
   await writeThemeSelection(path, { dark: "nocturne", light: "daybreak" })
 
@@ -61,7 +61,7 @@ it("creates parent directories and atomically writes an automatic light/dark sel
   expect(parseJsonc(text)).toEqual({
     theme: { preset: { dark: "nocturne", light: "daybreak" } },
   })
-  expect(await readdir(join(root, ".laziergit"))).toEqual(["config.jsonc"])
+  expect(await readdir(join(root, "config"))).toEqual(["config.jsonc"])
 })
 
 it("leaves a malformed config untouched", async () => {
