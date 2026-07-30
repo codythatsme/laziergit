@@ -44,6 +44,20 @@ it("merges repo settings over global ones, replacing arrays and merging objects"
   expect(loaded.extensions.get("gh-workflows")).toEqual({ limit: 30, view: "unified" })
 })
 
+it("keeps theme global while merging other repository settings", () => {
+  const loaded = loadConfig(
+    documents(
+      `{ "theme": { "preset": "beacon", "accent": "#111111" }, "leader": "space" }`,
+      `{ "theme": { "preset": "daybreak", "accent": "#222222" }, "leader": "comma" }`,
+    ),
+  )
+
+  expect(loaded.problems).toEqual([])
+  expect(loaded.core.themeConfiguration.selection).toBe("beacon")
+  expect(loaded.core.theme.accent).toBe("#111111")
+  expect(loaded.core.leader).toBe("comma")
+})
+
 it("reads both Layout column forms and tab groups", () => {
   const loaded = loadConfig(
     documents(

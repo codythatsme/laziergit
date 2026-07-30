@@ -4,7 +4,15 @@ import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { act } from "react"
 
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  highlighted,
+  installHarnessLifecycle,
+  renderApp,
+  settle,
+  type Harness,
+} from "../test-harness"
 
 installHarnessLifecycle()
 
@@ -288,6 +296,16 @@ describe("focus and keybindings", () => {
 })
 
 describe("popups", () => {
+  it("uses the standard row highlight without a cursor glyph", async () => {
+    const harness = await createHarness()
+    await twoPanes(harness)
+
+    await press(harness, () => void harness.kernel.commands.execute("alpha.pick"))
+
+    expect(frame(harness)).not.toContain("❯")
+    expect(highlighted(harness).some((row) => row.includes("first"))).toBeTrue()
+  })
+
   it("hands keyboard focus back to the Pane's own field when a popup closes", async () => {
     const harness = await createHarness()
     // A Pane that focuses a Renderable of its own: the case where a modal stealing the
