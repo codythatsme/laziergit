@@ -119,7 +119,7 @@ export interface ExtensionKernelOptions {
 /** Core's own Commands. "app" is a reserved Extension name, so these ids can never collide. */
 const coreOwner = "app"
 
-/** How many Panes the number row can jump to. A tenth is still reachable with `tab`. */
+/** How many Layout cells the number row can jump to. A tenth is still reachable with `tab`. */
 const maxJumpKeys = 9
 
 function candidateKey(candidate: ExtensionCandidate): string {
@@ -554,7 +554,10 @@ export class ExtensionKernel {
   }
 
   /**
-   * Rebuilds the `1`–`9` Commands so each digit names the Pane it currently jumps to.
+   * Rebuilds the `1`–`9` Commands so each digit names the cell it currently jumps to. Core
+   * owns these rather than each Extension claiming a digit, so a cell's number is its position
+   * in the user's Layout and a third-party Pane is reachable the moment it is placed.
+   *
    * Keyed on a signature of the titles rather than rebuilt on every publish: the Layout also
    * republishes on focus changes, and that would rebuild every keymap layer per keypress.
    */
@@ -562,9 +565,9 @@ export class ExtensionKernel {
     if (this.#stopped) return
 
     const titles = this.layout
-      .liveTabs()
+      .jumpTargets()
       .slice(0, maxJumpKeys)
-      .map((paneId) => this.#paneTitle(paneId))
+      .map((paneIds) => paneIds.map((paneId) => this.#paneTitle(paneId)).join(" / "))
     const signature = titles.join("\0")
     if (signature === this.#jumpSignature) return
     this.#jumpSignature = signature

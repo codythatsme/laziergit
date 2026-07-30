@@ -166,8 +166,7 @@ async function waitFor(harness: Harness, condition: () => boolean | Promise<bool
 }
 
 /**
- * Focuses the files Pane — which is also the `files.focus` binding under test. It is already
- * the Layout's first cell, so pressing `2` is what keeps the binding exercised.
+ * Focuses the files Pane through the first positional jump key.
  */
 async function focusFiles(harness: Harness): Promise<void> {
   await press(harness, "1")
@@ -558,8 +557,8 @@ describe("what the files pane publishes", () => {
     await write(harness, "loose.txt", "untracked\n")
 
     await renderApp(harness)
-    // The jump key reaches this Pane even though it starts behind the diff tab — a hidden
-    // tab has a digit like any other Pane, and using it brings the tab to the front.
+    // Diff activates first because Files depends on it, so the cell initially remembers Diff.
+    // Repeating the cell's digit cycles to Files.
     await focusFiles(harness)
     await press(harness, "V")
     expect(frame(harness)).toContain("selected loose.txt")

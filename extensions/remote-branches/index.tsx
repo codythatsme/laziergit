@@ -352,7 +352,7 @@ export default defineExtension({
       if (remotes.length > 0 && pane === undefined) {
         pane = ctx.panes.register({
           id: "remote-branches",
-          title: "Remote branches",
+          title: "Remote",
           component: RemoteBranchesPane,
           placement: { column: 0, order: 31, tabWith: "branches" },
         })

@@ -21,7 +21,7 @@ function PaneErrorCard({ failure }: { failure: PluginErrorEvent }) {
 /** Tab titles for a cell; the visible one is bracketed so it reads without color. */
 function cellTitle(entries: readonly PaneEntry[], activeId: string): string {
   if (entries.length === 1) return entries[0]?.title ?? activeId
-  return entries.map((entry) => (entry.id === activeId ? `[${entry.title}]` : entry.title)).join(" ")
+  return entries.map((entry) => (entry.id === activeId ? `[${entry.title}]` : entry.title)).join(" - ")
 }
 
 function PaneFrame({

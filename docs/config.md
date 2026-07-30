@@ -151,7 +151,7 @@ Core's own Commands, all rebindable:
 | `app.palette` | `ctrl+p`, `:` | Command palette. Not `mod+p`: a macOS terminal that can report cmd is also free to keep it, and several do ([ADR-0004](./adr/0004-terminal-safe-default-keys.md)) |
 | `app.cheatsheet` | `?` | Every key live in the focused Pane, then the globals |
 | `app.focus.next` / `app.focus.previous` | `tab` / `shift+tab` | Move between Panes |
-| `app.focus.1` … `app.focus.9` | `1` … `9` | Jump to the nth Pane of the Layout, in reading order — columns left to right, cells top to bottom, tabs in their cell's order. A Pane behind a tab is reached the same way, and the jump brings it forward. The numbering follows your `layout`, so moving a Pane moves its digit; the cheat sheet (`?`) always names which is which |
+| `app.focus.1` … `app.focus.9` | `1` … `9` | Jump to the nth cell of the Layout, in reading order — columns left to right, cells top to bottom. Tabs in one cell share its digit; press that digit again to cycle them. The numbering follows your `layout`, so moving a cell moves its digit; the cheat sheet (`?`) always names which is which |
 | `app.tab.next` / `app.tab.previous` | `]` / `[` | Cycle tabs inside the focused cell |
 | `app.theme` | — | Preview every available theme, then save the choice globally |
 | `app.reload` | — | Reload every Extension |

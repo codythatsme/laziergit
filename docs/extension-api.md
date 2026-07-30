@@ -1171,14 +1171,14 @@ tagged with the extension name, and routed to the log file / debug pane.
   }
 ```
 
-**The number row belongs to core.** `1`–`9` focus the first nine Panes of the Layout in
-reading order — columns left to right, cells top to bottom, tabs in the order their cell
-lists them — and a Pane behind a tab is reached the same way, with the jump bringing it to
-the front. Nothing an Extension does earns or claims a digit, which is the point: your Pane
-is reachable the moment a Layout places it, and cannot collide with another Extension that
-guessed the same number. The commands are `app.focus.1` … `app.focus.9` and rebindable like
-any other; their titles follow the Panes they currently point at, so the cheat sheet reads
-`1 Focus Files`, `2 Focus Branches`, and so on.
+**The number row belongs to core.** `1`–`9` focus the first nine cells of the Layout in
+reading order — columns left to right, cells top to bottom. Tabs in one cell share its digit;
+pressing that digit while its cell is focused cycles to the next tab, just like `]`. Nothing
+an Extension does earns or claims a digit, which is the point: your Pane is reachable the
+moment a Layout places it, and cannot collide with another Extension that guessed the same
+number. The commands are `app.focus.1` … `app.focus.9` and rebindable like any other; their
+titles name all tabs in the cell, so the cheat sheet reads `1 Focus Files`,
+`2 Focus Local branches / Remote`, and so on.
 
 Register a focus command of your own anyway, without `keys` — the bundled Panes all do
 (`files.focus`, `branches.focus`, …). It costs nothing, gives the palette a row that names

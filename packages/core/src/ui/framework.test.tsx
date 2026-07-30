@@ -216,7 +216,7 @@ describe("config-driven Layout", () => {
 
     expect(harness.kernel.layout.getSnapshot().layout.columns[0]?.cells[0]?.paneIds).toEqual(["beta", "alpha"])
     // Rearranging keeps the Pane the user was on visible rather than resetting the tab.
-    expect(frame(harness)).toContain("Beta [Alpha]")
+    expect(frame(harness)).toContain("Beta - [Alpha]")
     expect(harness.kernel.layout.focusedPaneId).toBe("alpha")
     expect(activations()).toBe(before)
   })
