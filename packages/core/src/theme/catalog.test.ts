@@ -74,12 +74,51 @@ describe("parseThemeDocument", () => {
     ])
   })
 
+  it("allows transparency only for the canvas background", () => {
+    const accepted = parseThemeDocument(
+      JSON.stringify({
+        name: "native-canvas",
+        extends: "daybreak",
+        tokens: { background: "transparent" },
+      }),
+      { scope: "global", path: "/themes/native-canvas.json" },
+    )
+    const rejected = parseThemeDocument(
+      JSON.stringify({
+        name: "transparent-panel",
+        extends: "daybreak",
+        tokens: { backgroundPanel: "transparent" },
+      }),
+      { scope: "global", path: "/themes/transparent-panel.json" },
+    )
+
+    expect(accepted.diagnostics).toEqual([])
+    expect(accepted.definition?.tokens.background).toBe("transparent")
+    expect(rejected.definition).toBeUndefined()
+    expect(rejected.diagnostics).toEqual([
+      expect.objectContaining({ code: "invalid-token-value", property: "tokens.backgroundPanel" }),
+    ])
+  })
+
   it("publishes the exact token vocabulary of the default public Theme", () => {
     expect([...themeTokenNames] as string[]).toEqual(Object.keys(defaultTheme))
   })
 })
 
 describe("buildThemeCatalog", () => {
+  it("resolves a transparent canvas as a direct background value", () => {
+    const catalog = buildThemeCatalog(themePresets, [
+      source("/global/native-canvas.json", {
+        name: "native-canvas",
+        extends: "daybreak",
+        tokens: { background: "transparent" },
+      }),
+    ])
+
+    expect(catalog.diagnostics.filter((entry) => entry.severity === "error")).toEqual([])
+    expect(catalog.get("native-canvas")?.tokens.background).toBe("transparent")
+  })
+
   it("inherits palette, appearance and tokens before applying a child override", () => {
     const catalog = buildThemeCatalog(themePresets, [
       source("/global/a-parent.json", {

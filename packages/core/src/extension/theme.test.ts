@@ -59,9 +59,10 @@ describe("theme presets", () => {
     expect(findThemePreset("no-such-preset")).toBeUndefined()
   })
 
-  it("spells every token of every preset as a six-digit hex color", () => {
+  it("spells every painted token of every preset as a six-digit hex color", () => {
     for (const entry of themePresets) {
       for (const [token, color] of Object.entries(entry.tokens)) {
+        if (token === "background" && color === "transparent") continue
         expect(`${entry.name}.${token}=${color}`).toMatch(/=#[0-9a-f]{6}$/)
       }
       // A preset is a complete base, not a patch: a missing token would silently inherit a
@@ -74,6 +75,9 @@ describe("theme presets", () => {
     const failures: string[] = []
     for (const entry of themePresets) {
       for (const [foreground, background, floor] of contrastFloors) {
+        // No palette can promise contrast against an arbitrary terminal profile. The selected
+        // row and raised panel remain known surfaces and keep their guarantees below.
+        if (entry.tokens[background] === "transparent") continue
         const ratio = contrast(entry.tokens[foreground], entry.tokens[background])
         if (ratio < floor) {
           failures.push(`${entry.name}: ${foreground}/${background} = ${ratio.toFixed(2)}, needs ${floor}`)
@@ -82,10 +86,12 @@ describe("theme presets", () => {
 
       // Focus is read at a glance across four frames at once, so the focused border has to be
       // a step rather than a shade.
-      const step =
-        contrast(entry.tokens.borderFocused, entry.tokens.background) /
-        contrast(entry.tokens.border, entry.tokens.background)
-      if (step < 2) failures.push(`${entry.name}: focused border is only ${step.toFixed(2)}x the unfocused one`)
+      if (entry.tokens.background !== "transparent") {
+        const step =
+          contrast(entry.tokens.borderFocused, entry.tokens.background) /
+          contrast(entry.tokens.border, entry.tokens.background)
+        if (step < 2) failures.push(`${entry.name}: focused border is only ${step.toFixed(2)}x the unfocused one`)
+      }
 
       // The files Pane draws the index column green immediately beside the working-tree column
       // red, so hue alone carries a meaning a red-green deficiency cannot read: the pair has
@@ -98,6 +104,10 @@ describe("theme presets", () => {
       }
     }
     expect(failures).toEqual([])
+  })
+
+  it("leaves the default canvas to the terminal", () => {
+    expect(defaultTheme.background).toBe("transparent")
   })
 })
 

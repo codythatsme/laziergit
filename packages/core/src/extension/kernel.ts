@@ -759,6 +759,7 @@ export class ExtensionKernel {
   }
 
   #applyCoreConfig(core: CoreConfig): void {
+    this.#renderer.useMouse = core.mouse
     this.theme.replace(core.theme)
     this.layout.setConfig(core.layout)
     this.commands.setKeybindings(core.keybindings)

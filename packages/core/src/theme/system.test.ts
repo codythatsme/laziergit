@@ -70,3 +70,14 @@ it("uses the ordinary ANSI slots in light mode and falls back for absent colors"
   expect(theme.accent).toBe("#5f005f")
   expect(theme.selection).not.toBe("")
 })
+
+it("uses a solid calculation fallback when the selected application canvas is transparent", () => {
+  const theme = createSystemTheme(
+    terminalColors({ defaultBackground: null, defaultForeground: null, highlightBackground: null }),
+    "dark",
+    fallback("nocturne"),
+  )
+
+  expect(theme.background).toBe("#0b0b12")
+  expect(theme.text).toMatch(/^#[0-9a-f]{6}$/)
+})

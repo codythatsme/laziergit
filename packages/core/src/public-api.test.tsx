@@ -25,11 +25,28 @@ const rowsSource = `
     activate(ctx) {
       const host = createRowSource<Row>({ key: (row) => row.name })
 
-      function RowLine({ row, selected }: { readonly row: Row; readonly selected: boolean }) {
+      function RowLine({
+        id,
+        row,
+        selected,
+        onSelect,
+      }: {
+        readonly id: string
+        readonly row: Row
+        readonly selected: boolean
+        readonly onSelect: () => void
+      }) {
         const theme = useTheme()
         const decoration = host.useDecoration(row)
         const badge = decoration === undefined ? "" : " [" + (decoration.badge ?? "-") + "/" + (decoration.tone ?? "-") + "]"
-        return <text fg={toneColor(theme, decoration?.tone)} content={(selected ? "> " : "  ") + row.name + badge} />
+        return (
+          <text
+            id={id}
+            fg={toneColor(theme, decoration?.tone)}
+            content={(selected ? "> " : "  ") + row.name + badge}
+            onMouseDown={onSelect}
+          />
+        )
       }
 
       function RowsPane({ focused }: PaneProps) {
@@ -56,7 +73,13 @@ const rowsSource = `
         return (
           <box flexDirection="column">
             {cursor.items.map((row, index) => (
-              <RowLine key={row.name} row={row} selected={index === cursor.index && focused} />
+              <RowLine
+                key={row.name}
+                id={cursor.rowId(index)}
+                row={row}
+                selected={index === cursor.index && focused}
+                onSelect={() => cursor.setIndex(index)}
+              />
             ))}
             <text content={"cursor=" + cursor.index + " selected=" + (cursor.selected?.name ?? "none")} />
           </box>
@@ -181,6 +204,20 @@ async function withExtensions(harness: Harness, sources: Record<string, string>,
 }
 
 describe("useListCursor", () => {
+  it("moves to the row clicked with the mouse", async () => {
+    const harness = await createHarness()
+    await withExtensions(harness, { "rows.tsx": rowsSource })
+
+    const third = harness.setup.renderer.root.findDescendantById("rows.row.2")
+    if (!third) throw new Error("third row did not render")
+    await act(async () => {
+      await harness.setup.mockMouse.click(third.x, third.y)
+    })
+    await settle(harness)
+
+    expect(frame(harness)).toContain("cursor=2 selected=three")
+  })
+
   it("clamps to a shrinking list without resurrecting the old position", async () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource })

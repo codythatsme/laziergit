@@ -528,6 +528,7 @@ export default defineExtension({
       decoration,
       selected,
       focused,
+      onSelect,
     }: {
       readonly id: string
       readonly depth: number
@@ -536,13 +537,14 @@ export default defineExtension({
       readonly decoration: RowDecoration | undefined
       readonly selected: boolean
       readonly focused: boolean
+      readonly onSelect: () => void
     }) {
       const theme = useTheme()
       const dim = decoration?.dim === true
       const badge = decoration?.badge
 
       return (
-        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
+        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined} onMouseDown={onSelect}>
           {/* The status pair sits before the indent, so `XY` pins to the same two columns
               however deep the row is. */}
           <span fg={dim ? theme.textMuted : theme[cell.indexToken]}>{cell.index}</span>
@@ -561,6 +563,7 @@ export default defineExtension({
       readonly depth: number
       readonly selected: boolean
       readonly focused: boolean
+      readonly onSelect: () => void
     }) {
       const decoration = host.useDecoration(props.node.change)
       return (
@@ -572,6 +575,7 @@ export default defineExtension({
           decoration={decoration}
           selected={props.selected}
           focused={props.focused}
+          onSelect={props.onSelect}
         />
       )
     }
@@ -583,6 +587,7 @@ export default defineExtension({
       readonly folded: boolean
       readonly selected: boolean
       readonly focused: boolean
+      readonly onSelect: () => void
     }) {
       return (
         <Line
@@ -593,6 +598,7 @@ export default defineExtension({
           decoration={undefined}
           selected={props.selected}
           focused={props.focused}
+          onSelect={props.onSelect}
         />
       )
     }
@@ -748,6 +754,7 @@ export default defineExtension({
                 depth={row.depth}
                 selected={rowIndex === index}
                 focused={focused}
+                onSelect={() => cursor.setIndex(rowIndex)}
               />
             ) : (
               <DirectoryLine
@@ -758,6 +765,7 @@ export default defineExtension({
                 folded={isFolded(row.node, folds, threshold)}
                 selected={rowIndex === index}
                 focused={focused}
+                onSelect={() => cursor.setIndex(rowIndex)}
               />
             ),
           )}

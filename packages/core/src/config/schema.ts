@@ -153,7 +153,13 @@ function themeSchema(themes: ThemeSchemaSource | undefined): JsonSchema {
     preset: presetVariantSchema(configThemes(themes)),
   }
   for (const [token, color] of Object.entries(defaultTheme)) {
-    properties[token] = { type: "string", pattern: "^#[0-9a-fA-F]{6}$", default: color }
+    properties[token] =
+      token === "background"
+        ? {
+            oneOf: [{ type: "string", pattern: "^#[0-9a-fA-F]{6}$" }, { const: "transparent" }],
+            default: color,
+          }
+        : { type: "string", pattern: "^#[0-9a-fA-F]{6}$", default: color }
   }
   return { type: "object", properties, additionalProperties: false }
 }
@@ -181,6 +187,11 @@ export function buildConfigSchema(
     type: "object",
     properties: {
       $schema: { type: "string" },
+      mouse: {
+        type: "boolean",
+        default: true,
+        description: "Capture mouse events for clicking, scrolling, and text selection",
+      },
       layout: {
         type: "object",
         description: "Columns of Panes. Panes left out fall back to their Extension's placement hint.",
@@ -257,7 +268,17 @@ export function buildThemeDocumentSchema(themes?: ThemeSchemaSource): JsonSchema
     ],
   }
   const tokenProperties: JsonSchema = {}
-  for (const token of themeTokenNames) tokenProperties[token] = tokenValueSchema
+  for (const token of themeTokenNames) {
+    tokenProperties[token] =
+      token === "background"
+        ? {
+            oneOf: [
+              ...(tokenValueSchema.oneOf as readonly JsonSchema[]),
+              { const: "transparent", description: "Preserve the terminal's native background" },
+            ],
+          }
+        : tokenValueSchema
+  }
 
   const rootCompleteness: JsonSchema = {
     if: { not: { required: ["extends"] } },

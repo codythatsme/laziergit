@@ -132,6 +132,15 @@ it("treats an empty or comments-only file as contributing nothing", () => {
   expect(loadConfig(documents("", "")).core.leader).toBe("space")
 })
 
+it("defaults mouse capture on, accepts false, and rejects other values", () => {
+  expect(loadConfig(documents(null, null)).core.mouse).toBe(true)
+  expect(loadConfig(documents(`{ "mouse": false }`, null)).core.mouse).toBe(false)
+
+  const rejected = loadConfig(documents(`{ "mouse": "sometimes" }`, null))
+  expect(rejected.core.mouse).toBe(true)
+  expect(rejected.problems).toEqual([{ path: "mouse", message: "mouse must be a boolean" }])
+})
+
 it("cannot be made to reparent the merged document with a __proto__ key", () => {
   const loaded = loadConfig(documents(`{ "leader": "comma" }`, `{ "__proto__": { "leader": "x", "typo": 1 } }`))
 
@@ -221,6 +230,16 @@ it("requires six-digit hex inline overrides and validates both sides of an autom
   ])
   expect(loaded.core.theme.accent).toBe(defaultTheme.accent)
   expect(loaded.core.themeConfiguration.selection).toEqual({ dark: "nocturne", light: "daybreak" })
+})
+
+it("allows only the canvas background to preserve terminal transparency", () => {
+  const loaded = loadConfig(
+    documents(`{ "theme": { "background": "transparent", "backgroundPanel": "transparent" } }`, null),
+  )
+
+  expect(loaded.core.theme.background).toBe("transparent")
+  expect(loaded.core.theme.backgroundPanel).toBe(defaultTheme.backgroundPanel)
+  expect(loaded.problems).toEqual([{ path: "theme.backgroundPanel", message: "A theme token must use #RRGGBB" }])
 })
 
 it("reports a misspelled key in the Layout, in a Layout column, and in the status line", () => {

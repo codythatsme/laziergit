@@ -472,6 +472,7 @@ export interface Theme {
   readonly warning: string
   readonly danger: string
   readonly info: string
+  /** The Layout canvas. `"transparent"` preserves the terminal's native background. */
   readonly background: string
   /**
    * The raised chrome above {@link background} — popups and the status line. Not a Pane

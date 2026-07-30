@@ -66,7 +66,8 @@ A document has this shape:
 
 `extends` makes partial themes useful without making missing tokens implicit. Palette entries
 are six-digit hex colors, token values are either the same form or a key in `palette`, and
-unknown fields or semantic tokens are errors. Inheritance may cross scopes after shadowing;
+unknown fields or semantic tokens are errors. The `background` token alone also accepts
+`"transparent"` to preserve the terminal canvas. Inheritance may cross scopes after shadowing;
 cycles and missing parents reject the affected theme.
 
 Config continues to own selection and per-repository policy:

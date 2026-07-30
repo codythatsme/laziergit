@@ -261,13 +261,20 @@ function readTokens(
     }
     if (
       typeof color !== "string" ||
-      (!hexColorPattern.test(color) && (color.startsWith("#") || !paletteNamePattern.test(color)))
+      (!hexColorPattern.test(color) &&
+        !(name === "background" && color === "transparent") &&
+        (color === "transparent" || color.startsWith("#") || !paletteNamePattern.test(color)))
     ) {
       diagnostics.push(
-        diagnostic(source, "invalid-token-value", `Theme token "${name}" must use #RRGGBB or name a palette color`, {
-          themeName,
-          property,
-        }),
+        diagnostic(
+          source,
+          "invalid-token-value",
+          `Theme token "${name}" must use #RRGGBB${name === "background" ? ', "transparent",' : " or"} name a palette color`,
+          {
+            themeName,
+            property,
+          },
+        ),
       )
       continue
     }
@@ -540,7 +547,7 @@ export function buildThemeCatalog(
     for (const tokenName of themeTokenNames) {
       const expression = definition.tokens[tokenName]
       if (expression === undefined) continue
-      if (hexColorPattern.test(expression)) {
+      if (hexColorPattern.test(expression) || (tokenName === "background" && expression === "transparent")) {
         tokens[tokenName] = expression
         continue
       }

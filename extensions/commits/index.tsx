@@ -470,11 +470,13 @@ export default defineExtension({
       id,
       selected,
       focused,
+      onSelect,
     }: {
       readonly commit: Commit
       readonly id: string
       readonly selected: boolean
       readonly focused: boolean
+      readonly onSelect: () => void
     }) {
       const theme = useTheme()
       const decoration = rows.useDecoration(commit)
@@ -482,7 +484,7 @@ export default defineExtension({
       const badge = decoration?.badge
 
       return (
-        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
+        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined} onMouseDown={onSelect}>
           <span fg={dim ? theme.textMuted : theme.accent}>{commit.shortOid}</span>
           {/* A fixed-width gutter, so the merge marker does not shift the subject right. */}
           <span fg={dim ? theme.textMuted : theme.info}>{isMerge(commit) ? "⑂ " : "  "}</span>
@@ -558,6 +560,7 @@ export default defineExtension({
                 commit={commit}
                 selected={index === cursor.index}
                 focused={focused}
+                onSelect={() => cursor.setIndex(index)}
               />
             ))}
           </scrollbox>

@@ -48,7 +48,7 @@ repository — commit it or ignore it as you like.
 
 ## What a change costs
 
-Editing `layout`, `keybindings`, `theme`, `statusline`, `leader`, or `git` rearranges the
+Editing `mouse`, `layout`, `keybindings`, `theme`, `statusline`, `leader`, or `git` rearranges the
 running screen — no Extension is reloaded and no Pane loses its cursor. The same is true of a
 valid edit under either `themes/` directory: the catalog is rebuilt and `useTheme()` consumers
 repaint in place. Editing anything under `extensions` reloads every Extension, because
@@ -56,6 +56,20 @@ repaint in place. Editing anything under `extensions` reloads every Extension, b
 [extension-api.md §5.6](./extension-api.md)) and reload is how a new snapshot is delivered.
 Reformatting the config file — reordering keys, changing comments or whitespace — costs
 nothing: only the values are compared.
+
+## `mouse` — terminal mouse capture
+
+```jsonc
+{ "mouse": true }
+```
+
+Mouse capture defaults to `true`. It lets the wheel scroll whatever `<scrollbox>` is under the
+pointer, clicking a Pane gives that Pane the keyboard, and clicking a list row moves its cursor.
+Set it to `false` to leave every mouse gesture to the terminal. The change applies immediately.
+
+While capture is enabled, OpenTUI owns ordinary drags for its text selection. Most terminals
+provide a modifier that bypasses application mouse capture when native terminal selection is
+needed.
 
 ## `layout` — where Panes go
 
@@ -186,9 +200,10 @@ built-in colors as the fallback when the terminal does not report a usable value
 Any other key under `theme` is a token on `Theme` ([§1.8](./extension-api.md)) overriding the
 selected palette. Both halves are optional — a `theme` with only tokens overrides `nocturne`,
 and no `theme` at all selects it unchanged. Inline colors are strict six-digit RGB strings:
-`#RRGGBB`. Shorthand such as `#fff`, alpha colors, terminal names, and bare palette references
-are rejected with a diagnostic. Extensions consume the result through `useTheme()` and never
-pick a preset by name, so one override retints every Pane at once.
+`#RRGGBB`; `background` also accepts `"transparent"` to preserve the terminal canvas. Shorthand
+such as `#fff`, alpha colors, terminal names in other tokens, and bare palette references are
+rejected with a diagnostic. Extensions consume the result through `useTheme()` and never pick
+a preset by name, so one override retints every Pane at once.
 
 The twelve built-in presets are:
 
@@ -256,7 +271,7 @@ The format is strict:
   `appearance`, and tokens are inherited before this file's values are applied.
 - `palette` maps local names to `#RRGGBB` colors.
 - `tokens` maps semantic `Theme` keys to either `#RRGGBB` or a name in this theme's inherited
-  palette.
+  palette. `background` alone may also be `"transparent"`.
 
 Unknown fields, unknown tokens, invalid colors, missing parents, incomplete themes, and
 inheritance cycles are rejected. Diagnostics name the file and field; one bad theme does not
@@ -270,12 +285,20 @@ confirmation, choose global or repository scope. laziergit updates only `theme.p
 corresponding JSONC config, preserving its comments and unrelated formatting, and writes the
 result atomically.
 
-Every shipped preset is held to contrast floors by test, not by eye: body text at 7:1 on both
-the background and the selected row, every semantic color and `textMuted` at 4.5:1, a focused
-border at least twice the strength of an unfocused one, and staged-green separated from
-unstaged-red in *luminance* as well as hue — because the files Pane draws those two columns
-side by side, and hue alone is not readable to everyone. Overriding a token is not checked
-against any of that; the floors govern what laziergit ships, not what you choose.
+The default `nocturne` canvas is transparent, so terminal opacity, wallpaper, and profile
+colors remain visible. Set `theme.background` to a color such as `"#0b0b12"` to request a
+solid canvas instead.
+
+Every known surface in a shipped preset is held to contrast floors by test, not by eye. Solid
+canvases keep body text at 7:1 and semantic colors at 4.5:1; the transparent default keeps the
+same guarantees on its selected rows and raised panel. Staged-green is also separated from
+unstaged-red in *luminance* as well as hue, because the files Pane draws those two columns
+side by side and hue alone is not readable to everyone.
+
+No palette can guarantee contrast against an arbitrary native terminal background:
+`nocturne` expects a dark terminal profile. On a light profile, use `daybreak` with
+`"background": "transparent"`. Overriding a token is not checked against the shipped floors;
+they govern what laziergit ships, not what you choose.
 
 ## `git` — how the repository is watched
 
