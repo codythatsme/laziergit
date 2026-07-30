@@ -349,7 +349,7 @@ export default defineExtension({
     }
 
     // Not gated on the branch having an upstream: a branch can be on the remote without one
-    // configured, and an unpushed branch gets a 404 from the host, as it does in lazygit.
+    // configured, and an unpushed branch gets a 404 from the host.
     async function openPullRequest(branch: Branch): Promise<void> {
       const url = pullRequestUrl(ctx.git.state.remotes, branch.name)
       if (url === null) return ctx.popups.notify("No web remote to open a pull request on", "warning")
@@ -500,7 +500,7 @@ export default defineExtension({
       placement: { column: 0, order: 30 },
     })
 
-    // Keyless: core binds `1`–`9` positionally over the Layout (§1.7).
+    // Keyless: core binds `1`–`9` positionally over the Layout.
     ctx.commands.register({
       id: "branches.focus",
       title: "Focus branches",

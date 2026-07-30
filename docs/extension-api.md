@@ -1,7 +1,6 @@
 # laziergit public API — the `"laziergit"` module
 
-**Method note.** This surface was derived backwards (after a three-draft judged synthesis —
-see PLAN.md) from a corpus of eight worked extensions
+**Method note.** This surface was derived backwards from a corpus of eight worked extensions
 (open-remote, branch-age, ci-status, conventional-commit, stash-preview, gh-workflows,
 github-prs, and a push-guard interceptor experiment that was ultimately cut — see §5.11): the
 API below is what made them shortest and most obvious. Every mini-extension appears in §0 and
@@ -2674,9 +2673,8 @@ core prefixes are reserved names.
 
 ### 5.2 `api` lives in `activate`'s return value
 
-The project's extension-anatomy decision (PLAN.md) sketched an `api` field on the spec; this
-design realizes it as the return value of `activate` (VS Code precedent) — a deliberate,
-visible deviation from the sketched anatomy. Reasons: the API almost always closes over state built during activation (the
+An early sketch of the extension anatomy had an `api` field on the spec; this
+design realizes it as the return value of `activate` (VS Code precedent). Reasons: the API almost always closes over state built during activation (the
 `byBranch` cache in github-prs); a separate field would either run before that state exists,
 need its own factory-with-ctx lifecycle, or force shared state into module scope; and inference
 is free — `ExtensionApiOf<typeof extension>` extracts it with zero duplication, so the declared
@@ -3031,7 +3029,7 @@ renderer still handles ctrl+C independently of the kernel, so the process itself
   (`layout.columns[].weight`), and per-cell height has no control at all yet. Likewise the
   default startup focus lands on the Layout's first cell rather than the first Pane with rows to
   walk (config `layout.focus` overrides it). These are layout refinements with known shapes,
-  post-v1 (PLAN.md) — not API gaps.
+  post-v1 (see the roadmap in architecture.md) — not API gaps.
 - **A second fake-renderer acceptance layer.** Tests about pure logic, lifecycle, argv, and git
   effects stay in the fast harness; tests about what a person sees or what a real keypress does
   run through Terminal Control against `main.tsx` in a real PTY. The focused `test:e2e` suite
@@ -3125,7 +3123,7 @@ with git's own `UU` / `AA` / `DU` pair wherever they sit in the tree, marks ever
 above them `!`, offers "open in editor" and "stage resolved" from `files.actions`,
 and otherwise stays out of the way — resolution happens in the user's editor or `git
 mergetool`. It is deliberately less than lazygit, which renders a pick-ours / pick-theirs /
-pick-both hunk picker; that is post-v1 (PLAN.md) and is the work that will want the
+pick-both hunk picker; that is post-v1 (see the roadmap in architecture.md) and is the work that will want the
 patch-level staging surface §5.11 leaves out. Nothing here
 is privileged: a third-party extension can register a conflicts Pane and splice into
 `files.actions` today, on exactly the API the bundled one uses.

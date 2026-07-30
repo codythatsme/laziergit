@@ -145,7 +145,7 @@ export function validateExtensionSpec(value: unknown): asserts value is Extensio
  * its own schema and mutate it after the host has read it.
  *
  * Re-narrowed with guards rather than asserted from {@link validateConfigOption}'s result:
- * that runs in another function, and an Extension arrives as untypechecked source (ADR-0003),
+ * that runs in another function, and an Extension arrives as untypechecked source,
  * so the values really are `unknown` here.
  */
 function normalizeConfigOption(option: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {

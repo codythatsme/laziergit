@@ -40,8 +40,7 @@ export async function main() {
   try {
     renderer = await createCliRenderer({
       exitOnCtrlC: true,
-      // Match Pi's three requested Kitty enhancements. Its working Warp path differs from
-      // OpenTUI's default only by event reporting, so keep the negotiation equivalent here.
+      // OpenTUI's default Kitty negotiation omits event reporting, which Warp needs.
       useKittyKeyboard: { events: true },
       prependInputHandlers: [
         (sequence) =>
@@ -59,8 +58,8 @@ export async function main() {
       },
     })
     const activeRenderer = renderer
-    // OpenTUI starts at modifyOtherKeys level 1. Match Pi's level-2 fallback until a Kitty
-    // response arrives; if one does, OpenTUI disables this mode before pushing Kitty flags.
+    // OpenTUI starts at modifyOtherKeys level 1; raise to level 2 until a Kitty response
+    // arrives — if one does, OpenTUI disables this mode before pushing Kitty flags.
     enableLegacyModifiedKeys(activeRenderer.capabilities, (sequence) => process.stdout.write(sequence))
     terminalControl = provideTerminalControl(activeRenderer, {
       application: { name: "laziergit", version: "0.0.0" },

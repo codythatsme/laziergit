@@ -172,7 +172,7 @@ export function useKeyCapture(active: boolean): void {
 
 /**
  * The slice of OpenTUI's `<scrollbox>` the scrolling seam drives. Declared structurally
- * because an Extension may not import `@opentui/core` (ADR-0001).
+ * because an Extension may not import `@opentui/core`.
  */
 export interface ScrollSurface {
   scrollTop: number
@@ -603,7 +603,7 @@ export function useListCursor<T>({ items, idPrefix, noun, query: queryOptions }:
   ])
 
   // Each motion binds the vim key and its arrow/nav twin. A config rebind replaces the whole
-  // list for that Command (§1.7), which is the way to get only one of the two.
+  // list for that Command, which is the way to get only one of the two.
   useCommand({
     id: `${idPrefix}.cursor.down`,
     title: `Next ${noun}`,

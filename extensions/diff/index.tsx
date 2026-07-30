@@ -192,7 +192,7 @@ export default defineExtension({
       // Live, not read once at fetch time: a branch's divergence moves under an unchanged
       // target, and this line is where a user reads it.
       const context = useGit((git) => (shown === null ? null : contextOf(shown, git)))
-      // `<diff>` has no scroll API of its own, so the Pane gives it one (§1.8).
+      // `<diff>` has no scroll API of its own, so the Pane gives it one.
       const scroll = useScrollView()
 
       // Monotonic ticket: two fetches can be in flight, and git does not answer in order. Only

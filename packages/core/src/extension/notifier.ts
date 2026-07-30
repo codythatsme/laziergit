@@ -20,7 +20,7 @@ export function createNotifier(publish: NotificationPublisher = publishToConsole
     try {
       publish(notification)
     } catch {
-      // Notifications are best-effort until M2 supplies a toast publisher.
+      // Notifications are best-effort.
     }
   }
 }

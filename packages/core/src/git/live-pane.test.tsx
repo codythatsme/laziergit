@@ -10,8 +10,8 @@ import { gitIsolationEnv } from "./test-repo"
 installHarnessLifecycle()
 
 /**
- * The M3 gate, end to end: a Pane rendered by the real renderer, reading the real store,
- * tracking real `git` commands run outside laziergit.
+ * End to end: a Pane rendered by the real renderer, reading the real store, tracking real
+ * `git` commands run outside laziergit.
  */
 const livePane = `
   /** @jsxImportSource @opentui/react */
@@ -82,7 +82,7 @@ it("renders live branch and status, and tracks git commands run outside laziergi
   // The store is loaded before Extensions activate, so the first frame is already real.
   expect(frame(harness)).toContain("on main 1c clean")
 
-  // Exactly the gate: a commit made in another terminal.
+  // A commit made in another terminal.
   await writeFile(join(harness.directory, "tracked.txt"), "two\n")
   await git(harness, "commit", "--quiet", "--all", "--message", "second commit")
   await waitForFrame(harness, "on main 2c clean")

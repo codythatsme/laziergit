@@ -894,8 +894,8 @@ describe("Application shell", () => {
   it("spells no core default with `mod+`, which a terminal is free to keep for itself", async () => {
     const harness = await createHarness()
 
-    // ADR-0004: `mod+` resolves to cmd wherever the keyboard protocol can *report* it, which
-    // says nothing about whether the terminal will *deliver* it.
+    // `mod+` resolves to cmd wherever the keyboard protocol can *report* it, which says
+    // nothing about whether the terminal will *deliver* it.
     const modBound = harness.kernel.commands
       .getSnapshot()
       // Every key, not any: a `mod+` spelling paired with a plain one is the sanctioned form,

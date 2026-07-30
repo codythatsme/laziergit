@@ -25,9 +25,9 @@ export interface TypeEnvironmentOptions {
  * `@types/bun` by name. Resolved out of laziergit's own installation, so the author typechecks
  * against the exact code that will run their Extension.
  *
- * `effect` is here because `ctx.effect` (§1.12) is declared in terms of `Effect.Effect` and
+ * `effect` is here because `ctx.effect` is declared in terms of `Effect.Effect` and
  * `Stream.Stream`, and those names have to resolve for the door to be usable. It is the
- * `effect` laziergit itself runs, which is what ADR-0002's peer dependency means.
+ * `effect` laziergit itself runs.
  */
 const AUTHORING_PACKAGES = ["laziergit", "react", "@opentui/react", "@types/react", "@types/bun", "effect"] as const
 

@@ -31,7 +31,7 @@ const draftPreview = 40
 
 /**
  * The slice of OpenTUI's textarea this Pane reads. Declared structurally because an Extension
- * may not import `@opentui/core`, where `TextareaRenderable` lives (ADR-0001).
+ * may not import `@opentui/core`, where `TextareaRenderable` lives.
  */
 interface MessageEditor {
   /** The whole buffer. The textarea is uncontrolled, so the renderable is the message. */
@@ -130,7 +130,7 @@ export default defineExtension({
 
     /**
      * Puts the keyboard on `paneId`. There is no public verb for focusing someone else's Pane,
-     * but executing a Pane-scoped Command focuses its Pane first (§1.7) — so a no-op Command
+     * but executing a Pane-scoped Command focuses its Pane first — so a no-op Command
      * registered against `paneId` reaches it.
      */
     async function focusPane(paneId: string): Promise<void> {
@@ -288,7 +288,7 @@ export default defineExtension({
         title: "Commit the message",
         hint: "commit",
         // `ctrl+s` first: the hint bar prints the first key, and it is the one no terminal can
-        // take away (ADR-0004). Raw mode clears IXON, so it is not flow control here.
+        // take away. Raw mode clears IXON, so it is not flow control here.
         keys: ["ctrl+s", "mod+s"],
         capture: true,
         run: () => (current.kind === "editing" ? commit(current.draft, editor.current?.plainText ?? "") : undefined),

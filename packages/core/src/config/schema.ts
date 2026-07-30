@@ -53,8 +53,6 @@ function optionSchema(option: ConfigOption): JsonSchema {
     default: option.default,
   }
 
-  // Narrowing on `kind` is what reaches `min`/`max`/`values` — they live on the variants
-  // that have them, so there is no absent-constraint case left to invent a fallback for.
   switch (option.kind) {
     case "string":
       return { type: "string", ...shared }

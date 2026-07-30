@@ -14,7 +14,7 @@ import {
 
 import { useSpinner } from "./spinner"
 
-/** The last segment of the repository root — an Extension has no `node:path` (ADR-0001). */
+/** The last segment of the repository root — an Extension has no `node:path`. */
 function directoryName(root: string): string {
   const segments = root.split(/[/\\]/).filter((segment) => segment !== "")
   return segments.at(-1) ?? root
@@ -37,7 +37,7 @@ function untracked(head: Head): boolean {
 /**
  * Why git refused a push. Read off the message, since every refusal exits 1; `[rejected]`
  * keeps its bracket, because `[remote rejected]` is a hook saying no and forcing cannot
- * change that. The wording is stable — core pins `LC_ALL=C` (§1.5).
+ * change that. The wording is stable — core pins `LC_ALL=C`.
  */
 type Rejection =
   /**
@@ -160,7 +160,7 @@ export default defineExtension({
     }
 
     /**
-     * git's own words, never a summary: with credential prompting off (§5.11) this message is
+     * git's own words, never a summary: with credential prompting off, this message is
      * the whole diagnosis. The line structure is kept, since a toast renders lines.
      */
     function surface(error: GitError): void {
@@ -261,7 +261,7 @@ export default defineExtension({
       })
       if (!confirmed) return
 
-      // `with-lease` and never plain `--force` (§1.5): "overwrite what I last saw", not
+      // `with-lease` and never plain `--force`: "overwrite what I last saw", not
       // "overwrite whatever is there". This Extension offers no way past it.
       const outcome = await run("force-pushing", () =>
         ctx.git.push({ remote: upstream.remote, ref: refspec(head.branch, upstream), force: "with-lease" }),

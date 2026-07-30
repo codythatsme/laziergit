@@ -65,8 +65,8 @@ async function seed(harness: Harness, ...message: readonly string[]): Promise<vo
 
 /**
  * The files Pane, standing in for the Extension that owns it. It has to be called `files` —
- * `commit-flow` binds `c` and `A` into the Pane of that name. It also consumes `CommitFlowApi`
- * the way §4.3's conventional-commit does, so every settlement is counted and announced.
+ * `commit-flow` binds `c` and `A` into the Pane of that name. It also consumes `CommitFlowApi`,
+ * so every settlement is counted and announced.
  */
 const filesStandIn = `
   /** @jsxImportSource @opentui/react */

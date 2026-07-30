@@ -41,10 +41,8 @@ function AppShell({ kernel }: { kernel: ExtensionKernel }) {
 
   return (
     <box width="100%" height="100%" backgroundColor={theme.background}>
-      {/* No padding and no gap: every Pane already draws its own frame, so an inset here
-          framed the frames — two rows and two columns of nothing, on the axis a terminal has
-          least of. The Pane borders are the chrome; the status line insets itself to land on
-          the Pane content column. */}
+      {/* No padding and no gap: every Pane draws its own frame, so an inset here would
+          frame the frames. The status line insets itself to land on the Pane content column. */}
       <box flexGrow={1} flexDirection="column">
         <LayoutView layout={kernel.layout} panes={kernel.panes} fallback={<ExtensionStatusList kernel={kernel} />} />
         <StatuslineView

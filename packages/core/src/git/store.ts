@@ -34,7 +34,7 @@ export class GitStore {
     }
   }
 
-  /** The non-React face: fires only when the selected value changes, per the public contract. */
+  /** The non-React face: fires only when the selected value changes. */
   subscribeSelector<T>(selector: (state: GitState) => T, onChange: (value: T, previous: T) => void): Disposable {
     let current: T
     try {

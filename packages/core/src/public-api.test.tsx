@@ -316,8 +316,8 @@ describe("useListCursor", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("n"))
     expect(frame(harness)).toContain("cursor=0 selected=one")
 
-    // Move below the current match. Previous first returns to that match, matching lazygit,
-    // rather than skipping straight to the match at the other end of the list.
+    // Move below the current match. Previous first returns to that match rather than
+    // skipping straight to the match at the other end of the list.
     await press(harness, () => harness.setup.mockInput.pressKey("j"))
     await press(harness, () => harness.setup.mockInput.pressKey("N"))
     rendered = frame(harness)

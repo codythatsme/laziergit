@@ -559,8 +559,8 @@ export class ExtensionKernel {
       this.commands.register(coreOwner, spec)
     }
 
-    // Never `mod+` (ADR-0004): a terminal that can report cmd is also free to keep it, and
-    // Warp keeps cmd+p for its own palette.
+    // Never `mod+`: a terminal that can report cmd is also free to keep it, and Warp keeps
+    // cmd+p for its own palette.
     register({ id: "app.palette", title: "Command palette", keys: ["ctrl+p", ":"], run: () => this.openPalette() })
     register({ id: "app.theme", title: "Choose theme", run: () => this.openThemePicker() })
     register({ id: "app.cheatsheet", title: "Keybindings", keys: "?", run: () => this.openCheatSheet() })
@@ -578,13 +578,9 @@ export class ExtensionKernel {
   }
 
   /**
-   * Rebuilds the `1`–`9` Commands so each digit names the Pane it currently jumps to. Core
-   * owns these rather than each Extension claiming a digit, so a Pane's number is its position
-   * in the user's Layout and a third-party Pane is reachable the moment it is placed.
-   *
+   * Rebuilds the `1`–`9` Commands so each digit names the Pane it currently jumps to.
    * Keyed on a signature of the titles rather than rebuilt on every publish: the Layout also
    * republishes on focus changes, and that would rebuild every keymap layer per keypress.
-   * `hidden` keeps them out of the palette; the cheat sheet still lists them (§5.8).
    */
   #syncJumpKeys(): void {
     if (this.#stopped) return
@@ -645,13 +641,9 @@ export class ExtensionKernel {
   }
 
   /**
-   * The cheat sheet answers "what can I press", so it shows the layers that are live.
-   *
-   * A capture collapses the sheet to one section — the capturing Pane's `capture: true`
-   * Commands — because every other key is typing letters into a textarea. An empty section is
-   * still drawn: a Pane that captures with no exit Command has trapped the user.
-   *
-   * Otherwise: the focused Pane's keys, its capture Commands, then the globals.
+   * A capture collapses the sheet to the capturing Pane's `capture: true` Commands — every
+   * other key is typing into a textarea. An empty section is still drawn: a Pane that
+   * captures with no exit Command has trapped the user.
    */
   #cheatSheetSections(): readonly CheatSheetSection[] {
     const entries = this.commands.getSnapshot()
@@ -852,8 +844,8 @@ export class ExtensionKernel {
       this.#publish(this.#snapshot.map((status) => ({ ...status, state: "loading" as const, message: undefined })))
       if (this.#themeResourcesEnabled) await this.#loadThemes()
       await this.#loadConfig()
-      // `ctx.git.state` is documented as always present, so the store loads before any
-      // Extension activates. Idempotent, so a reload publishes no spurious change.
+      // `ctx.git.state` is always present, so the store loads before any Extension
+      // activates. Idempotent, so a reload publishes no spurious change.
       await this.git.prime()
       if (this.#stopped) return
       // Fingerprinted before reading a single Extension, so an edit landing mid-reload differs

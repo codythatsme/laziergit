@@ -6,9 +6,6 @@ const noFiles = Object.freeze([])
  * What the store reads before its first refresh, and what it keeps serving when there is no
  * repository. Frozen down to the leaves, so the very first publish already has the stable
  * slice identities every later reconcile compares against.
- *
- * `head` is `noRepository`, the one variant that asserts nothing at all — every other would
- * have to invent an oid or a branch name git never said.
  */
 export const emptyGitState: GitState = Object.freeze({
   head: Object.freeze({ kind: "noRepository" }),

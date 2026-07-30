@@ -25,10 +25,7 @@ export interface LayoutColumn {
 
 export interface LayoutConfig {
   readonly columns: readonly LayoutColumn[]
-  /**
-   * The Pane focused when laziergit starts, or null to take the first cell. Reading order and
-   * working order are not the same question: a Layout puts first what you want to read first.
-   */
+  /** The Pane focused when laziergit starts, or null to take the first cell. */
   readonly focus: string | null
 }
 
@@ -453,7 +450,7 @@ function readExtensionSections(
       log.reject(`extensions.${name}`, "An Extension config section must be an object")
       continue
     }
-    // The copy must not hand back the prototype the parser deliberately left off:
+    // The copy must not hand back the prototype the parser left off:
     // `resolveExtensionConfig` reads every declared option by name, so an option called
     // `toString` would find `Object.prototype`'s and reject it as a value nobody wrote.
     const isolated: Record<string, unknown> = Object.assign(Object.create(null), section)

@@ -261,7 +261,7 @@ export interface Commit {
 /**
  * What one side of the index did to a path — porcelain v2's `X` and `Y` letters, named. `X` is
  * HEAD→index and `Y` is index→working tree, two independent comparisons, which is why one path
- * can be `MM` (ADR-0005).
+ * can be `MM`.
  */
 export type ChangeKind = "added" | "modified" | "deleted" | "renamed" | "copied" | "typechange"
 
@@ -272,7 +272,7 @@ export type WorktreeChange = ChangeKind | "untracked"
 export type ConflictSide = "added" | "deleted" | "modified"
 
 /**
- * One path, one entry (ADR-0005). Narrow on `kind`: an unmerged path has no
+ * One path, one entry. Narrow on `kind`: an unmerged path has no
  * index-vs-working-tree pair to report at all. Ask the questions with {@link isStaged},
  * {@link isUnstaged}, {@link isUntracked} and {@link isConflicted}.
  *
@@ -303,10 +303,9 @@ export type FileChange =
 
 export interface WorkingTreeStatus {
   /**
-   * One entry per path git reported, ordered by path. Filter it with the predicates — but
-   * select the list itself in a `useGit` selector and derive in a `useMemo`, because
-   * `useGit((s) => s.status.files.filter(isStaged))` builds a fresh array every snapshot and
-   * never settles.
+   * One entry per path git reported, ordered by path. Filter it with the predicates, deriving
+   * in a `useMemo` — a filter inside a `useGit` selector builds a fresh array every snapshot
+   * and never settles.
    */
   readonly files: readonly FileChange[]
   readonly isClean: boolean

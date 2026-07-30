@@ -8,8 +8,7 @@ type Finalizer = () => void | Promise<void>
 /**
  * How far through its life one tracked finalizer is, as one shape per phase: the callback
  * exists exactly while it is still owed a call, and the completion promise exactly while there
- * is a run for a second caller to wait on. Independent fields would make "running with nothing
- * to await" expressible, and every reader would owe it a fallback.
+ * is a run for a second caller to wait on.
  */
 type FinalizerPhase =
   | { readonly kind: "pending"; readonly finalizer: Finalizer }

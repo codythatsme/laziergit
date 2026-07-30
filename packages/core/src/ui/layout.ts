@@ -55,9 +55,9 @@ function hintedColumn(requested: number | undefined): number {
 }
 
 /**
- * Column 0 is the lists, everything right of it is the detail. Equal columns made the diff —
- * the one Pane whose whole job is to be read — as narrow as a column of branch names. The same
- * 1:2 proportion the shipped config uses; `layout.columns[].weight` still overrides it.
+ * Column 0 is the lists, everything right of it is the detail, weighted 1:2 so the diff —
+ * the one Pane whose whole job is to be read — is never as narrow as a column of branch
+ * names. `layout.columns[].weight` still overrides it.
  */
 function hintedWeight(index: number): number {
   return index === 0 ? 1 : 2

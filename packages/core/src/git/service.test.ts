@@ -509,7 +509,7 @@ it("classifies a read that is only a read in combination, and one behind a globa
     publishes += 1
   })
 
-  // The stash-preview pane in the API docs runs this on every cursor move.
+  // The kind of read a stash-preview pane runs on every cursor move.
   await service.raw(["stash", "show", "-p", "stash@{0}"])
   await service.raw(["stash", "list"])
   // `-c` consumes the next argument, which is therefore not the subcommand.
@@ -718,7 +718,7 @@ it("fires a selector subscription only on a change to the selected value", async
   expect(branches).toEqual(["feature"])
 })
 
-// ---- the M3 gate -------------------------------------------------------------------
+// ---- changes made outside laziergit ------------------------------------------------
 
 it("tracks a commit made outside laziergit within one poll interval", async () => {
   const repo = await createSeededRepo()
@@ -726,7 +726,7 @@ it("tracks a commit made outside laziergit within one poll interval", async () =
   service.start()
   expect(state(service).commits).toHaveLength(1)
 
-  // Exactly what the gate describes: git run in another terminal.
+  // git run in another terminal.
   await repo.write("external.txt", "external\n")
   await repo.git("add", "external.txt")
   await repo.commit("committed elsewhere")

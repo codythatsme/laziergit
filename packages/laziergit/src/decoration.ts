@@ -2,10 +2,6 @@ import { useCallback, useSyncExternalStore } from "react"
 
 import type { RowDecoration, RowDecorationHandle, RowSource, Theme, Tone } from "./types"
 
-/**
- * Tone → theme token. A total mapping rather than a switch, so adding a {@link Tone} is a
- * compile error here instead of a badge that silently renders in the default colour.
- */
 const toneTokens: { readonly [K in Tone]: keyof Theme } = {
   neutral: "text",
   info: "info",
@@ -15,29 +11,17 @@ const toneTokens: { readonly [K in Tone]: keyof Theme } = {
   muted: "textMuted",
 }
 
-/**
- * The colour a {@link RowDecoration} badge is drawn in. Decorations are contributed by one
- * Extension and drawn by another, so both reach the mapping here rather than agreeing on raw
- * colours. An absent tone is ordinary text.
- */
+/** The colour a {@link RowDecoration} badge is drawn in; an absent tone is ordinary text. */
 export function toneColor(theme: Theme, tone: Tone | undefined): string {
   return theme[tone === undefined ? "text" : toneTokens[tone]]
 }
 
-/**
- * The merged shape, with every field present. Annotating {@link mergeDecorations} with it
- * is what keeps the merge total: a new {@link RowDecoration} field fails to compile until
- * the merge decides what happens to it.
- */
+/** Every {@link RowDecoration} field present, so a new field fails to compile until the merge handles it. */
 type MergedDecoration = {
   readonly [K in keyof Required<RowDecoration>]: Required<RowDecoration>[K] | undefined
 }
 
-/**
- * Later providers win, per field rather than wholesale, so a provider that only sets a
- * badge does not erase the tone an earlier one chose. `??` and not a spread because an
- * explicit `tone: undefined` means "I have no opinion", not "clear it".
- */
+/** Later providers win per field; an explicit `undefined` leaves the earlier value in place. */
 function mergeDecorations(base: RowDecoration | undefined, next: RowDecoration): MergedDecoration {
   return {
     badge: next.badge ?? base?.badge,
@@ -60,13 +44,9 @@ interface CachedDecoration<Row> {
 /** Options for {@link createRowSource}. */
 export interface RowSourceOptions<Row> {
   /**
-   * Stable identity for a row, independent of the object carrying it: the git store replaces
-   * a row's object whenever its data changes, so the cache slot has to be the row's own name —
-   * a path, an oid, a stash index.
-   *
-   * Must be unique across the row type. Two different rows sharing a key evict each other on
-   * every pass, and the merged decoration never settles. Prefer the most stable name over the
-   * row's state, or staging a file would discard a decoration only to recompute it.
+   * Stable identity for a row, independent of the object carrying it — a path, an oid, a stash
+   * index. Must be unique across the row type: two rows sharing a key evict each other on
+   * every pass, and the merged decoration never settles.
    */
   key(row: Row): string
 }
@@ -92,7 +72,7 @@ export function createRowSource<Row>(options: RowSourceOptions<Row>): RowSourceH
   const providers = new Set<DecorationProvider<Row>>()
   const listeners = new Set<() => void>()
   const cache = new Map<string, CachedDecoration<Row>>()
-  /** Providers that threw during the current generation — §5.9's "skipped for the pass". */
+  /** Providers that threw during the current generation, skipped until the next bump. */
   const failed = new Set<DecorationProvider<Row>>()
   let generation = 0
   let selected: Row | undefined

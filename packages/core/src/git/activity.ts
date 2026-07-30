@@ -19,14 +19,8 @@ interface Tracked {
 const nothing: readonly GitActivity[] = Object.freeze([])
 
 /**
- * What git is doing right now, for anything that wants to draw it.
- *
- * Separate from the {@link GitStore} rather than a slice of {@link GitState}, because the two
- * change on opposite schedules: folding it in would fire the whole slice-event fan-out — and
- * re-render every Pane — twice per operation.
- *
- * Owned by the {@link GitService}, which is what makes it survive a hot reload: an Extension's
- * own in-flight flag is torn down with its activation scope.
+ * What git is doing right now, for anything that wants to draw it. Owned by the
+ * {@link GitService}, so it survives a hot reload.
  */
 export class GitActivityStore {
   readonly #listeners = new Set<() => void>()
