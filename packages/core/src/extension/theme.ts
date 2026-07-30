@@ -26,12 +26,11 @@ function preset(name: string, description: string, appearance: ThemePreset["appe
 
 export const themePresets: readonly ThemePreset[] = Object.freeze([
   /**
-   * The default. Violet-black, because git had already spent green, red, amber and cyan on
-   * meaning. The three surfaces are deliberately three: `background` near-black,
-   * `backgroundPanel` lifted enough that a popup reads as a card, and a `selection` bar you
-   * can find without hunting. The diff pair separates in luminance as well as hue.
+   * The default. The terminal owns the canvas, while violet marks focus and raised chrome:
+   * `backgroundPanel` makes a popup read as a card, and `selection` produces a row you can
+   * find without hunting. The diff pair separates in luminance as well as hue.
    */
-  preset("nocturne", "Violet-black night with three stacked surfaces — laziergit's default", "dark", {
+  preset("nocturne", "Violet night on the terminal's native background — laziergit's default", "dark", {
     text: "#e9ebf7",
     textMuted: "#9da2be",
     accent: "#bca4ff",
@@ -39,7 +38,7 @@ export const themePresets: readonly ThemePreset[] = Object.freeze([
     warning: "#f2b25c",
     danger: "#ff7a92",
     info: "#61d0f7",
-    background: "#0b0b12",
+    background: "transparent",
     backgroundPanel: "#212639",
     border: "#333a55",
     borderFocused: "#a98bff",

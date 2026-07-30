@@ -100,6 +100,10 @@ describe("buildThemeDocumentSchema", () => {
         description: "A key declared in this document's palette or inherited from its parent",
       },
     ])
+    expect(tokenSchema.properties.background?.oneOf).toContainEqual({
+      const: "transparent",
+      description: "Preserve the terminal's native background",
+    })
     expect(properties.palette?.propertyNames).toEqual({ pattern: "^[A-Za-z][A-Za-z0-9_-]*$" })
     expect(properties.palette?.additionalProperties).toEqual({
       type: "string",

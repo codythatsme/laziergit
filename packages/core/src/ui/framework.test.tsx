@@ -28,7 +28,7 @@ const alphaSource = `
       function AlphaPane({ focused }: PaneProps) {
         const [count, setCount] = useState(0)
         useCommand({ id: "alpha.bump", title: "Bump alpha", keys: "j", run: () => setCount((value) => value + 1) })
-        return <text content={"alpha=" + count + (focused ? " focused" : "")} />
+        return <text id="alpha-pane" content={"alpha=" + count + (focused ? " focused" : "")} />
       }
 
       ctx.panes.register({ id: "alpha", title: "Alpha", component: AlphaPane })
@@ -115,7 +115,7 @@ const betaSource = `
       function BetaPane({ focused }: PaneProps) {
         const [count, setCount] = useState(0)
         useCommand({ id: "beta.bump", title: "Bump beta", keys: "j", run: () => setCount((value) => value + 1) })
-        return <text content={"beta=" + count + (focused ? " focused" : "")} />
+        return <text id="beta-pane" content={"beta=" + count + (focused ? " focused" : "")} />
       }
 
       ctx.panes.register({ id: "beta", title: "Beta", component: BetaPane })
@@ -222,6 +222,21 @@ describe("config-driven Layout", () => {
 })
 
 describe("focus and keybindings", () => {
+  it("focuses the Pane under a mouse click through the Layout's focus model", async () => {
+    const harness = await createHarness()
+    await twoPanes(harness, `{ "layout": { "columns": [["alpha"], ["beta"]] } }`)
+
+    const beta = harness.setup.renderer.root.findDescendantById("beta-pane")
+    if (!beta) throw new Error("beta Pane did not render")
+    await act(async () => {
+      await harness.setup.mockMouse.click(beta.x, beta.y)
+    })
+    await settle(harness)
+
+    expect(harness.kernel.layout.focusedPaneId).toBe("beta")
+    expect(frame(harness)).toContain("beta=0 focused")
+  })
+
   it("moves focus with tab and reports it as an app event", async () => {
     const harness = await createHarness()
     const focusEvents: string[] = []
@@ -250,6 +265,25 @@ describe("focus and keybindings", () => {
 
     await press(harness, () => harness.setup.mockInput.pressKey("x"))
     expect(frame(harness)).toContain("alpha=1")
+  })
+
+  it("applies mouse capture config live without reactivating Extensions", async () => {
+    const harness = await createHarness({ watch: true, debounceMs: 25 })
+    await twoPanes(harness, `{ "mouse": false }`)
+    const before = activations()
+
+    expect(harness.setup.renderer.useMouse).toBe(false)
+
+    await writeFile(harness.configFiles.repo, `{ "mouse": true }`)
+    await act(async () => {
+      const deadline = Date.now() + 3_000
+      while (!harness.setup.renderer.useMouse && Date.now() < deadline) {
+        await Bun.sleep(10)
+      }
+    })
+
+    expect(harness.setup.renderer.useMouse).toBe(true)
+    expect(activations()).toBe(before)
   })
 })
 

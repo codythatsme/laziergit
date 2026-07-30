@@ -74,7 +74,14 @@ function surface(background: string, foreground: string, amount: number, floor: 
  * they would otherwise disappear against the detected background.
  */
 export function createSystemTheme(colors: TerminalColors, mode: ThemeMode, fallback: Theme): Theme {
-  const background = color(colors.defaultBackground, fallback.background)
+  // A transparent application theme is meaningful to the renderer but cannot be used in RGB
+  // contrast calculations. If the terminal omits its palette, use a conservative solid surface.
+  const fallbackBackground = hexColor.test(fallback.background)
+    ? fallback.background
+    : mode === "light"
+      ? "#fbfaf6"
+      : "#0b0b12"
+  const background = color(colors.defaultBackground, fallbackBackground)
   const text = readable(color(colors.defaultForeground, fallback.text), background, fallback.text, 7)
   const slots = mode === "light" ? [5, 2, 3, 1, 6] : [13, 10, 11, 9, 14]
   const semantic = slots.map((index, position) => {

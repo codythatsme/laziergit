@@ -139,18 +139,20 @@ export default defineExtension({
       id,
       selected,
       focused,
+      onSelect,
     }: {
       readonly entry: StashEntry
       readonly id: string
       readonly selected: boolean
       readonly focused: boolean
+      readonly onSelect: () => void
     }) {
       const theme = useTheme()
       const decoration = rows.useDecoration(entry)
       const dim = decoration?.dim === true
 
       return (
-        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined}>
+        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined} onMouseDown={onSelect}>
           <span fg={dim ? theme.textMuted : theme.text}>{entry.message}</span>
           {/* Absent for a stash taken on a detached HEAD, where git recorded no branch. */}
           {entry.branch === null ? null : <span fg={theme.textMuted}>{` on ${entry.branch}`}</span>}
@@ -243,6 +245,7 @@ export default defineExtension({
               entry={entry}
               selected={index === cursor.index}
               focused={focused}
+              onSelect={() => cursor.setIndex(index)}
             />
           ))}
         </scrollbox>

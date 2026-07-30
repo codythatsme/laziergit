@@ -1473,7 +1473,11 @@ positional jump cannot.
      *
      * ```tsx
      * {cursor.items.map((item, index) => (
-     *   <box key={item.id} id={cursor.rowId(index)}>…</box>
+     *   <box
+     *     key={item.id}
+     *     id={cursor.rowId(index)}
+     *     onMouseDown={() => cursor.setIndex(index)}
+     *   >…</box>
      * ))}
      * ```
      *
@@ -1599,6 +1603,7 @@ positional jump cannot.
     readonly warning: string;
     readonly danger: string;
     readonly info: string;
+    /** The Layout canvas. `"transparent"` preserves the terminal's native background. */
     readonly background: string;
     /** Raised chrome such as popups and the status line, not a Pane background. */
     readonly backgroundPanel: string;
@@ -2297,6 +2302,7 @@ export default defineExtension({
                 id={cursor.rowId(i)}
                 wrapMode="none"
                 bg={selected && focused ? theme.selection : undefined}
+                onMouseDown={() => cursor.setIndex(i)}
               >
                 {/* The highlight is the whole of the cursor — no `❯` beside it. Every
                     bundled list Pane made the same trade: a marker said a second time what
@@ -2633,6 +2639,7 @@ export default defineExtension({
                 id={cursor.rowId(i)}
                 wrapMode="none"
                 bg={i === cursor.index && focused ? theme.selection : undefined}
+                onMouseDown={() => cursor.setIndex(i)}
               >
                 {`stash@{${s.index}} ${s.message}`}
               </text>

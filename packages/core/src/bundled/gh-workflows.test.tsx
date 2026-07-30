@@ -42,14 +42,18 @@ const filesSource = `
 `
 
 /**
- * A `gh` on PATH whose runs the test controls: it logs each argv line to `gh.log` and answers
- * with `runs-<branch>.json` for whatever `--branch` it was asked. `open`/`xdg-open` beside it
- * catch the pane's browser hand-off, which must never reach the real one from a test.
+ * A `gh` on PATH whose answers the test controls: it logs each argv line to `gh.log` and
+ * dispatches on the subcommand — `run list` answers `runs-<branch>.json` (empty branch for
+ * the all-branches scope), `run view` answers `view-<run-id>.json` or `log-<job-id>.txt`
+ * when a log flag is present, and `run rerun` / `run cancel` just succeed. `open`/`xdg-open`
+ * beside it catch the pane's browser hand-off, which must never reach the real one.
  */
 interface GhStub {
   readonly bin: string
   readonly openLog: string
   setRuns(branch: string, runs: readonly unknown[]): Promise<void>
+  setDetail(runId: number, detail: unknown): Promise<void>
+  setLog(jobId: number, text: string): Promise<void>
   replace(body: string): Promise<void>
   calls(): Promise<readonly string[]>
   opened(): Promise<string>
@@ -65,12 +69,27 @@ async function installGh(harness: Harness): Promise<GhStub> {
     "#!/bin/sh",
     `printf '%s\\n' "$*" >> "${log}"`,
     'branch=""',
+    'job=""',
+    "wantlog=0",
     'prev=""',
     'for arg in "$@"; do',
-    '  if [ "$prev" = "--branch" ]; then branch="$arg"; fi',
+    '  case "$prev" in',
+    '    --branch) branch="$arg" ;;',
+    '    --job) job="$arg" ;;',
+    "  esac",
+    '  case "$arg" in',
+    "    --log|--log-failed) wantlog=1 ;;",
+    "  esac",
     '  prev="$arg"',
     "done",
-    `exec cat "${bin}/runs-$branch.json"`,
+    'case "$1 $2" in',
+    `  "run list") exec cat "${bin}/runs-$branch.json" ;;`,
+    '  "run view")',
+    `    if [ "$wantlog" = 1 ]; then exec cat "${bin}/log-$job.txt"; fi`,
+    `    exec cat "${bin}/view-$3.json" ;;`,
+    '  "run rerun"|"run cancel") exit 0 ;;',
+    "esac",
+    "exit 1",
     "",
   ].join("\n")
   const open = `#!/bin/sh\nprintf '%s\\n' "$*" >> "${openLog}"\n`
@@ -86,13 +105,15 @@ async function installGh(harness: Harness): Promise<GhStub> {
     bin,
     openLog,
     setRuns: (branch, runs) => writeFile(join(bin, `runs-${branch}.json`), JSON.stringify(runs)),
+    setDetail: (runId, detail) => writeFile(join(bin, `view-${runId}.json`), JSON.stringify(detail)),
+    setLog: (jobId, text) => writeFile(join(bin, `log-${jobId}.txt`), text),
     replace: (body) => writeFile(join(bin, "gh"), `#!/bin/sh\n${body}\n`, { mode: 0o755 }),
     calls: async () => (await Bun.file(log).text()).trim().split("\n"),
     opened: async () => (await Bun.file(openLog).text()).trim(),
   }
 }
 
-function run(id: number, title: string, status: string, conclusion: string) {
+function run(id: number, title: string, status: string, conclusion: string, extra: Record<string, unknown> = {}) {
   return {
     databaseId: id,
     displayTitle: title,
@@ -100,6 +121,47 @@ function run(id: number, title: string, status: string, conclusion: string) {
     status,
     conclusion,
     url: `https://example.invalid/${id}`,
+    event: "push",
+    headBranch: "main",
+    createdAt: "2026-07-29T10:00:00Z",
+    startedAt: "2026-07-29T10:00:00Z",
+    updatedAt: "2026-07-29T10:00:42Z",
+    ...extra,
+  }
+}
+
+function step(number: number, name: string, conclusion: string | null, status = "completed") {
+  return { number, name, status, conclusion }
+}
+
+function job(
+  id: number,
+  name: string,
+  conclusion: string | null,
+  steps: readonly unknown[] = [],
+  status = "completed",
+) {
+  return {
+    databaseId: id,
+    name,
+    status,
+    conclusion,
+    url: `https://example.invalid/job/${id}`,
+    startedAt: "2026-07-29T10:00:00Z",
+    completedAt: "2026-07-29T10:00:10Z",
+    steps,
+  }
+}
+
+/** A failed run's detail: a green job with folded steps, a red one with the culprit step. */
+function brokenRunDetail() {
+  return {
+    status: "completed",
+    conclusion: "failure",
+    jobs: [
+      job(201, "build", "success", [step(1, "checkout", "success")]),
+      job(202, "test", "failure", [step(1, "setup", "success"), step(2, "run tests", "failure")]),
+    ],
   }
 }
 
@@ -293,6 +355,154 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await start(harness)
 
     await frameShowing(harness, "JSON Parse error")
+  })
+
+  it("enters a run to its jobs, folds by outcome, and escapes back", async () => {
+    const harness = await workflowsHarness()
+    const gh = await installGh(harness)
+    await gh.setRuns("main", [run(2, "broken run", "completed", "failure"), run(1, "good run", "completed", "success")])
+    await gh.setDetail(2, brokenRunDetail())
+    await start(harness)
+    await frameShowing(harness, "verify — broken run")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+
+    // The failed job's steps start visible, the green job's stay folded.
+    const jobs = await frameShowing(harness, "✗ run tests")
+    expect(jobs).toContain("✓ build")
+    expect(jobs).toContain("✗ test")
+    expect(jobs).toContain("✓ setup")
+    expect(jobs).not.toContain("checkout")
+
+    // `return` on the green job unfolds it.
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+    await frameShowing(harness, "✓ checkout")
+
+    await press(harness, () => harness.setup.mockInput.pressEscape())
+    const back = await frameShowing(harness, "verify — good run")
+    expect(back).not.toContain("run tests")
+  })
+
+  it("reruns a job with r inside a run, and asks gh again after", async () => {
+    const harness = await workflowsHarness()
+    const gh = await installGh(harness)
+    await gh.setRuns("main", [run(2, "broken run", "completed", "failure")])
+    await gh.setDetail(2, brokenRunDetail())
+    await start(harness)
+    await frameShowing(harness, "verify — broken run")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+    await frameShowing(harness, "✗ run tests")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("j"))
+    await press(harness, () => harness.setup.mockInput.pressKey("r"))
+
+    await settleUntil(harness, "the job rerun to reach gh", async () =>
+      (await gh.calls()).some((line) => line.startsWith("run rerun --job 202")),
+    )
+    // The mutation is followed by a fresh `run view`, not a stale frame.
+    const views = (await gh.calls()).filter((line) => line.startsWith("run view 2"))
+    expect(views.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it("reruns only the failed jobs of a failed run, everything for a green one", async () => {
+    const harness = await workflowsHarness()
+    const gh = await installGh(harness)
+    await gh.setRuns("main", [run(2, "broken run", "completed", "failure"), run(1, "good run", "completed", "success")])
+    await start(harness)
+    await frameShowing(harness, "verify — broken run")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    await press(harness, () => harness.setup.mockInput.pressKey("r"))
+    await settleUntil(harness, "the failed-only rerun to reach gh", async () =>
+      (await gh.calls()).some((line) => line === "run rerun 2 --failed"),
+    )
+
+    await press(harness, () => harness.setup.mockInput.pressKey("j"))
+    await press(harness, () => harness.setup.mockInput.pressKey("r"))
+    await settleUntil(harness, "the full rerun to reach gh", async () =>
+      (await gh.calls()).some((line) => line === "run rerun 1"),
+    )
+  })
+
+  it("cancels a live run only after the confirm", async () => {
+    const harness = await workflowsHarness()
+    const gh = await installGh(harness)
+    await gh.setRuns("main", [run(3, "slow run", "in_progress", "")])
+    await start(harness)
+    await frameShowing(harness, "verify — slow run")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    await press(harness, () => harness.setup.mockInput.pressKey("x"))
+    await frameShowing(harness, "Cancel verify?")
+    expect((await gh.calls()).some((line) => line.startsWith("run cancel"))).toBe(false)
+
+    await press(harness, () => harness.setup.mockInput.pressKey("y"))
+    await settleUntil(harness, "the cancel to reach gh", async () =>
+      (await gh.calls()).some((line) => line === "run cancel 3"),
+    )
+  })
+
+  it("toggles between the branch's runs and every branch's", async () => {
+    const harness = await workflowsHarness()
+    const gh = await installGh(harness)
+    await gh.setRuns("main", [run(1, "on main", "completed", "success")])
+    await gh.setRuns("", [run(9, "on other", "completed", "success", { headBranch: "other" })])
+    await start(harness)
+    await frameShowing(harness, "verify — on main")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    await press(harness, () => harness.setup.mockInput.pressKey("a"))
+
+    // The all-branches row names its branch; the branch-scoped row never did.
+    const all = await frameShowing(harness, "verify — on other")
+    expect(all).toContain("other · push")
+    const listCalls = (await gh.calls()).filter((line) => line.startsWith("run list"))
+    expect(listCalls.some((line) => !line.includes("--branch"))).toBe(true)
+
+    await press(harness, () => harness.setup.mockInput.pressKey("a"))
+    await frameShowing(harness, "verify — on main")
+  })
+
+  it("shows a failed job's log tail and escapes back to the jobs", async () => {
+    const harness = await workflowsHarness()
+    const gh = await installGh(harness)
+    await gh.setRuns("main", [run(2, "broken run", "completed", "failure")])
+    await gh.setDetail(2, brokenRunDetail())
+    await gh.setLog(202, "test\trun tests\tExpected 3, got 4\ntest\trun tests\tError: assertion failed\n")
+    await start(harness)
+    await frameShowing(harness, "verify — broken run")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+    await frameShowing(harness, "✗ run tests")
+
+    await press(harness, () => harness.setup.mockInput.pressKey("j"))
+    await press(harness, () => harness.setup.mockInput.pressKey("l"))
+
+    // The gh prefix columns are stripped; the words are what the tail shows.
+    const log = await frameShowing(harness, "Expected 3, got 4")
+    expect(log).toContain("Error: assertion failed")
+    expect((await gh.calls()).some((line) => line === "run view --job 202 --log-failed")).toBe(true)
+
+    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await frameShowing(harness, "✓ build")
+  })
+
+  it("polls gh while a run is live", async () => {
+    const harness = await workflowsHarness()
+    const gh = await installGh(harness)
+    await gh.setRuns("main", [run(3, "slow run", "in_progress", "")])
+    await start(harness, `{ "extensions": { "gh-workflows": { "pollIntervalMs": 250 } } }`)
+    await frameShowing(harness, "verify — slow run")
+
+    await settleUntil(
+      harness,
+      "the pane to poll gh repeatedly",
+      async () => (await gh.calls()).filter((line) => line.startsWith("run list")).length >= 3,
+    )
   })
 })
 

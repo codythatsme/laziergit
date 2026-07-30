@@ -50,6 +50,8 @@ export interface GitConfig {
 }
 
 export interface CoreConfig {
+  /** Whether OpenTUI captures and dispatches terminal mouse events. */
+  readonly mouse: boolean
   /** `null` when the user declared no Layout — placement hints then decide everything. */
   readonly layout: LayoutConfig | null
   /** Command id → the keys bound to it. An empty array unbinds the Command's defaults. */
@@ -102,6 +104,7 @@ export function defaultConfigFiles(repoRoot: string): ConfigFiles {
 
 export const emptyConfig: LoadedConfig = Object.freeze({
   core: Object.freeze({
+    mouse: true,
     layout: null,
     keybindings: new Map<string, readonly string[]>(),
     theme: defaultTheme,
@@ -328,11 +331,17 @@ function readTheme(
       log.reject(`theme.${token}`, "Unknown theme token")
       continue
     }
-    if (typeof color !== "string" || !hexColorPattern.test(color)) {
-      log.reject(`theme.${token}`, "A theme token must use #RRGGBB")
+    const transparentCanvas = token === "background" && color === "transparent"
+    if (typeof color !== "string" || (!hexColorPattern.test(color) && !transparentCanvas)) {
+      log.reject(
+        `theme.${token}`,
+        token === "background"
+          ? 'The background token must use #RRGGBB or "transparent"'
+          : "A theme token must use #RRGGBB",
+      )
       continue
     }
-    overrides[token] = color.toLowerCase()
+    overrides[token] = transparentCanvas ? color : color.toLowerCase()
   }
   const themeConfiguration = Object.freeze({
     selection,
@@ -381,6 +390,12 @@ function readLeader(value: unknown, log: ProblemLog): string {
     return defaultLeader
   }
   return value
+}
+
+function readMouse(value: unknown, log: ProblemLog): boolean {
+  if (value === undefined) return true
+  if (typeof value === "boolean") return value
+  return log.reject("mouse", "mouse must be a boolean") ?? true
 }
 
 function readGitSetting(
@@ -449,6 +464,7 @@ function readExtensionSections(
 
 const coreSectionKeys = new Set([
   "$schema",
+  "mouse",
   "layout",
   "keybindings",
   "theme",
@@ -473,6 +489,7 @@ export function readConfig(document: unknown, themeOptions: ConfigThemeOptions =
 
   // Read in schema order so diagnostics stay deterministic and match the document's conceptual
   // sections even though the returned object also carries Theme resolution metadata.
+  const mouse = readMouse(document.mouse, log)
   const layout = readLayout(document.layout, log)
   const keybindings = readKeybindings(document.keybindings, log)
   const configuredTheme = readTheme(document.theme, log, themeOptions)
@@ -482,6 +499,7 @@ export function readConfig(document: unknown, themeOptions: ConfigThemeOptions =
   const extensions = readExtensionSections(document.extensions, log)
   return {
     core: {
+      mouse,
       layout,
       keybindings,
       ...configuredTheme,
