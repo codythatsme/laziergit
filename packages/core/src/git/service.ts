@@ -19,6 +19,7 @@ import {
   parseCommits,
   parseHeadRef,
   parseRemotes,
+  parseRemoteBranches,
   parseStash,
   parseStatus,
   parseTags,
@@ -270,6 +271,7 @@ export class GitService {
       const headBranch = parseHeadRef(outputs.headRef.stdout, outputs.headRef.exitCode)
       const branches = parseBranches(outputs.branches.stdout, headBranch)
       const head = readHead(status, headBranch, branches)
+      const remotes = parseRemotes(outputs.config.stdout)
 
       // A log needs a commit to start from: exactly the two variants carrying an oid.
       const commits =
@@ -294,7 +296,8 @@ export class GitService {
         state: {
           head,
           branches,
-          remotes: parseRemotes(outputs.config.stdout),
+          remoteBranches: parseRemoteBranches(outputs.refs.stdout, remotes),
+          remotes,
           tags: parseTags(outputs.tags.stdout),
           status: { files: status.files, isClean: status.files.length === 0 },
           commits: parseCommits(log),

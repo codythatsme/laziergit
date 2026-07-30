@@ -5,6 +5,7 @@ import {
   parseCommits,
   parseHeadRef,
   parseRemotes,
+  parseRemoteBranches,
   parseStash,
   parseStatus,
   parseTags,
@@ -198,6 +199,35 @@ it("reads every upstream tracking shape, and separates 'no upstream' from 'in sy
 it("marks no branch as HEAD while detached, where git marks none either", () => {
   const branches = parseBranches("main\x00a83bc136\x00\x00\x00\x00first\x001784800005", null)
   expect(branches.map((branch) => branch.isHead)).toEqual([false])
+})
+
+it("reads remote branches, skips symbolic HEADs, and honours remote names containing slashes", () => {
+  const remotes = [
+    { name: "origin", fetchUrl: "x", pushUrl: "x" },
+    { name: "team/upstream", fetchUrl: "y", pushUrl: "y" },
+  ]
+  expect(
+    parseRemoteBranches(
+      [
+        "a83bc136 refs/remotes/origin/feature",
+        "a83bc136 refs/remotes/origin/HEAD",
+        "b1234567 refs/remotes/team/upstream/release/v2",
+        "c1234567 refs/remotes/removed/stale",
+      ].join("\n"),
+      remotes,
+    ),
+  ).toEqual([
+    {
+      name: "feature",
+      remote: "origin",
+      oid: "a83bc136",
+    },
+    {
+      name: "release/v2",
+      remote: "team/upstream",
+      oid: "b1234567",
+    },
+  ])
 })
 
 it("prefers a remote's pushurl and falls back to its fetch url", () => {
