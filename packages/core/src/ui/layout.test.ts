@@ -190,6 +190,25 @@ it("steps focus by whole cells, wrapping in both directions", () => {
   expect(layout.focusedPaneId).toBe("three")
 })
 
+it("gives each cell one jump target and cycles its tabs when its digit is repeated", () => {
+  const { layout } = host(
+    [pane("files"), pane("branches"), pane("remote-branches"), pane("diff")],
+    columns(["files", ["branches", "remote-branches"]], ["diff"]),
+  )
+
+  expect(layout.jumpTargets()).toEqual([["files"], ["branches", "remote-branches"], ["diff"]])
+
+  layout.focusAt(1)
+  expect(layout.focusedPaneId).toBe("branches")
+  layout.focusAt(1)
+  expect(layout.focusedPaneId).toBe("remote-branches")
+  layout.focusAt(1)
+  expect(layout.focusedPaneId).toBe("branches")
+
+  layout.focusAt(2)
+  expect(layout.focusedPaneId).toBe("diff")
+})
+
 it("skips a cell whose Panes are all reloading", () => {
   const { layout } = host([pane("one"), pane("two", undefined, "reloading"), pane("three")])
 

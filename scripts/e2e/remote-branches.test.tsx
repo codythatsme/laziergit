@@ -18,9 +18,25 @@ installHarnessLifecycle()
 const branchesExtension = resolve(import.meta.dir, "..", "..", "extensions", "branches")
 const remoteBranchesExtension = resolve(import.meta.dir, "..", "..", "extensions", "remote-branches")
 
+const filesStub = `
+  /** @jsxImportSource @opentui/react */
+  import { defineExtension } from "laziergit"
+
+  export default defineExtension({
+    name: "files",
+    activate(ctx) {
+      ctx.panes.register({
+        id: "files",
+        title: "Files",
+        component: () => <text content="files" />,
+      })
+    },
+  })
+`
+
 const diffStub = `
   /** @jsxImportSource @opentui/react */
-  import { createCell, defineExtension } from "laziergit"
+  import { createCell, defineExtension, useCommand } from "laziergit"
 
   export default defineExtension({
     name: "diff",
@@ -29,6 +45,12 @@ const diffStub = `
 
       function DiffPane() {
         const current = target.use()
+        useCommand({
+          id: "diff.mark-focused",
+          title: "Mark diff focused",
+          keys: "z",
+          run: () => target.set({ kind: "focused", ref: "focused" }),
+        })
         const ref = current === null ? "" : String(current.ref).slice(0, 7)
         return <text content={current === null ? "diff none" : "diff " + current.kind + " " + ref} />
       }
@@ -89,7 +111,17 @@ async function start(harness: Harness): Promise<void> {
     writeFile(harness.configFiles.repo, `{ "layout": { "columns": [["branches"], ["diff"]] } }`),
   ])
   await renderApp(harness)
-  await press(harness, () => harness.setup.mockInput.pressKey("1"))
+}
+
+async function startNumberedLayout(harness: Harness): Promise<void> {
+  await Promise.all([
+    symlink(branchesExtension, join(harness.bundled, "branches")),
+    symlink(remoteBranchesExtension, join(harness.bundled, "remote-branches")),
+    writeFile(join(harness.repo, "files.tsx"), filesStub),
+    writeFile(join(harness.repo, "diff.tsx"), diffStub),
+    writeFile(harness.configFiles.repo, `{ "layout": { "columns": [["files", "branches"], ["diff"]] } }`),
+  ])
+  await renderApp(harness)
 }
 
 async function waitUntil(
@@ -136,6 +168,32 @@ async function withRemoteOnlyBranch(harness: Harness): Promise<string> {
   return oid
 }
 
+it("keeps local and remote branches in pane 2 and cycles its tabs with 2 or brackets", async () => {
+  const harness = await createHarness({ git: true })
+  await seed(harness)
+  await addOrigin(harness)
+  await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
+
+  await startNumberedLayout(harness)
+  await press(harness, () => harness.setup.mockInput.pressKey("2"))
+  expect(frame(harness)).toContain("[Local branches] - Remote")
+
+  await press(harness, () => harness.setup.mockInput.pressKey("2"))
+  expect(frame(harness)).toContain("Local branches - [Remote]")
+
+  await press(harness, () => harness.setup.mockInput.pressKey("2"))
+  expect(frame(harness)).toContain("[Local branches] - Remote")
+
+  await press(harness, () => harness.setup.mockInput.pressKey("]"))
+  expect(frame(harness)).toContain("Local branches - [Remote]")
+  await press(harness, () => harness.setup.mockInput.pressKey("["))
+  expect(frame(harness)).toContain("[Local branches] - Remote")
+
+  await press(harness, () => harness.setup.mockInput.pressKey("3"))
+  await press(harness, () => harness.setup.mockInput.pressKey("z"))
+  expect(frame(harness)).toContain("diff focused focused")
+}, 30_000)
+
 it("supports the single-remote branch workflow", async () => {
   const harness = await createHarness({ git: true })
   const oid = await withRemoteOnlyBranch(harness)
@@ -143,10 +201,10 @@ it("supports the single-remote branch workflow", async () => {
   await git(harness, "fetch", "--quiet", "origin")
 
   await start(harness)
-  expect(frame(harness)).toContain("[Branches] Remote branches")
+  expect(frame(harness)).toContain("[Local branches] - Remote")
 
   await press(harness, () => harness.setup.mockInput.pressKey("]"))
-  expect(frame(harness)).toContain("Branches [Remote branches]")
+  expect(frame(harness)).toContain("Local branches - [Remote]")
   expect(frame(harness)).toContain(" origin")
   expect(frame(harness)).toContain("remote-only")
 

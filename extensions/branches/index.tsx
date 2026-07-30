@@ -495,7 +495,7 @@ export default defineExtension({
 
     const pane = ctx.panes.register({
       id: "branches",
-      title: "Branches",
+      title: "Local branches",
       component: BranchesPane,
       placement: { column: 0, order: 30 },
     })

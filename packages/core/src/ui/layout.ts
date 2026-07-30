@@ -200,18 +200,28 @@ export class LayoutHost {
   }
 
   /**
-   * Focuses the nth Pane of {@link liveTabs}, 0-based — the Pane the nth jump key names.
-   *
-   * Panes rather than cells: a cell holding four tabs would be one jump target showing
-   * whichever tab it last had, leaving the other three with no key at all. {@link focus}
-   * already brings a hidden tab to the front on the way.
+   * The live tabs in each numbered cell, in reading order. One cell owns one digit; its tabs
+   * share that digit and are cycled by repeating it.
+   */
+  jumpTargets(): readonly (readonly string[])[] {
+    return this.#focusableCells().map((cell) => cell.paneIds.filter((paneId) => this.#isLive(paneId)))
+  }
+
+  /**
+   * Focuses the nth live cell, 0-based. Repeating the digit of the focused cell advances its
+   * active tab, matching the way lazygit's numbered Branches pane switches Local/Remote.
    *
    * An index past the end does nothing rather than throwing: the Command carrying it can
-   * outlive the Pane it was registered for by the width of a reload.
+   * outlive the cell it was registered for by the width of a reload.
    */
   focusAt(index: number): void {
-    const paneId = this.liveTabs()[index]
-    if (paneId !== undefined) this.focus(paneId)
+    const cell = this.#focusableCells()[index]
+    if (!cell) return
+    if (cell.key === this.#focusedCell) {
+      this.cycleTab(1)
+      return
+    }
+    this.#focusCell(cell)
   }
 
   focus(paneId: string): void {

@@ -17,7 +17,7 @@ const selection = {
 
 const entrypoint = resolve(import.meta.dir, "..", "..", "packages", "core", "src", "main.tsx")
 const specification = resolve(import.meta.dir, "..", "..", "docs", "extension-api.md")
-const paneTitles = ["Files", "Branches", "Commits", "Stash", "Actions", "[Diff] Commit"] as const
+const paneTitles = ["Files", "Local branches", "Commits", "Stash", "Actions", "[Diff] - Commit"] as const
 
 type Layout = "all-panes" | "working-panes"
 
