@@ -10,12 +10,8 @@ import {
   type ThemeDocumentSource,
 } from "./catalog"
 
-function source(
-  path: string,
-  document: Readonly<Record<string, unknown>>,
-  scope: ThemeDocumentSource["scope"] = "global",
-): ThemeDocumentSource {
-  return { scope, path, text: JSON.stringify(document) }
+function source(path: string, document: Readonly<Record<string, unknown>>): ThemeDocumentSource {
+  return { scope: "global", path, text: JSON.stringify(document) }
 }
 
 describe("parseThemeDocument", () => {
@@ -51,7 +47,7 @@ describe("parseThemeDocument", () => {
         appearance: "automatic",
         tokens: { acent: "#ffffff", accent: "#fff" },
       }),
-      { scope: "repo", path: "/repo/broken.json" },
+      { scope: "global", path: "/themes/broken.json" },
     )
 
     expect(parsed.definition).toBeUndefined()
@@ -128,24 +124,20 @@ describe("buildThemeCatalog", () => {
         palette: { rose: "#ebbcba" },
         tokens: { accent: "rose" },
       }),
-      source(
-        "/repo/child.json",
-        {
-          name: "child",
-          description: "Child theme",
-          extends: "parent",
-          tokens: { borderFocused: "rose" },
-        },
-        "repo",
-      ),
+      source("/global/child.json", {
+        name: "child",
+        description: "Child theme",
+        extends: "parent",
+        tokens: { borderFocused: "rose" },
+      }),
     ])
 
     expect(catalog.get("child")).toEqual({
       name: "child",
       description: "Child theme",
       appearance: "dark",
-      scope: "repo",
-      path: "/repo/child.json",
+      scope: "global",
+      path: "/global/child.json",
       tokens: {
         ...defaultTheme,
         accent: "#ebbcba",
@@ -154,17 +146,13 @@ describe("buildThemeCatalog", () => {
     })
   })
 
-  it("resolves precedence independent of source input order", () => {
+  it("resolves global shadowing independent of source input order", () => {
     const catalog = buildThemeCatalog(themePresets, [
-      source(
-        "/repo/shared.json",
-        {
-          name: "shared",
-          extends: "nocturne",
-          tokens: { accent: "#333333" },
-        },
-        "repo",
-      ),
+      source("/global/m-shared.json", {
+        name: "shared",
+        extends: "nocturne",
+        tokens: { accent: "#333333" },
+      }),
       source("/global/z-shared.json", {
         name: "shared",
         extends: "nocturne",
@@ -177,12 +165,12 @@ describe("buildThemeCatalog", () => {
       }),
     ])
 
-    expect(themeScopePrecedence).toEqual(["builtin", "global", "repo"])
+    expect(themeScopePrecedence).toEqual(["builtin", "global"])
     expect(catalog.get("shared")).toEqual(
       expect.objectContaining({
-        scope: "repo",
-        path: "/repo/shared.json",
-        tokens: expect.objectContaining({ accent: "#333333" }),
+        scope: "global",
+        path: "/global/z-shared.json",
+        tokens: expect.objectContaining({ accent: "#222222" }),
       }),
     )
     expect(catalog.diagnostics.filter((entry) => entry.code === "theme-shadowed")).toHaveLength(2)
@@ -208,15 +196,15 @@ describe("buildThemeCatalog", () => {
   it("keeps a valid lower-precedence theme when a shadowing document is rejected", () => {
     const catalog = buildThemeCatalog(themePresets, [
       {
-        scope: "repo",
-        path: "/repo/nocturne.json",
+        scope: "global",
+        path: "/global/nocturne.json",
         text: JSON.stringify({ name: "nocturne", tokens: { accent: "#fff" } }),
       },
     ])
 
     expect(catalog.get("nocturne")).toEqual(expect.objectContaining({ scope: "builtin", tokens: defaultTheme }))
     expect(catalog.diagnostics).toEqual([
-      expect.objectContaining({ code: "invalid-token-value", path: "/repo/nocturne.json" }),
+      expect.objectContaining({ code: "invalid-token-value", path: "/global/nocturne.json" }),
     ])
   })
 
