@@ -1617,10 +1617,9 @@ positional jump cannot.
 ```
 
 Themes stay outside the executable Extension lifecycle. A reusable theme is a strict JSON
-resource in `~/.config/laziergit/themes/*.json` or `<repo>/.laziergit/themes/*.json`; it may
-declare `$schema`, `name`, `description`, `appearance`, `extends`, a named `palette`, and
-semantic `tokens`. Built-ins, global resources, and repository resources resolve in that
-precedence order, including inheritance. See [config.md §theme](./config.md#theme--select-extend-and-preview-palettes)
+resource in `~/.config/laziergit/themes/*.json`; it may declare `$schema`, `name`,
+`description`, `appearance`, `extends`, a named `palette`, and semantic `tokens`. Global
+resources may extend or shadow built-ins. See [config.md §theme](./config.md#theme--select-extend-and-preview-palettes)
 for the document format, all twelve built-ins, automatic dark/light selection, the generated
 terminal-palette `system` theme, diagnostics, and the live-preview picker.
 

@@ -2,7 +2,7 @@ import type { Theme } from "laziergit"
 
 import { defaultTheme } from "../extension/theme"
 
-export const themeScopePrecedence = ["builtin", "global", "repo"] as const
+export const themeScopePrecedence = ["builtin", "global"] as const
 
 export type ThemeSourceScope = (typeof themeScopePrecedence)[number]
 export type ThemeAppearance = "dark" | "light"

@@ -1,4 +1,4 @@
-# ADR-0006 — Themes are layered declarative resources
+# ADR-0006 — Themes are global declarative resources
 
 **Status**: accepted
 
@@ -36,12 +36,11 @@ Themes are JSON resources discovered independently from Extensions:
 |---|---|
 | built-in | palettes compiled with laziergit |
 | global | `~/.config/laziergit/themes/*.json` |
-| repository | `<repo>/.laziergit/themes/*.json` |
 
-Names shadow in `built-in < global < repository` order. An invalid higher-precedence document
-does not hide a valid lower-precedence theme. Files are validated before publication and every
-problem names the source file and field. Once a custom theme has resolved successfully, an
-invalid edit retains that last good value until the source is repaired or deleted.
+Global names shadow built-ins. An invalid global document does not hide a valid built-in theme.
+Files are validated before publication and every problem names the source file and field. Once
+a custom theme has resolved successfully, an invalid edit retains that last good value until
+the source is repaired or deleted.
 
 A document has this shape:
 
@@ -67,10 +66,10 @@ A document has this shape:
 `extends` makes partial themes useful without making missing tokens implicit. Palette entries
 are six-digit hex colors, token values are either the same form or a key in `palette`, and
 unknown fields or semantic tokens are errors. The `background` token alone also accepts
-`"transparent"` to preserve the terminal canvas. Inheritance may cross scopes after shadowing;
-cycles and missing parents reject the affected theme.
+`"transparent"` to preserve the terminal canvas. A global theme may inherit from a built-in or
+another global theme; cycles and missing parents reject the affected theme.
 
-Config continues to own selection and per-repository policy:
+Global config owns selection:
 
 ```jsonc
 { "theme": { "preset": "rose-pine" } }
@@ -94,10 +93,10 @@ not yet known, changes without an Extension reload, and updates the renderer's o
 as well as the React tree. The generated `system` choice derives its colors from the terminal's
 reported palette and refreshes when that palette changes.
 
-`app.theme` opens a filterable picker. Cursor movement previews through the existing
-`ThemeStore`; Escape restores the prior snapshot. Confirmation asks whether the choice belongs
-in global or repository config and makes the smallest JSONC edit to `theme.preset`, preserving
-comments and unrelated formatting. The write is an atomic same-directory rename.
+`app.theme` opens a filterable, name-only picker. Cursor movement previews through the existing
+`ThemeStore`; Escape restores the prior snapshot. Confirmation makes the smallest JSONC edit to
+`theme.preset` in global config, preserving comments and unrelated formatting. The write is an
+atomic same-directory rename. Repository config cannot select or override a theme.
 
 Themes remain data rather than an `ctx.themes.register()` API. Extensions consume semantic
 tokens through `useTheme()` and cannot depend on a theme by name.
@@ -107,8 +106,7 @@ tokens through `useTheme()` and cannot depend on a theme by name.
 - A theme edit is watched and applied without deactivating an Extension or losing Pane state.
 - The config schema's preset list is generated from the live catalog, while
   `theme.schema.json` gives theme authors completion for the stable document format.
-- Built-in, global, and repository themes share one resolver, so inheritance and diagnostics
-  do not change across scopes.
+- Built-in and global themes share one resolver, so inheritance and diagnostics stay consistent.
 - Every exposed token must drive a real rendering seam. `diffAdded` and `diffRemoved` now feed
   OpenTUI's diff signs and adaptive line tints; the old `diffHunkHeader` token is removed
   because OpenTUI strips hunk headers and exposes no way to render it.

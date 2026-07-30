@@ -61,14 +61,12 @@ import { publishTypeEnvironment } from "./type-environment"
 import {
   buildThemeCatalog,
   createSystemTheme,
-  defaultThemeDirectories,
+  defaultThemeDirectory,
   loadThemeCatalog,
   retainLastValidThemes,
   themeFilesFingerprint,
   type ThemeAppearance,
   type ThemeCatalog,
-  type ThemeDirectories,
-  type ThemeSelection,
 } from "../theme"
 
 export type ExtensionLoadState = "loading" | "active" | "failed" | "shadowed"
@@ -102,8 +100,8 @@ export interface ExtensionKernelOptions {
    * lives wherever laziergit was installed, which only the caller can know.
    */
   readonly directories: ExtensionDirectories
-  /** Declarative Theme resources, independently watched from executable Extensions. */
-  readonly themeDirectories?: ThemeDirectories
+  /** Global declarative Theme resources, independently watched from executable Extensions. */
+  readonly themeDirectory?: string
   /** Disable filesystem Theme resources for constrained embedders; bundled themes still work. */
   readonly themeResources?: boolean
   readonly configFiles?: ConfigFiles
@@ -164,8 +162,7 @@ function cheatSheetEntries(entries: readonly CommandEntry[]): readonly CheatShee
 
 interface ThemePickerEntry {
   readonly label: string
-  readonly hint: string
-  readonly selection: ThemeSelection
+  readonly selection: string
 }
 
 export class ExtensionKernel {
@@ -188,7 +185,7 @@ export class ExtensionKernel {
   readonly #repoRoot: string
   readonly #clipboardWriters: readonly ClipboardWriterSpec[] | undefined
   readonly #directories: ExtensionDirectories
-  readonly #themeDirectories: ThemeDirectories
+  readonly #themeDirectory: string
   readonly #themeResourcesEnabled: boolean
   /** Every Extension directory in precedence order; the search path, in one place. */
   readonly #searchPath: readonly string[]
@@ -245,7 +242,7 @@ export class ExtensionKernel {
   constructor(options: ExtensionKernelOptions) {
     this.#repoRoot = options.repoRoot
     this.#directories = options.directories
-    this.#themeDirectories = options.themeDirectories ?? defaultThemeDirectories(options.repoRoot)
+    this.#themeDirectory = options.themeDirectory ?? defaultThemeDirectory()
     this.#themeResourcesEnabled = options.themeResources ?? true
     this.#searchPath = extensionScopePrecedence.map((scope) => this.#directories[scope])
     this.#configFiles = options.configFiles ?? defaultConfigFiles(options.repoRoot)
@@ -343,7 +340,7 @@ export class ExtensionKernel {
     // The bundled directory is absent on purpose: it ships inside the installation.
     const userDirectories = userWritableExtensionScopes.map((scope) => this.#directories[scope])
     const writableDirectories = this.#themeResourcesEnabled
-      ? [...userDirectories, ...Object.values(this.#themeDirectories)]
+      ? [...userDirectories, this.#themeDirectory]
       : userDirectories
     await Promise.all(writableDirectories.map((directory) => mkdir(directory, { recursive: true })))
     if (this.#stopped) return
@@ -438,41 +435,26 @@ export class ExtensionKernel {
   }
 
   async openThemePicker(): Promise<void> {
-    const automaticPairs = [
-      ["Laziergit", "nocturne", "daybreak"],
-      ["Catppuccin", "catppuccin-mocha", "catppuccin-latte"],
-      ["Gruvbox", "gruvbox-dark", "gruvbox-light"],
-      ["Solarized", "solarized-dark", "solarized-light"],
-    ] as const
     const entries: ThemePickerEntry[] = [
       {
         label: "system",
-        hint: "terminal palette · automatic",
         selection: "system",
       },
-      ...automaticPairs
-        .filter(([, dark, light]) => this.#themeCatalog.has(dark) && this.#themeCatalog.has(light))
-        .map(([label, dark, light]) => ({
-          label: `Automatic · ${label}`,
-          hint: `${dark} / ${light}`,
-          selection: { dark, light },
-        })),
       ...this.#themeCatalog.list().map((entry) => ({
         label: entry.name,
-        hint: `${entry.appearance ?? "any"} · ${entry.description}`,
         selection: entry.name,
       })),
     ]
     const previous = this.theme.getSnapshot()
     const overrides = this.#config.core.themeConfiguration.overrides
-    const preview = (selection: ThemeSelection): void => {
+    const preview = (selection: string): void => {
       this.theme.replace(resolveThemeConfiguration({ selection, overrides }, this.#themeOptions()))
     }
 
     const index = await this.popups.choose(coreOwner, {
       title: "Theme",
       placeholder: "Filter themes",
-      choices: entries,
+      choices: entries.map((entry) => ({ label: entry.label })),
       onHighlight: (highlighted) => {
         const entry = highlighted === undefined ? undefined : entries[highlighted]
         if (entry) preview(entry.selection)
@@ -486,28 +468,17 @@ export class ExtensionKernel {
     }
 
     // `choose` clears its temporary preview when it settles. Keep the selected palette visible
-    // while the user decides which layered config owns it.
+    // while its global config edit is applied.
     preview(picked.selection)
-    const scope = await this.popups.choose(coreOwner, {
-      title: "Save theme",
-      choices: [
-        { label: "All repositories", hint: this.#configFiles.global },
-        { label: "This repository", hint: this.#configFiles.repo },
-      ],
-    }).promise
-    if (scope === undefined) {
-      this.theme.replace(previous)
-      return
-    }
 
-    const path = scope === 0 ? this.#configFiles.global : this.#configFiles.repo
+    const path = this.#configFiles.global
     try {
       await writeThemeSelection(path, picked.selection)
       await this.#applyChanges()
       this.#notifier({
         extension: coreOwner,
         level: "success",
-        message: `Theme saved to ${scope === 0 ? "global" : "repository"} config`,
+        message: "Theme saved",
       })
     } catch (error) {
       this.theme.replace(previous)
@@ -782,10 +753,10 @@ export class ExtensionKernel {
   async #loadThemes(): Promise<void> {
     let fingerprint = ""
     try {
-      fingerprint = await themeFilesFingerprint(this.#themeDirectories)
+      fingerprint = await themeFilesFingerprint(this.#themeDirectory)
       const loaded = await loadThemeCatalog({
         presets: themePresets,
-        directories: this.#themeDirectories,
+        directory: this.#themeDirectory,
       })
       this.#themeCatalog = retainLastValidThemes(this.#themeCatalog, loaded)
     } catch (error) {
@@ -1216,7 +1187,7 @@ export class ExtensionKernel {
       const [tree, documents, themes] = await Promise.all([
         this.#treeFingerprint(),
         readConfigDocuments(this.#configFiles),
-        this.#themeResourcesEnabled ? themeFilesFingerprint(this.#themeDirectories) : Promise.resolve(""),
+        this.#themeResourcesEnabled ? themeFilesFingerprint(this.#themeDirectory) : Promise.resolve(""),
       ])
       const config = documentFingerprint(documents)
       if (this.#stopped || (tree === this.#watchTree && config === this.#watchConfig && themes === this.#watchThemes))
@@ -1247,7 +1218,7 @@ export class ExtensionKernel {
       const [tree, documents, themes] = await Promise.all([
         this.#treeFingerprint(),
         readConfigDocuments(this.#configFiles),
-        this.#themeResourcesEnabled ? themeFilesFingerprint(this.#themeDirectories) : Promise.resolve(""),
+        this.#themeResourcesEnabled ? themeFilesFingerprint(this.#themeDirectory) : Promise.resolve(""),
       ])
       const themesChanged = themes !== this.#activatedThemes
       if (themesChanged) await this.#loadThemes()

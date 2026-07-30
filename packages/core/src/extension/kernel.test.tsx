@@ -743,10 +743,31 @@ describe("serialized reload recovery", () => {
 })
 
 describe("Theme resources", () => {
-  it("hot reloads a repository theme without remounting its consumers", async () => {
+  it("does not discover repository theme directories", async () => {
+    const harness = await createHarness({ themes: true })
+    const repositoryThemes = join(harness.directory, ".laziergit", "themes")
+    await mkdir(repositoryThemes, { recursive: true })
+    await writeFile(
+      join(repositoryThemes, "repo-only.json"),
+      JSON.stringify({
+        name: "repo-only",
+        extends: "nocturne",
+        tokens: { accent: "#123456" },
+      }),
+    )
+
+    await harness.kernel.start()
+
+    const configSchema = JSON.parse(await readFile(join(harness.configDirectory, "config.schema.json"), "utf8")) as {
+      properties: { theme: { properties: { preset: { oneOf: [{ enum: string[] }] } } } }
+    }
+    expect(configSchema.properties.theme.properties.preset.oneOf[0].enum).not.toContain("repo-only")
+  })
+
+  it("hot reloads a global theme without remounting its consumers", async () => {
     const harness = await createHarness({ watch: true, debounceMs: 20, pollMs: 10, themes: true })
     testGlobals().__laziergitThemeMounts = 0
-    const themePath = join(harness.themeRepo, "custom.json")
+    const themePath = join(harness.themeGlobal, "custom.json")
     await Promise.all([
       writeFile(
         themePath,
@@ -757,7 +778,7 @@ describe("Theme resources", () => {
           tokens: { accent: "#123456" },
         }),
       ),
-      writeFile(harness.configFiles.repo, `{ "theme": { "preset": "custom" } }`),
+      writeFile(harness.configFiles.global, `{ "theme": { "preset": "custom" } }`),
       writeFile(
         join(harness.repo, "theme-resource-pane.tsx"),
         `
@@ -816,7 +837,10 @@ describe("Theme resources", () => {
 
   it("follows terminal appearance for a dark/light pair without reloading config", async () => {
     const harness = await createHarness()
-    await writeFile(harness.configFiles.repo, `{ "theme": { "preset": { "dark": "nocturne", "light": "daybreak" } } }`)
+    await writeFile(
+      harness.configFiles.global,
+      `{ "theme": { "preset": { "dark": "nocturne", "light": "daybreak" } } }`,
+    )
     await harness.kernel.start()
 
     expect(harness.kernel.theme.getSnapshot().background).toBe(themePreset("nocturne").tokens.background)
@@ -826,28 +850,26 @@ describe("Theme resources", () => {
     expect(harness.kernel.theme.getSnapshot().background).toBe(themePreset("nocturne").tokens.background)
   })
 
-  it("previews a picker choice and persists it to the selected JSONC scope", async () => {
+  it("shows names only, previews a picker choice, and persists it globally", async () => {
     const harness = await createHarness()
     await harness.kernel.start()
     const before = harness.kernel.theme.getSnapshot()
 
     const flow = harness.kernel.openThemePicker()
     const themes = topChoice(harness)
+    expect(themes.choices.every((choice) => choice.hint === undefined)).toBeTrue()
+    expect(themes.choices.some((choice) => choice.label.startsWith("Automatic"))).toBeFalse()
     const emberIndex = themes.choices.findIndex((choice) => choice.label === "ember")
     expect(emberIndex).toBeGreaterThanOrEqual(0)
     themes.highlight(emberIndex)
     expect(harness.kernel.theme.getSnapshot().accent).toBe(themePreset("ember").tokens.accent)
     themes.choose(emberIndex)
-
-    await Promise.resolve()
-    const scope = topChoice(harness)
-    expect(scope.title).toBe("Save theme")
-    scope.choose(1)
     await flow
 
-    expect(parseJsonc(await readFile(harness.configFiles.repo, "utf8"))).toEqual({
+    expect(parseJsonc(await readFile(harness.configFiles.global, "utf8"))).toEqual({
       theme: { preset: "ember" },
     })
+    expect(await stat(harness.configFiles.repo).catch(() => undefined)).toBeUndefined()
     expect(harness.kernel.theme.getSnapshot().accent).toBe(themePreset("ember").tokens.accent)
     expect(harness.kernel.theme.getSnapshot()).not.toBe(before)
   })

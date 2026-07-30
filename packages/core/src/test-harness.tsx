@@ -67,7 +67,6 @@ export interface Harness {
   /** Repo-scope Extension directory. */
   readonly repo: string
   readonly themeGlobal: string
-  readonly themeRepo: string
   readonly configFiles: { readonly global: string; readonly repo: string }
   readonly setup: Awaited<ReturnType<typeof createTestRenderer>>
   readonly kernel: ExtensionKernel
@@ -168,8 +167,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const global = join(directory, "global")
   const repo = join(directory, "repo")
   const themeGlobal = join(configDirectory, "themes")
-  const themeRepo = join(directory, "repo-themes")
-  await Promise.all([mkdir(bundled), mkdir(global), mkdir(repo), mkdir(themeGlobal), mkdir(themeRepo)])
+  await Promise.all([mkdir(bundled), mkdir(global), mkdir(repo), mkdir(themeGlobal)])
   if (options.git === true) await initRepository(directory)
 
   let setup!: Awaited<ReturnType<typeof createTestRenderer>>
@@ -181,7 +179,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     repoRoot: directory,
     renderer: setup.renderer,
     directories: { bundled, global, repo },
-    themeDirectories: { global: themeGlobal, repo: themeRepo },
+    themeDirectory: themeGlobal,
     themeResources: options.themes ?? false,
     configFiles,
     watch: options.watch ?? false,
@@ -197,7 +195,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     global,
     repo,
     themeGlobal,
-    themeRepo,
     configFiles,
     setup,
     kernel,

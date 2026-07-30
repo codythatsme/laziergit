@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { themePresets } from "../extension/theme"
-import { defaultThemeDirectories, discoverThemeDocuments, loadThemeCatalog, themeFilesFingerprint } from "./discovery"
+import { defaultThemeDirectory, discoverThemeDocuments, loadThemeCatalog, themeFilesFingerprint } from "./discovery"
 
 const temporaryRoots: string[] = []
 
@@ -29,7 +29,7 @@ describe("theme discovery", () => {
       mkdir(join(root, "directory.json")),
     ])
 
-    const discovered = await discoverThemeDocuments(root, "global")
+    const discovered = await discoverThemeDocuments(root)
 
     expect(discovered.sources.map((entry) => entry.path)).toEqual([join(root, "a.json"), join(root, "z.json")])
     expect(discovered.diagnostics).toEqual([
@@ -39,57 +39,46 @@ describe("theme discovery", () => {
 
   it("treats a missing directory as an empty scope", async () => {
     const root = await temporaryRoot()
-    expect(await discoverThemeDocuments(join(root, "missing"), "repo")).toEqual({
+    expect(await discoverThemeDocuments(join(root, "missing"))).toEqual({
       sources: [],
       diagnostics: [],
     })
   })
 
-  it("loads global then repository definitions into one catalog", async () => {
+  it("loads global definitions into the catalog", async () => {
     const root = await temporaryRoot()
     const global = join(root, "global")
-    const repo = join(root, "repo")
-    await Promise.all([mkdir(global), mkdir(repo)])
-    await Promise.all([
-      writeFile(
-        join(global, "custom.json"),
-        JSON.stringify({ name: "custom", extends: "nocturne", tokens: { accent: "#111111" } }),
-      ),
-      writeFile(
-        join(repo, "custom.json"),
-        JSON.stringify({ name: "custom", extends: "nocturne", tokens: { accent: "#222222" } }),
-      ),
-    ])
+    await mkdir(global)
+    await writeFile(
+      join(global, "custom.json"),
+      JSON.stringify({ name: "custom", extends: "nocturne", tokens: { accent: "#111111" } }),
+    )
 
-    const catalog = await loadThemeCatalog({ presets: themePresets, directories: { global, repo } })
+    const catalog = await loadThemeCatalog({ presets: themePresets, directory: global })
 
     expect(catalog.get("custom")).toEqual(
-      expect.objectContaining({ scope: "repo", tokens: expect.objectContaining({ accent: "#222222" }) }),
+      expect.objectContaining({ scope: "global", tokens: expect.objectContaining({ accent: "#111111" }) }),
     )
   })
 
   it("fingerprints file contents", async () => {
     const root = await temporaryRoot()
     const global = join(root, "global")
-    const repo = join(root, "repo")
-    await Promise.all([mkdir(global), mkdir(repo)])
+    await mkdir(global)
     const path = join(global, "theme.json")
     await writeFile(path, "one")
-    const before = await themeFilesFingerprint({ global, repo })
+    const before = await themeFilesFingerprint(global)
     await writeFile(path, "two")
-    expect(await themeFilesFingerprint({ global, repo })).not.toBe(before)
+    expect(await themeFilesFingerprint(global)).not.toBe(before)
   })
 })
 
-describe("defaultThemeDirectories", () => {
-  it("uses the XDG config root and repository root", () => {
+describe("defaultThemeDirectory", () => {
+  it("uses the XDG config root", () => {
     const previous = process.env.XDG_CONFIG_HOME
     process.env.XDG_CONFIG_HOME = "/config"
     try {
-      expect(defaultThemeDirectories("/work/repo")).toEqual({
-        global: join("/config", "laziergit", "themes"),
-        repo: join("/work/repo", ".laziergit", "themes"),
-      })
+      expect(defaultThemeDirectory()).toBe(join("/config", "laziergit", "themes"))
     } finally {
       if (previous === undefined) delete process.env.XDG_CONFIG_HOME
       else process.env.XDG_CONFIG_HOME = previous
