@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@laziergit/extension-remote-branches",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.tsx",
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@opentui/react": "catalog:",
+    "laziergit": "workspace:*",
+    "react": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:"
+  }
+}

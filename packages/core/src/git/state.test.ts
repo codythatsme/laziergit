@@ -1,10 +1,14 @@
 import { expect, it } from "bun:test"
-import type { Branch, GitState } from "laziergit"
+import type { Branch, GitState, RemoteBranch } from "laziergit"
 
 import { emptyGitState, gitStateSlices, reconcileGitState } from "./state"
 
 function branch(name: string, oid: string): Branch {
   return { name, oid, isHead: false, upstream: null, lastCommit: { oid, subject: "s", authoredAt: 1 } }
+}
+
+function remoteBranch(name: string, oid: string): RemoteBranch {
+  return { name, remote: "origin", oid }
 }
 
 const upstream = { remote: "origin", branch: "main", gone: false, ahead: 1, behind: 0 }
@@ -45,6 +49,22 @@ it("keeps unchanged slices — and unchanged rows inside a changed slice — ref
   // Per-row identity is what lets a list pane memoize the rows that did not move.
   expect(reconciled.branches[0]).toBe(previous.branches[0])
   expect(reconciled.branches[1]).not.toBe(previous.branches[1])
+})
+
+it("keeps unchanged remote branch rows stable while one remote ref moves", () => {
+  const previous = stateWith({
+    remoteBranches: [remoteBranch("main", "a"), remoteBranch("feature", "b")],
+  })
+  const reconciled = reconcileGitState(
+    previous,
+    stateWith({
+      remoteBranches: [remoteBranch("main", "a"), remoteBranch("feature", "CHANGED")],
+    }),
+  )
+
+  expect(reconciled.remoteBranches).not.toBe(previous.remoteBranches)
+  expect(reconciled.remoteBranches[0]).toBe(previous.remoteBranches[0])
+  expect(reconciled.remoteBranches[1]).not.toBe(previous.remoteBranches[1])
 })
 
 it("keeps every unchanged file in the working tree status stable", () => {
