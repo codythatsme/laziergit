@@ -16,10 +16,9 @@ async function inTemporaryDirectory<T>(run: (directory: string) => Promise<T>): 
 
 describe("publishTypeEnvironment", () => {
   /**
-   * An editor that cannot resolve an import has no API to offer, and the failure is silent:
-   * the published tsconfig sets `skipLibCheck`, so a package missing from this overlay
-   * degrades the author's types to `any` without announcing itself. `effect` is the one this
-   * test was written for, since `ctx.effect` is declared in terms of `Effect.Effect`.
+   * The failure this guards against is silent: the published tsconfig sets `skipLibCheck`,
+   * so a package missing from the overlay degrades the author's types to `any` without
+   * announcing itself.
    */
   it("links every package an Extension may import, including effect for ctx.effect", async () => {
     await inTemporaryDirectory(async (directory) => {

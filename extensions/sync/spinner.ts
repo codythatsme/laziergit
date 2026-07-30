@@ -13,7 +13,7 @@ const periodMs = 100
 /**
  * The current frame while `active`, and `null` otherwise. The interval lives in the component
  * so unmounting clears it: an `activate`-scope timer would not be cleared by a hot reload
- * landing mid-push, whose parked `finally` never runs (§5.3). The tick closes over nothing but
+ * landing mid-push, whose parked `finally` never runs. The tick closes over nothing but
  * React state, so it cannot reach a poisoned `ctx`.
  */
 export function useSpinner(active: boolean): string | null {

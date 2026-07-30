@@ -294,7 +294,7 @@ export default defineExtension({
             const selected = i === cursor.index
             return (
               // `wrapMode="none"` is not optional decoration: without it a long run title
-              // reflows over two lines and the list stops being a list (§1.8).
+              // reflows over two lines and the list stops being a list.
               <text
                 key={run.databaseId}
                 id={cursor.rowId(i)}

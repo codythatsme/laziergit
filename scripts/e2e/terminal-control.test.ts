@@ -209,7 +209,7 @@ async function pressSuper(session: Session, key: string): Promise<void> {
 
 /**
  * A ctrl-modified key through the same protocol, for the bindings that are deliberately ctrl
- * rather than `mod` (ADR-0004).
+ * rather than `mod`.
  */
 async function pressCtrl(session: Session, key: string): Promise<void> {
   await pressKittyModifier(session, key, 5)
@@ -476,7 +476,7 @@ describe("laziergit through a real terminal", () => {
   }, 20_000)
 
   /**
-   * The acceptance test of PLAN.md, run by machine: a user drops a `.tsx` file into their own
+   * The project's acceptance test, run by machine: a user drops a `.tsx` file into their own
    * config directory and the feature exists — no core change, nothing rebuilt.
    *
    * The extension is lifted out of the specification itself rather than copied here, so §2's
@@ -521,7 +521,7 @@ describe("laziergit through a real terminal", () => {
       )
       expect(listed).toContain("✓")
       expect(listed).toContain("✗")
-      // One row is one line (§1.8): the third title is clipped at the column edge, so its
+      // One row is one line: the third title is clipped at the column edge, so its
       // tail never reaches the screen. Without `wrapMode="none"` it reflows and TAIL shows.
       expect(listed).not.toContain("TAIL")
 

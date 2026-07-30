@@ -18,7 +18,7 @@ export function fetchFor(target: DiffTarget, context: number, untracked: Readonl
   // has no `@@` in it; it is a diff-only option, so core cannot pin it globally.
   const patchFlags = ["--no-ext-diff", `-U${context}`]
   // `literalPathspec` because git reads every path as a pattern: `foo[1].txt` would otherwise
-  // also match `foo1.txt` (§1.5).
+  // also match `foo1.txt`.
   const pathspec = target.path === null ? [] : ["--", literalPathspec(target.path)]
   // For argvs that write their own `--`. It goes in unconditionally: anything naming a
   // revision must end the revision list, or `git show docs` is an ambiguous argument.

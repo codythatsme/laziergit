@@ -21,7 +21,7 @@ const bundledExtensionDirectory = resolve(import.meta.dir, "..", "..", "..", "..
 
 /**
  * `files` declares `needs: ["diff"]`. A repo-scope Extension named `diff` shadows the bundled
- * one (§0) and satisfies the need with a `DiffApi` that prints what it was shown.
+ * one and satisfies the need with a `DiffApi` that prints what it was shown.
  */
 const diffStub = `
   /** @jsxImportSource @opentui/react */

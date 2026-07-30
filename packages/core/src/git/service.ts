@@ -139,7 +139,7 @@ function fingerprintOf(status: string, refs: string, stash: string, config: stri
 /**
  * All git access, and the only writer of the {@link GitStore}. Effect owns the I/O —
  * child-process lifetime, lock retry, the concurrent fan-out of a refresh — while the store,
- * coalescing and polling stay plain TypeScript (ADR-0002).
+ * coalescing and polling stay plain TypeScript.
  */
 export class GitService {
   readonly store: GitStore
@@ -371,7 +371,7 @@ export class GitService {
 
   /**
    * Runs an effect and tracks it until it settles, so shutdown can wait for a `git commit`
-   * already underway. A reload parks the promise, but the write itself always completes (§5.3).
+   * already underway. A reload parks the promise, but the write itself always completes.
    */
   #run<A>(effect: Effect.Effect<A, GitError>): Promise<A> {
     const pending = Effect.runPromise(effect)
@@ -439,7 +439,7 @@ export class GitService {
       }),
     )
     // Uninterruptible: a hot reload landing mid-`git commit` must not leave the repository
-    // half-written. Only the awaited promise is parked (§5.3).
+    // half-written. Only the awaited promise is parked.
     return mutating ? this.#refreshed(Effect.uninterruptible(invocation)) : invocation
   }
 

@@ -582,7 +582,7 @@ export default defineExtension({
       placement: { column: 0, order: 40 },
     })
 
-    // Keyless: core binds `1`–`9` positionally over the Layout (§1.7).
+    // Keyless: core binds `1`–`9` positionally over the Layout.
     ctx.commands.register({
       id: "commits.focus",
       title: "Focus commits",

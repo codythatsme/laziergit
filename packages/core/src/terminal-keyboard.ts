@@ -23,7 +23,7 @@ const unavailableModifierReader: MacModifierReader = {
  * Warp and a few other macOS terminals can reduce a terminal-owned modified Backspace chord to
  * an ordinary DEL byte. CoreGraphics still knows which physical modifier is held when that byte
  * arrives, so local macOS sessions can recover the information the terminal omitted. Remote
- * sessions deliberately get no such fallback: their keyboard belongs to another machine.
+ * sessions get no such fallback: their keyboard belongs to another machine.
  */
 export async function createMacModifierReader(
   platform: NodeJS.Platform = process.platform,
@@ -91,9 +91,9 @@ export function recoverModifiedBackspace(
 }
 
 /**
- * OpenTUI 0.4.4 enables xterm modifyOtherKeys level 1 while detecting Kitty support. Pi uses
- * level 2, which makes terminals report modified special keys more consistently. OpenTUI still
- * owns cleanup and will reset the mode on shutdown (or before enabling Kitty).
+ * OpenTUI 0.4.4 enables xterm modifyOtherKeys level 1 while detecting Kitty support; level 2
+ * makes terminals report modified special keys more consistently. OpenTUI still owns cleanup
+ * and will reset the mode on shutdown (or before enabling Kitty).
  */
 export function enableLegacyModifiedKeys(
   capabilities: TerminalCapabilities | null,

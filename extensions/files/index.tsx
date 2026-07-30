@@ -43,7 +43,7 @@ import {
   type VisibleRow,
 } from "./tree"
 
-/** A total record rather than a switch: a new kind is a compile error, not a blank column. */
+/** A total record: a new kind is a compile error, not a blank column. */
 const kindGlyphs: { readonly [K in ChangeKind | "untracked"]: string } = {
   added: "A",
   modified: "M",
@@ -96,7 +96,7 @@ function statusCell(change: FileChange): StatusCell {
  * wins, worst news first.
  */
 function directoryCell(node: DirectoryNode, folded: boolean): StatusCell {
-  // U+25B6 / U+25BC, lazygit's own pair, both one column wide.
+  // U+25B6 / U+25BC, both one column wide.
   const marker = folded ? "\u25b6" : "\u25bc"
   const mark = node.conflicted
     ? { text: "!", token: "danger" as keyof Theme }
@@ -108,7 +108,7 @@ function directoryCell(node: DirectoryNode, folded: boolean): StatusCell {
   return { index: marker, worktree: mark.text, indexToken: "textMuted", worktreeToken: mark.token }
 }
 
-/** A path holds exactly one entry (ADR-0005), so the path alone identifies a decoration slot. */
+/** A path holds exactly one entry, so the path alone identifies a decoration slot. */
 function changeKey(change: FileChange): string {
   return change.path
 }
@@ -147,7 +147,7 @@ interface DiscardPlan {
   readonly paths: readonly string[]
 }
 
-/** Null on a conflicted path: resolving one belongs to the user's editor (§5.12). */
+/** Null on a conflicted path: resolving one belongs to the user's editor. */
 function discardPlan(change: FileChange): DiscardPlan | null {
   if (change.kind === "conflicted") return null
   if (change.index === null) {
@@ -293,7 +293,7 @@ export default defineExtension({
 
     /**
      * `space` on a file: stage it unless there is nothing left to stage. Staging a conflicted
-     * file is how git records a resolution, which is v1's whole conflict write path (§5.12).
+     * file is how git records a resolution.
      */
     async function toggleFile(change: FileChange): Promise<void> {
       if (isUnstaged(change) || isUntracked(change) || isConflicted(change)) await stage([change.path])
@@ -390,7 +390,7 @@ export default defineExtension({
 
     /**
      * Working-tree changes only: staged content survives, since `discard` restores from the
-     * index. Conflicted paths are left out — resolving them belongs to the editor (§5.12).
+     * index. Conflicted paths are left out — resolving them belongs to the editor.
      */
     async function discardAll(): Promise<void> {
       const status = ctx.git.state.status
@@ -423,7 +423,7 @@ export default defineExtension({
     /**
      * `ctx.open`, not `ctx.exec`: `exec` pipes the child's stdio, so a terminal editor would
      * have no terminal to draw on. The root is joined by hand because an Extension has no
-     * `node:path` (ADR-0001); git reports paths relative to the root with `/` separators.
+     * `node:path`; git reports paths relative to the root with `/` separators.
      */
     async function openPath(path: string): Promise<void> {
       try {
@@ -437,9 +437,7 @@ export default defineExtension({
 
     /**
      * `x` opens the registered `files.actions` menu on a file, and an ad-hoc one on a folder:
-     * a directory row is not a `FileChange`, and widening that payload would push the union
-     * onto every third-party splice. The cost, named in §5.12, is that nothing can splice into
-     * the folder menu.
+     * a directory row is not a `FileChange`, so nothing can splice into the folder menu.
      */
     async function openMenu(node: TreeNode | undefined): Promise<void> {
       if (node === undefined) return
@@ -485,13 +483,11 @@ export default defineExtension({
             },
             { key: "d", label: "Discard changes", when: isNotConflicted, run: discard },
             // Shares `o` with the conflict group below: visibility is settled before key
-            // conflicts, and these two `when`s are exact opposites (§5.7).
+            // conflicts, and these two `when`s are exact opposites.
             { key: "o", label: "Open in default application", when: isNotConflicted, run: openFile },
           ],
         },
         {
-          // Delegated to the editor (§5.12): no pick-ours/pick-theirs, which needs both a
-          // conflict-kind variant `FileChange` does not carry and patch-level staging.
           id: "conflict",
           title: "Conflict",
           items: [
@@ -687,8 +683,6 @@ export default defineExtension({
       useCommand({
         id: "files.open",
         title: "Open file in default application",
-        // `o` as in lazygit; `e` stays free for editing in `$EDITOR`, which needs the
-        // full-screen suspend laziergit does not have yet.
         keys: "o",
         run: () => (selected === undefined ? undefined : openPath(selected.node.path)),
       })
@@ -780,7 +774,7 @@ export default defineExtension({
       placement: { column: 0, order: 20 },
     })
 
-    // Keyless: core binds `1`–`9` positionally over the Layout (§1.7).
+    // Keyless: core binds `1`–`9` positionally over the Layout.
     ctx.commands.register({
       id: "files.focus",
       title: "Focus the files pane",

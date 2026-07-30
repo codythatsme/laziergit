@@ -47,7 +47,7 @@ const queryInputKeyBindings = [
  * a {@link CommandSpec.hint} appear: `tab`, the palette and `q` are on every screen in every
  * mode, so printing them forever would crowd out the keys that change.
  *
- * Clipped rather than wrapped or elided, since the row is one line by contract (§1.10). The
+ * Clipped rather than wrapped or elided, since the row is one line by contract. The
  * live set puts the focused Pane's Commands before the globals, so a narrow terminal loses the
  * least specific end of the line.
  */

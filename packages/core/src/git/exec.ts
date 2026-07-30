@@ -52,7 +52,7 @@ const baseEnv: Readonly<Record<string, string>> = Object.freeze({
 
 const readEnv: Readonly<Record<string, string>> = Object.freeze({ ...baseEnv, GIT_OPTIONAL_LOCKS: "0" })
 
-/** lazygit's numbers (`pkg/commands/git_cmd_obj_runner.go`): 20ms doubling, 7 attempts, ~1.26s total. */
+/** 20ms doubling, 7 attempts, ~1.26s total. */
 const initialRetryDelay = "20 millis"
 const retryFactor = 2
 const maxRetries = 6
@@ -109,8 +109,7 @@ function attempt(cwd: string, args: readonly string[], options: GitExecOptions):
     try {
       child = Bun.spawn(["git", ...argv(args, options.write ?? false)], {
         cwd,
-        // Callers may supply operation-specific Git hooks such as a sequence editor, while
-        // terminal prompting and locale stay pinned by laziergit's safety contract.
+        // The caller's env spreads first, so terminal prompting and locale stay pinned.
         env: { ...process.env, ...options.env, ...(options.write === true ? baseEnv : readEnv) },
         stdin: "pipe",
         stdout: "pipe",

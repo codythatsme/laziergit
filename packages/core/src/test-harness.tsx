@@ -234,12 +234,9 @@ export function frame(harness: Harness): string {
 
 /**
  * The rows currently painted with the selection colour, trimmed, in screen order. The list
- * Panes draw no cursor marker — the highlight is the cursor — so this reads the same fact off
- * the styled capture, proving the row the user sees lit in the colour the theme lights it.
- *
- * A list, not a single row, because "exactly one row is lit" is itself worth asserting. Only
- * the spans carrying the selection colour are joined: a screen line crosses every column, so
- * taking the whole line would append whatever the diff Pane is drawing beside the row.
+ * Panes draw no cursor marker — the highlight is the cursor. Only the spans carrying the
+ * selection colour are joined: a screen line crosses every column, so taking the whole line
+ * would append whatever the diff Pane is drawing beside the row.
  */
 export function highlighted(harness: Harness): readonly string[] {
   const selection = RGBA.fromHex(harness.kernel.theme.getSnapshot().selection)

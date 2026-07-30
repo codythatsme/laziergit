@@ -259,7 +259,7 @@ export default defineExtension({
       placement: { column: 0, order: 50 },
     })
 
-    // Keyless: core binds `1`–`9` positionally over the Layout (§1.7).
+    // Keyless: core binds `1`–`9` positionally over the Layout.
     ctx.commands.register({
       id: "stash.focus",
       title: "Focus stash",
@@ -272,7 +272,7 @@ export default defineExtension({
       hint: "stash",
       keys: "s",
       // A Pane id is a name, not a live object: this needs no `needs`, and is inert without
-      // the files Pane loaded (§5.8).
+      // the files Pane loaded.
       pane: "files",
       run: save,
     })

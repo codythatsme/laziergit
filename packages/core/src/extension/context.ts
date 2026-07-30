@@ -72,7 +72,7 @@ function supervisePopup<T>(scope: ActivationScope, handle: PopupHandle<T>): Prom
 /**
  * The one Effect door. It hands out core's own git effects rather than re-wrapping the Promise
  * surface, but only bound services and `runPromise` cross the boundary — never a service key
- * or a runtime (ADR-0002).
+ * or a runtime.
  */
 function createEffectEscape(extension: string, scope: ActivationScope, hosts: ContextHosts): EffectEscape {
   return {
@@ -315,8 +315,8 @@ export function createExtensionContext(
       return attachDisposable(scope, hosts.menus.extend(extension, id, splice))
     },
     open(id, target) {
-      // Documented as a rejection, so an unregistered id cannot throw synchronously past an
-      // `await` the caller wrote in good faith.
+      // An unregistered id rejects rather than throwing synchronously past an `await` the
+      // caller wrote in good faith.
       try {
         return supervisePopup(scope, hosts.menus.open(extension, id, target))
       } catch (error) {
@@ -358,7 +358,7 @@ export function createExtensionContext(
   /**
    * Git work is supervised but never cancelled: a write started while the Extension was live
    * always runs to completion, and a hot reload landing mid-`git commit` parks the promise
-   * rather than leaving a half-written repository (§5.3). This is why `ctx.exec` passes a
+   * rather than leaving a half-written repository. This is why `ctx.exec` passes a
    * cancel callback and `ctx.git` does not.
    */
   const supervised = <T>(pending: Promise<T>): Promise<T> => scope.supervise(pending)
