@@ -402,20 +402,34 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await start(harness)
     await frameShowing(harness, "verify — broken run")
 
+    // Each wait also requires the rerun's follow-up list refetch, which is the mutation's
+    // last effect — the rerun call alone leaves that refetch to land after the test.
     await press(harness, "2")
     await press(harness, "r")
     await waitFor(
       harness,
-      async () => (await gh.calls()).some((line) => line === "run rerun 2 --failed"),
-      "the failed-only rerun to reach gh",
+      async () => {
+        const calls = await gh.calls()
+        return (
+          calls.some((line) => line === "run rerun 2 --failed") &&
+          calls.filter((line) => line.startsWith("run list")).length >= 2
+        )
+      },
+      "the failed-only rerun to reach gh and refresh the list",
     )
 
     await press(harness, "j")
     await press(harness, "r")
     await waitFor(
       harness,
-      async () => (await gh.calls()).some((line) => line === "run rerun 1"),
-      "the full rerun to reach gh",
+      async () => {
+        const calls = await gh.calls()
+        return (
+          calls.some((line) => line === "run rerun 1") &&
+          calls.filter((line) => line.startsWith("run list")).length >= 3
+        )
+      },
+      "the full rerun to reach gh and refresh the list",
     )
   })
 
