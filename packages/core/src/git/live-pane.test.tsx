@@ -4,7 +4,15 @@ import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { act } from "react"
 
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  installHarnessLifecycle,
+  renderApp,
+  settle,
+  waitForFrame,
+  type Harness,
+} from "../test-harness"
 import { gitIsolationEnv } from "./test-repo"
 
 installHarnessLifecycle()
@@ -33,35 +41,19 @@ const livePane = `
   })
 `
 
+/** Inside `act`, because the poll under test can publish while the spawn is awaited. */
 async function git(harness: Harness, ...args: readonly string[]): Promise<void> {
-  const child = Bun.spawn(["git", ...args], {
-    cwd: harness.directory,
-    env: { ...process.env, ...gitIsolationEnv },
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited])
-  if (exitCode !== 0) throw new Error(`git ${args.join(" ")} exited ${exitCode}: ${stderr}`)
-}
-
-/**
- * Renders repeatedly until the screen catches up, so the assertion is about the pixels
- * rather than the store. The sleep is inside `act` because the update that ends this loop
- * arrives on the poll timer, outside any React event.
- */
-async function waitForFrame(harness: Harness, expected: string, timeoutMs = 10_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  let last = ""
-  while (Date.now() < deadline) {
-    await settle(harness)
-    last = frame(harness)
-    if (last.includes(expected)) return
-    await act(async () => {
-      await Bun.sleep(30)
+  await act(async () => {
+    const child = Bun.spawn(["git", ...args], {
+      cwd: harness.directory,
+      env: { ...process.env, ...gitIsolationEnv },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
     })
-  }
-  throw new Error(`Timed out waiting for ${JSON.stringify(expected)} on screen. Last frame:\n${last}`)
+    const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited])
+    if (exitCode !== 0) throw new Error(`git ${args.join(" ")} exited ${exitCode}: ${stderr}`)
+  })
 }
 
 it("renders live branch and status, and tracks git commands run outside laziergit", async () => {

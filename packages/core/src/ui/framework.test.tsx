@@ -9,8 +9,13 @@ import {
   frame,
   highlighted,
   installHarnessLifecycle,
+  press,
+  pressEscape,
   renderApp,
+  runCommand,
   settle,
+  waitFor,
+  waitForFrame,
   type Harness,
 } from "../test-harness"
 
@@ -170,19 +175,6 @@ async function twoPanes(harness: Harness, config?: string): Promise<void> {
   await renderApp(harness)
 }
 
-/**
- * A key press, plus enough real time for the terminal parser to disambiguate it — a
- * lone escape byte is only a key once the parser has waited for the sequence it could
- * have started.
- */
-async function press(harness: Harness, action: () => void): Promise<void> {
-  await act(async () => {
-    action()
-    await Bun.sleep(60)
-  })
-  await settle(harness)
-}
-
 function activations(): number {
   const globals = globalThis as typeof globalThis & { __laziergitActivations?: number }
   return globals.__laziergitActivations ?? 0
@@ -206,17 +198,15 @@ describe("config-driven Layout", () => {
     const before = activations()
 
     await writeFile(harness.configFiles.repo, `{ "layout": { "columns": [[["beta", "alpha"]]] } }`)
-    await act(async () => {
-      const deadline = Date.now() + 3_000
-      while (harness.kernel.layout.getSnapshot().layout.columns.length !== 1 && Date.now() < deadline) {
-        await Bun.sleep(10)
-      }
-    })
-    await settle(harness)
+    await waitFor(
+      harness,
+      () => harness.kernel.layout.getSnapshot().layout.columns.length === 1,
+      "the layout to reload as a single column",
+    )
 
     expect(harness.kernel.layout.getSnapshot().layout.columns[0]?.cells[0]?.paneIds).toEqual(["beta", "alpha"])
     // Rearranging keeps the Pane the user was on visible rather than resetting the tab.
-    expect(frame(harness)).toContain("Beta - [Alpha]")
+    await waitForFrame(harness, "Beta - [Alpha]")
     expect(harness.kernel.layout.focusedPaneId).toBe("alpha")
     expect(activations()).toBe(before)
   })
@@ -254,13 +244,15 @@ describe("focus and keybindings", () => {
     await twoPanes(harness, `{ "layout": { "columns": [["alpha"], ["beta"]] } }`)
 
     await press(harness, () => harness.setup.mockInput.pressTab())
+    await waitForFrame(harness, "beta=0 focused")
     expect(harness.kernel.layout.focusedPaneId).toBe("beta")
-    expect(frame(harness)).toContain("beta=0 focused")
 
     await press(harness, () => harness.setup.mockInput.pressTab({ shift: true }))
-    expect(harness.kernel.layout.focusedPaneId).toBe("alpha")
+    await waitFor(harness, () => harness.kernel.layout.focusedPaneId === "alpha", "focus to return to alpha")
 
-    await harness.kernel.events.drain()
+    await act(async () => {
+      await harness.kernel.events.drain()
+    })
     expect(focusEvents).toEqual(["alpha", "beta", "alpha"])
   })
 
@@ -268,11 +260,11 @@ describe("focus and keybindings", () => {
     const harness = await createHarness()
     await twoPanes(harness, `{ "layout": { "columns": [["alpha"], ["beta"]] }, "keybindings": { "alpha.bump": "x" } }`)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
+    await press(harness, "j")
     expect(frame(harness)).toContain("alpha=0")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("x"))
-    expect(frame(harness)).toContain("alpha=1")
+    await press(harness, "x")
+    await waitForFrame(harness, "alpha=1")
   })
 
   it("applies mouse capture config live without reactivating Extensions", async () => {
@@ -283,12 +275,7 @@ describe("focus and keybindings", () => {
     expect(harness.setup.renderer.useMouse).toBe(false)
 
     await writeFile(harness.configFiles.repo, `{ "mouse": true }`)
-    await act(async () => {
-      const deadline = Date.now() + 3_000
-      while (!harness.setup.renderer.useMouse && Date.now() < deadline) {
-        await Bun.sleep(10)
-      }
-    })
+    await waitFor(harness, () => harness.setup.renderer.useMouse, "the config reload to enable mouse capture")
 
     expect(harness.setup.renderer.useMouse).toBe(true)
     expect(activations()).toBe(before)
@@ -301,6 +288,7 @@ describe("popups", () => {
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.pick"))
+    await waitForFrame(harness, "first")
 
     expect(frame(harness)).not.toContain("❯")
     expect(highlighted(harness).some((row) => row.includes("first"))).toBeTrue()
@@ -330,26 +318,36 @@ describe("popups", () => {
     const focused = harness.setup.renderer.currentFocusedRenderable
     expect(focused).not.toBeNull()
 
-    await press(harness, () => harness.setup.mockInput.pressKey("p", { ctrl: true }))
-    expect(harness.setup.renderer.currentFocusedRenderable).not.toBe(focused)
+    await press(harness, "p", { ctrl: true })
+    await waitFor(
+      harness,
+      () => harness.setup.renderer.currentFocusedRenderable !== focused,
+      "the palette to take the focus slot",
+    )
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
-    expect(harness.setup.renderer.currentFocusedRenderable).toBe(focused)
+    await pressEscape(harness)
+    await waitFor(
+      harness,
+      () => harness.setup.renderer.currentFocusedRenderable === focused,
+      "focus to return to the Pane's input",
+    )
   })
 
   it("suspends Pane keys while a popup is open and restores them on escape", async () => {
     const harness = await createHarness()
     await twoPanes(harness, `{ "layout": { "columns": [["alpha"], ["beta"]] } }`)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("p", { ctrl: true }))
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
+    await press(harness, "p", { ctrl: true })
+    await waitFor(harness, () => harness.kernel.popups.getSnapshot().length > 0, "the palette to open")
+    await press(harness, "j")
     expect(frame(harness)).toContain("alpha=0")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
+    await waitFor(harness, () => harness.kernel.popups.getSnapshot().length === 0, "the palette to close")
     expect(frame(harness)).not.toContain("Commands")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    expect(frame(harness)).toContain("alpha=1")
+    await press(harness, "j")
+    await waitForFrame(harness, "alpha=1")
   })
 
   it("blocks a prompt that fails validation and accepts the corrected answer", async () => {
@@ -357,17 +355,17 @@ describe("popups", () => {
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.ask"))
-    expect(frame(harness)).toContain("Name it")
+    await waitForFrame(harness, "Name it")
 
     await press(harness, () => harness.setup.mockInput.pressEnter())
-    expect(frame(harness)).toContain("Too short")
+    await waitForFrame(harness, "Too short")
     expect(frame(harness)).toContain("Name it")
 
     await press(harness, () => void harness.setup.mockInput.typeText("x"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
+    await waitForFrame(harness, "named seedx")
     expect(frame(harness)).not.toContain("Name it")
-    expect(frame(harness)).toContain("named seedx")
   })
 
   it("submits what was typed even when Enter arrives before the render that would show it", async () => {
@@ -375,7 +373,7 @@ describe("popups", () => {
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.ask"))
-    expect(frame(harness)).toContain("Name it")
+    await waitForFrame(harness, "Name it")
 
     // One `act`, so React commits nothing between the keystroke and the Enter: the popup's
     // `return` binding runs on the key layer, which is not a React event and does not wait for
@@ -385,8 +383,8 @@ describe("popups", () => {
       harness.setup.mockInput.pressEnter()
     })
 
+    await waitForFrame(harness, "named seedx")
     expect(frame(harness)).not.toContain("Name it")
-    expect(frame(harness)).toContain("named seedx")
   })
 
   it("uses terminal-reported Option and Command modifiers for native text editing", async () => {
@@ -394,6 +392,7 @@ describe("popups", () => {
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.ask"))
+    await waitForFrame(harness, "Name it")
     await press(harness, () => void harness.setup.mockInput.typeText(" one two"))
 
     const input = harness.setup.renderer.currentFocusedRenderable
@@ -408,7 +407,7 @@ describe("popups", () => {
 
     await press(harness, () => void harness.setup.mockInput.typeText("left right"))
     await press(harness, () => harness.setup.mockInput.pressArrow("left", { super: true }))
-    await press(harness, () => harness.setup.mockInput.pressKey("DELETE", { super: true }))
+    await press(harness, "DELETE", { super: true })
     expect(input.value).toBe("")
   })
 
@@ -417,7 +416,7 @@ describe("popups", () => {
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.pick"))
-    expect(frame(harness)).toContain("Pick one")
+    await waitForFrame(harness, "Pick one")
 
     // Same ordering as the prompt case above: holding `down` and hitting enter, or typing a
     // filter and hitting enter, delivers both keys before React commits either.
@@ -426,7 +425,7 @@ describe("popups", () => {
       harness.setup.mockInput.pressEnter()
     })
 
-    expect(frame(harness)).toContain("picked 2")
+    await waitForFrame(harness, "picked 2")
   })
 
   it("filters and chooses in one breath, without a render in between", async () => {
@@ -434,14 +433,14 @@ describe("popups", () => {
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.pick"))
-    expect(frame(harness)).toContain("Pick one")
+    await waitForFrame(harness, "Pick one")
 
     await press(harness, () => {
       void harness.setup.mockInput.typeText("second")
       harness.setup.mockInput.pressEnter()
     })
 
-    expect(frame(harness)).toContain("picked 2")
+    await waitForFrame(harness, "picked 2")
   })
 
   it("resolves a select with the caller's own value, not the row index", async () => {
@@ -449,13 +448,13 @@ describe("popups", () => {
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.pick"))
-    expect(frame(harness)).toContain("Pick one")
+    await waitForFrame(harness, "Pick one")
     expect(frame(harness)).toContain("first")
 
     await press(harness, () => harness.setup.mockInput.pressArrow("down"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
-    expect(frame(harness)).toContain("picked 2")
+    await waitForFrame(harness, "picked 2")
   })
 
   it("answers a confirm either way", async () => {
@@ -463,15 +462,16 @@ describe("popups", () => {
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.danger"))
-    expect(frame(harness)).toContain("Delete it?")
+    await waitForFrame(harness, "Delete it?")
     expect(frame(harness)).toContain("This cannot be undone")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("n"))
-    expect(frame(harness)).toContain("declined")
+    await press(harness, "n")
+    await waitForFrame(harness, "declined")
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.danger"))
-    await press(harness, () => harness.setup.mockInput.pressKey("y"))
-    expect(frame(harness)).toContain("confirmed")
+    await waitForFrame(harness, "Delete it?")
+    await press(harness, "y")
+    await waitForFrame(harness, "confirmed")
   })
 })
 
@@ -480,22 +480,21 @@ describe("menus and status line", () => {
     const harness = await createHarness()
     await twoPanes(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("m"))
-    expect(frame(harness)).toContain("Alpha: row")
+    await press(harness, "m")
+    await waitForFrame(harness, "Alpha: row")
     expect(frame(harness)).toContain("Own action")
     expect(frame(harness)).toContain("Spliced action")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("b"))
-    expect(frame(harness)).not.toContain("Spliced action")
-    expect(frame(harness)).toContain("splice ran")
+    await press(harness, "b")
+    await waitForFrame(harness, (screen) => screen.includes("splice ran") && !screen.includes("Spliced action"))
   })
 
   it("closes an open menu when a reload takes its Extensions down", async () => {
     const harness = await createHarness()
     await twoPanes(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("m"))
-    expect(frame(harness)).toContain("Spliced action")
+    await press(harness, "m")
+    await waitForFrame(harness, "Spliced action")
 
     await act(async () => harness.kernel.reload())
     await settle(harness)
@@ -509,7 +508,7 @@ describe("menus and status line", () => {
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.ask"))
-    expect(frame(harness)).toContain("Name it")
+    await waitForFrame(harness, "Name it")
 
     await act(async () => harness.kernel.reload())
     await settle(harness)
@@ -525,9 +524,9 @@ describe("menus and status line", () => {
     const harness = await createHarness()
     await twoPanes(harness)
 
-    await press(harness, () => void harness.kernel.commands.execute("alpha.missing-menu"))
+    await runCommand(harness, "alpha.missing-menu")
 
-    expect(frame(harness)).toContain("rejected: No menu registered")
+    await waitForFrame(harness, "rejected: No menu registered")
   })
 
   it("renders a registered status line segment", async () => {
