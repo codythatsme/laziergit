@@ -3,6 +3,7 @@ import { chmod, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { act } from "react"
 
+import commitFlowDefinition from "../../../../extensions/commit-flow"
 import { gitIsolationEnv } from "../git/test-repo"
 import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
 
@@ -10,6 +11,8 @@ installHarnessLifecycle()
 
 /** The shipped Extension itself, symlinked into the harness's bundled scope the way `main.tsx` loads it. */
 const commitFlowExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commit-flow")
+const diffExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "diff")
+const filesExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "files")
 
 /**
  * The harness directory is the repository, the Extension home, and where the kernel writes
@@ -136,6 +139,20 @@ async function start(harness: Harness, options: { readonly tabbed?: boolean } = 
   await renderApp(harness)
 }
 
+/** Starts the exact shipped Files → Diff → Commit Flow graph instead of the focused stand-ins. */
+async function startShippedFiles(harness: Harness): Promise<void> {
+  await Promise.all([
+    symlink(commitFlowExtension, join(harness.bundled, "commit-flow")),
+    symlink(diffExtension, join(harness.bundled, "diff")),
+    symlink(filesExtension, join(harness.bundled, "files")),
+  ])
+  await writeFile(
+    harness.configFiles.repo,
+    `{ "layout": { "columns": [["files"], ["diff"]] }, "git": { "refreshIntervalMs": 60000 } }`,
+  )
+  await renderApp(harness)
+}
+
 /**
  * A key press, plus enough real time for the terminal parser to disambiguate it — a lone
  * escape byte is only a key once the parser has waited for the sequence it could start.
@@ -198,6 +215,59 @@ const submit = (harness: Harness) => () => harness.setup.mockInput.pressKey("s",
 const popupMarker = "Commit summary"
 
 describe("commit-flow popup", () => {
+  it("still opens an editor when a hot-reloaded extension is running against the previous core", async () => {
+    let runCommit: (() => void | Promise<void>) | undefined
+    let prompted = false
+
+    await commitFlowDefinition.spec.activate({
+      git: {
+        state: {
+          head: { kind: "onBranch", branch: "main", upstream: null },
+          status: { files: [] },
+        },
+      },
+      commands: {
+        register: (spec: { readonly id: string; readonly run: () => void | Promise<void> }) => {
+          if (spec.id === "commit-flow.commit") runCommit = spec.run
+          return { dispose: () => undefined }
+        },
+      },
+      panes: {
+        register: () => ({ dispose: () => undefined, focus: () => undefined, reveal: () => undefined }),
+      },
+      menus: {
+        register: () => ({ dispose: () => undefined }),
+      },
+      popups: {
+        // `compose` did not exist before this feature. This is the live context retained by a
+        // process whose bundled Extension hot-reloaded while core itself stayed in memory.
+        prompt: async () => {
+          prompted = true
+          return undefined
+        },
+        notify: () => undefined,
+      },
+      onDispose: () => undefined,
+    } as never)
+
+    expect(runCommit).toBeDefined()
+    await runCommit?.()
+
+    expect(prompted).toBe(true)
+  })
+
+  it("opens from the shipped Files pane when c is pressed", async () => {
+    const harness = await repository()
+    await seed(harness)
+    await writeFile(join(harness.directory, "tracked.txt"), "changed\n")
+    await startShippedFiles(harness)
+    await focusFiles(harness)
+
+    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+
+    expect(frame(harness)).toContain(popupMarker)
+  }, 30_000)
+
   it("commits what was typed", async () => {
     const harness = await repository()
     await seed(harness)

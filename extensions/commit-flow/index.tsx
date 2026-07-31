@@ -107,16 +107,28 @@ export default defineExtension({
 
       while (active === flow) {
         flow.message = initial
-        const message = await ctx.popups.compose({
-          title: editingTitle(flow.draft, ctx.git.state.status.files.filter(isStaged).length),
-          summaryTitle: "Commit summary",
-          descriptionTitle: "Commit description",
-          initial,
-          validate: (value) => validationProblem(flow.draft, value),
-          onChange: (value) => {
-            if (active === flow) flow.message = value
-          },
-        })
+        const title = editingTitle(flow.draft, ctx.git.state.status.files.filter(isStaged).length)
+        // Core itself does not hot-reload. During development a process started before
+        // `compose` existed can load this newer bundled Extension, so keep `c` useful until
+        // that process restarts instead of failing after the keypress with no editor.
+        const message =
+          typeof ctx.popups.compose === "function"
+            ? await ctx.popups.compose({
+                title,
+                summaryTitle: "Commit summary",
+                descriptionTitle: "Commit description",
+                initial,
+                validate: (value) => validationProblem(flow.draft, value),
+                onChange: (value) => {
+                  if (active === flow) flow.message = value
+                },
+              })
+            : await ctx.popups.prompt({
+                title,
+                placeholder: "Commit summary",
+                initial,
+                validate: (value) => validationProblem(flow.draft, value),
+              })
 
         // Another `begin` replaced this one and already settled its caller.
         if (active !== flow) return
