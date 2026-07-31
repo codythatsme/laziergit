@@ -7,5 +7,27 @@
     "typescript/no-explicit-any": "error",
     "typescript/no-non-null-assertion": "error",
     "typescript/no-redundant-type-constituents": "off"
-  }
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.tsx"],
+      "rules": {
+        "no-restricted-properties": [
+          "error",
+          {
+            "object": "Bun",
+            "property": "sleep",
+            "message": "A fixed delay in a renderer test bets on machine speed; wait on a condition with the harness's waitFor/waitForFrame. Where elapsed time is genuinely the subject, disable on that line with the reason."
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "setTimeout",
+            "message": "A timer in a renderer test bets on machine speed; wait on a condition with the harness's waitFor/waitForFrame. Where elapsed time is genuinely the subject, disable on that line with the reason."
+          }
+        ]
+      }
+    }
+  ]
 }

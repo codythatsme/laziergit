@@ -78,9 +78,11 @@ async function runFixture(path: string, cwd: string, timeoutMs = 5_000): Promise
     stderr: "pipe",
     env: process.env,
   })
+  // oxlint-disable-next-line no-restricted-globals -- deadline guard on a fixture subprocess
   let timeout: ReturnType<typeof setTimeout> | undefined
   try {
     const deadline = new Promise<never>((_resolve, reject) => {
+      // oxlint-disable-next-line no-restricted-globals -- deadline guard on a fixture subprocess
       timeout = setTimeout(() => {
         child.kill()
         reject(new Error(`Fixture exceeded ${timeoutMs}ms`))
@@ -473,6 +475,7 @@ describe("ExtensionKernel lifecycle", () => {
     // A disarmed watcher shows itself only through absence: several poll intervals must
     // elapse with no reactivation before that absence proves anything.
     await act(async () => {
+      // oxlint-disable-next-line no-restricted-properties -- an absence over elapsed time has no condition to poll for
       await Bun.sleep(120)
     })
     expect(testGlobals().__laziergitWatcherActivations).toBe(activationsAfterStop)
