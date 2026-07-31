@@ -27,7 +27,8 @@ const offenders: string[] = []
 
 for (const root of roots) {
   for await (const file of glob.scan(root)) {
-    const path = `${root}/${file}`
+    // Glob yields native separators; keep comparisons and diagnostics repository-relative.
+    const path = `${root}/${file.replaceAll("\\", "/")}`
     if (allowed.has(path)) continue
     const source = await Bun.file(path).text()
     if (source.includes("Bun.sleep")) offenders.push(path)
