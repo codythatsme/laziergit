@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test"
 import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
 import {
@@ -9,8 +8,10 @@ import {
   frame,
   highlighted,
   installHarnessLifecycle,
+  press,
   renderApp,
-  settle,
+  waitFor,
+  waitForFrame,
   type Harness,
 } from "../test-harness"
 
@@ -89,10 +90,22 @@ async function write(harness: Harness, path: string, contents: string): Promise<
   await writeFile(full, contents)
 }
 
-/** Paths git currently reports as staged — the assertion most of these tests really make. */
+/**
+ * Paths git currently reports as staged — the assertion most of these tests really make. Read
+ * only after the store or the frame has confirmed the write landed: `git diff` refreshes the
+ * index, and its lock can fail a write still in flight.
+ */
 async function staged(harness: Harness): Promise<readonly string[]> {
   const output = await git(harness, "diff", "--cached", "--name-only")
   return output.split("\n").filter((line) => line.length > 0)
+}
+
+/** The store's view of which paths sit in the index, for waiting a staging write out. */
+function stagedInStore(harness: Harness): readonly string[] {
+  return harness.kernel.git
+    .getSnapshot()
+    .status.files.filter((file) => file.kind === "changed" && file.index !== null)
+    .map((file) => file.path)
 }
 
 /** Side by side, which is what every test here reads unless it is about tabbing. */
@@ -133,40 +146,8 @@ async function commitTracked(harness: Harness, ...paths: readonly string[]): Pro
 }
 
 /**
- * A key press, and the real time its consequences take: the terminal parser only settles a
- * lone escape byte once it has waited for the sequence it could start, and a Command that
- * writes returns long before git does. The wait is inside `act`.
- */
-async function press(harness: Harness, key: string): Promise<void> {
-  await act(async () => {
-    harness.setup.mockInput.pressKey(key)
-    await Bun.sleep(150)
-  })
-  await settle(harness)
-}
-
-/**
- * Renders until `condition` holds, since a Command that writes returns long before git, the
- * store, and React have caught up. Timing out returns quietly, leaving the test's own
- * `expect` to report the failure.
- */
-async function waitFor(harness: Harness, condition: () => boolean | Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + 5_000
-  for (;;) {
-    await settle(harness)
-    // Both the probe and the wait run inside `act`: the store publish that ends this loop
-    // lands while one of them is awaiting.
-    let satisfied = false
-    await act(async () => {
-      satisfied = await condition()
-      if (!satisfied) await Bun.sleep(20)
-    })
-    if (satisfied || Date.now() > deadline) return
-  }
-}
-
-/**
- * Focuses the files Pane through the first positional jump key.
+ * Focuses the files Pane — which is also the `files.focus` binding under test. It is already
+ * the Layout's first cell, so pressing `1` is what keeps the binding exercised.
  */
 async function focusFiles(harness: Harness): Promise<void> {
   await press(harness, "1")
@@ -183,16 +164,17 @@ describe("staging from the files pane", () => {
     await focusFiles(harness)
     // Two status columns, `X` then `Y`, as git spells them: the change is in the working
     // tree, so the letter is in the second column.
+    await waitFor(harness, () => highlighted(harness).length > 0, "the focused pane to light its cursor")
     expect(highlighted(harness)).toEqual([" M tracked.txt"])
 
     await press(harness, " ")
-    await waitFor(harness, () => frame(harness).includes("M  tracked.txt"))
+    await waitForFrame(harness, "M  tracked.txt")
     expect(await staged(harness)).toEqual(["tracked.txt"])
 
     // The row's columns flipped and the cursor never moved, because it anchors on the path.
     expect(highlighted(harness)).toEqual(["M  tracked.txt"])
     await press(harness, " ")
-    await waitFor(harness, () => frame(harness).includes(" M tracked.txt"))
+    await waitForFrame(harness, " M tracked.txt")
     expect(await staged(harness)).toEqual([])
 
     for (const heading of ["Conflicted", "Staged", "Unstaged", "Untracked"]) {
@@ -243,11 +225,11 @@ describe("staging from the files pane", () => {
     expect(frame(harness)).toContain("??   a.txt")
 
     await press(harness, "\r")
-    await waitFor(harness, () => frame(harness).includes("▶  src"))
+    await waitForFrame(harness, "▶  src")
     expect(frame(harness)).not.toContain("a.txt")
 
     await press(harness, "\r")
-    await waitFor(harness, () => frame(harness).includes("??   a.txt"))
+    await waitForFrame(harness, "??   a.txt")
   })
 
   it("keeps the cursor on the same node when a directory above it collapses", async () => {
@@ -260,12 +242,12 @@ describe("staging from the files pane", () => {
     // Folders before files, so the nested chain comes before `a.txt` rather than after it.
     await press(harness, "j")
     await press(harness, "j")
-    await waitFor(harness, () => highlighted(harness).includes("??     b.txt"))
+    await waitFor(harness, () => highlighted(harness).includes("??     b.txt"), "the cursor to reach b.txt")
 
     // Collapse-all removes the row the cursor was on, so it lands on the deepest visible
     // ancestor rather than wherever the old index now points.
     await press(harness, "-")
-    await waitFor(harness, () => highlighted(harness).includes("▶  src"))
+    await waitFor(harness, () => highlighted(harness).includes("▶  src"), "the cursor to land on the folded folder")
   })
 
   it("stages a whole directory with space, and unstages it again", async () => {
@@ -277,11 +259,12 @@ describe("staging from the files pane", () => {
     await focusFiles(harness)
 
     await press(harness, " ")
-    await waitFor(harness, async () => (await staged(harness)).length === 2)
+    await waitFor(harness, () => stagedInStore(harness).length === 2, "both files to reach the index")
     expect(await staged(harness)).toEqual(["src/a.txt", "src/nested/b.txt"])
 
     await press(harness, " ")
-    await waitFor(harness, async () => (await staged(harness)).length === 0)
+    await waitFor(harness, () => stagedInStore(harness).length === 0, "the directory to leave the index")
+    expect(await staged(harness)).toEqual([])
   })
 
   it("toggles between the tree and a flat list of full paths", async () => {
@@ -293,7 +276,7 @@ describe("staging from the files pane", () => {
     expect(frame(harness)).toContain("▼  src/nested")
 
     await press(harness, "`")
-    await waitFor(harness, () => frame(harness).includes("?? src/nested/b.txt"))
+    await waitForFrame(harness, "?? src/nested/b.txt")
     expect(frame(harness)).not.toContain("▼")
   })
 
@@ -308,7 +291,7 @@ describe("staging from the files pane", () => {
     await focusFiles(harness)
 
     await press(harness, "a")
-    await waitFor(harness, async () => (await staged(harness)).length === 2)
+    await waitFor(harness, () => stagedInStore(harness).length === 2, "both files to reach the index")
 
     expect(await staged(harness)).toEqual(["loose.txt", "tracked.txt"])
     // Nothing is left on the working-tree side, so no row draws git's untracked pair.
@@ -325,11 +308,11 @@ describe("discarding from the files pane", () => {
     await focusFiles(harness)
 
     await press(harness, "d")
-    expect(frame(harness)).toContain("Delete untracked file?")
+    await waitForFrame(harness, "Delete untracked file?")
     expect(frame(harness)).toContain("loose.txt is untracked — discarding it")
 
     await press(harness, "y")
-    await waitFor(harness, () => frame(harness).includes("working tree clean"))
+    await waitForFrame(harness, "working tree clean")
     expect(await Bun.file(join(harness.directory, "loose.txt")).exists()).toBe(false)
   })
 
@@ -343,15 +326,16 @@ describe("discarding from the files pane", () => {
     await renderApp(harness)
     await focusFiles(harness)
     // Staged and nothing since, which is why `d` has to unstage before it restores.
+    await waitFor(harness, () => highlighted(harness).length > 0, "the focused pane to light its cursor")
     expect(highlighted(harness)).toEqual(["M  tracked.txt"])
 
     await press(harness, "d")
     // The working tree already matches the index, so `git restore --worktree` alone would
     // change nothing: a danger confirmation followed by silence.
-    expect(frame(harness)).toContain("Unstage tracked.txt and throw away its changes")
+    await waitForFrame(harness, "Unstage tracked.txt and throw away its changes")
 
     await press(harness, "y")
-    await waitFor(harness, () => frame(harness).includes("working tree clean"))
+    await waitForFrame(harness, "working tree clean")
     expect(await staged(harness)).toEqual([])
     expect(await Bun.file(join(harness.directory, "tracked.txt")).text()).toBe("one\n")
   })
@@ -365,10 +349,10 @@ describe("discarding from the files pane", () => {
     await focusFiles(harness)
 
     await press(harness, "d")
-    expect(frame(harness)).toContain("fresh.txt is not in HEAD")
+    await waitForFrame(harness, "fresh.txt is not in HEAD")
 
     await press(harness, "y")
-    await waitFor(harness, () => frame(harness).includes("working tree clean"))
+    await waitForFrame(harness, "working tree clean")
     expect(await staged(harness)).toEqual([])
     expect(await Bun.file(join(harness.directory, "fresh.txt")).exists()).toBe(false)
   })
@@ -383,9 +367,11 @@ describe("discarding from the files pane", () => {
     await focusFiles(harness)
 
     await press(harness, "d")
-    expect(frame(harness)).toContain("Throw away working-tree changes to tracked.txt.")
+    await waitForFrame(harness, "Throw away working-tree changes to tracked.txt.")
 
     await press(harness, "n")
+    // The popup leaving is the decline's only effect; nothing reaches git behind it.
+    await waitForFrame(harness, (screen) => !screen.includes("Throw away working-tree changes"))
     expect(await Bun.file(join(harness.directory, "tracked.txt")).text()).toBe("two\n")
     expect(frame(harness)).toContain("M tracked.txt")
   })
@@ -399,9 +385,9 @@ describe("the files action menu", () => {
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "x")
+    await waitForFrame(harness, "File: loose.txt")
 
     const rendered = frame(harness)
-    expect(rendered).toContain("File: loose.txt")
     expect(rendered).toMatch(/ {2}s {2,}Stage/)
     expect(rendered).toMatch(/ {2}d {2,}Discard changes/)
     expect(rendered).toMatch(/ {2}o {2,}Open in default application/)
@@ -419,6 +405,7 @@ describe("the files action menu", () => {
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "?")
+    await waitForFrame(harness, "Open file in default application")
 
     const sheet = frame(harness)
     expect(sheet).toMatch(/ {2}o {2,}Open file in default application/)
@@ -434,10 +421,10 @@ describe("the files action menu", () => {
     await focusFiles(harness)
     await press(harness, "j")
     await press(harness, "x")
-    expect(frame(harness)).toContain("File: other.txt")
+    await waitForFrame(harness, "File: other.txt")
 
     await press(harness, "s")
-    await waitFor(harness, async () => (await staged(harness)).length === 1)
+    await waitFor(harness, () => stagedInStore(harness).length === 1, "the staging to reach the index")
     expect(await staged(harness)).toEqual(["other.txt"])
   })
 })
@@ -474,9 +461,9 @@ describe("conflicts, shown and delegated", () => {
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "x")
+    await waitForFrame(harness, "File: shared.txt")
 
     const rendered = frame(harness)
-    expect(rendered).toContain("File: shared.txt")
     expect(rendered).toContain("Conflict")
     expect(rendered).toMatch(/ {2}o {2,}Open in default application/)
     expect(rendered).toMatch(/ {2}m {2,}Stage resolved/)
@@ -494,9 +481,16 @@ describe("conflicts, shown and delegated", () => {
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "x")
+    await waitForFrame(harness, "File: shared.txt")
     await press(harness, "m")
 
-    await waitFor(harness, () => !frame(harness).includes("UU"))
+    // Waited on through the store rather than the frame: the popup can cover the row, so the
+    // conflict pair leaving the screen would not prove the write landed.
+    await waitFor(
+      harness,
+      () => harness.kernel.git.getSnapshot().status.files.every((file) => file.kind !== "conflicted"),
+      "the resolution to reach the index",
+    )
     expect(frame(harness)).not.toContain("UU")
     expect(await staged(harness)).toEqual(["shared.txt"])
   })
@@ -508,6 +502,7 @@ describe("conflicts, shown and delegated", () => {
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "x")
+    await waitForFrame(harness, "File: shared.txt")
     // `d` is "Discard changes", hidden on this row — so it does nothing at all.
     await press(harness, "d")
 
@@ -525,12 +520,11 @@ describe("what the files pane publishes", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    expect(frame(harness)).toContain("showing workingTree tracked.txt")
+    await waitForFrame(harness, "showing workingTree tracked.txt")
 
     await press(harness, " ")
     // Staged now, so the same path wants the other side of the diff.
-    await waitFor(harness, () => frame(harness).includes("showing staged tracked.txt"))
-    expect(frame(harness)).toContain("showing staged tracked.txt")
+    await waitForFrame(harness, "showing staged tracked.txt")
   })
 
   it("leaves the diff alone while another pane is focused", async () => {
@@ -540,9 +534,10 @@ describe("what the files pane publishes", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    expect(frame(harness)).toContain("showing workingTree first.txt")
+    await waitForFrame(harness, "showing workingTree first.txt")
 
     await press(harness, "\t")
+    await waitFor(harness, () => highlighted(harness).length === 0, "focus to leave the files pane")
     await press(harness, "j")
 
     // `j` belongs to the files pane, so the cursor never moved. The pane is unfocused now,
@@ -561,14 +556,15 @@ describe("what the files pane publishes", () => {
     // Repeating the cell's digit cycles to Files.
     await focusFiles(harness)
     await press(harness, "V")
-    expect(frame(harness)).toContain("selected loose.txt")
+    await waitForFrame(harness, "selected loose.txt")
 
     // `]` brings the diff tab up, which unmounts this Pane. A Pane that is not on screen has
     // no selection, and `FilesApi.selected()` must not keep naming the row it had.
     await press(harness, "]")
+    await waitForFrame(harness, (screen) => !screen.includes("?? loose.txt"))
     await press(harness, "V")
 
-    expect(frame(harness)).toContain("selected none")
+    await waitForFrame(harness, "selected none")
   })
 
   it("exports a row source another extension decorates and reads the selection from", async () => {
@@ -586,7 +582,7 @@ describe("what the files pane publishes", () => {
 
     // Rows are in path order, not group order, so `loose.txt` is first.
     await press(harness, "V")
-    expect(frame(harness)).toContain("selected loose.txt")
+    await waitForFrame(harness, "selected loose.txt")
   })
 
   it("publishes no selection while the cursor is on a directory row", async () => {
@@ -600,11 +596,11 @@ describe("what the files pane publishes", () => {
     // A directory is not a `FileChange`, so `FilesApi.selected()` has nothing to return for
     // one — and a `decorateRows` provider is never handed a folder.
     await press(harness, "V")
-    expect(frame(harness)).toContain("selected none")
+    await waitForFrame(harness, "selected none")
 
     await press(harness, "j")
     await press(harness, "V")
-    expect(frame(harness)).toContain("selected src/a.txt")
+    await waitForFrame(harness, "selected src/a.txt")
   })
 })
 
@@ -620,14 +616,11 @@ describe("filtering the files pane", () => {
     expect(frame(harness)).toContain("apple.ts")
 
     await press(harness, "/")
-    await act(async () => {
-      await harness.setup.mockInput.typeText("banana")
-      await Bun.sleep(60)
-    })
-    await settle(harness)
+    await waitForFrame(harness, "Filter:")
+    await press(harness, () => void harness.setup.mockInput.typeText("banana"))
+    await waitForFrame(harness, "Filter: banana")
 
     const rendered = frame(harness)
-    expect(rendered).toContain("Filter: banana")
     expect(rendered).toContain("docs")
     expect(rendered).toContain("banana.md")
     expect(rendered).not.toContain("src")

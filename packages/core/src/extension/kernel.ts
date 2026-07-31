@@ -54,7 +54,7 @@ import { GitService } from "../git/service"
 import { gitStateSlices } from "../git/state"
 import type { GitPublication } from "../git/store"
 import { ImportCopyCache, type ImportCopyLease } from "./import-copy-cache"
-import { createNotifier } from "./notifier"
+import { createNotifier, type Notifier } from "./notifier"
 import { PaneHost } from "./pane-host"
 import { defaultTheme, findThemePreset, themePresets, ThemeStore } from "./theme"
 import { publishTypeEnvironment } from "./type-environment"
@@ -112,6 +112,8 @@ export interface ExtensionKernelOptions {
   readonly pollMs?: number
   /** Invoked by the `app.quit` Command; the process owner decides what quitting means. */
   readonly onQuit?: () => void
+  /** How long a toast stays on screen before expiring on its own. */
+  readonly toastLifetimeMs?: number
   /** Overrides the platform clipboard cascade; useful to embedders with their own writer. */
   readonly clipboardWriters?: readonly ClipboardWriterSpec[]
 }
@@ -172,7 +174,7 @@ export class ExtensionKernel {
   readonly panes: PaneHost
   readonly layout = new LayoutHost()
   readonly popups = new PopupHost()
-  readonly notifications = new NotificationHost()
+  readonly notifications: NotificationHost
   readonly listQuery = new ListQueryHost()
   readonly statusline: StatuslineHost
   readonly menus: MenuHost
@@ -198,10 +200,11 @@ export class ExtensionKernel {
   readonly #listeners = new Set<() => void>()
   /** Keyed by Extension name, in activation order — the order deactivation walks in reverse. */
   readonly #activations = new Map<string, Activation>()
-  readonly #notifier = createNotifier(this.notifications.publish)
+  readonly #notifier: Notifier
   readonly #slotOwners = new SlotOwners()
   readonly #disposeSlotErrors: () => void
   readonly #importCopies: ImportCopyCache
+  readonly #disposeKeybindingDestroyGuard: () => void
   readonly #disposeKeymap: () => void
   readonly #disposeThemeBackground: () => void
   /** Live `useKeyCapture` claims, most recent last — React unmounts in no particular order. */
@@ -253,6 +256,8 @@ export class ExtensionKernel {
     this.#appearance = options.renderer.themeMode ?? "dark"
     this.#onQuit = options.onQuit
     this.#clipboardWriters = options.clipboardWriters
+    this.notifications = new NotificationHost(options.toastLifetimeMs)
+    this.#notifier = createNotifier(this.notifications.publish)
 
     this.registry = createReactSlotRegistry<UiSlots, PluginContext>(options.renderer, {})
     this.#disposeSlotErrors = this.#slotOwners.watch(this.registry, this.diagnostics)
@@ -282,6 +287,14 @@ export class ExtensionKernel {
     this.keymap = createOpenTuiKeymap(options.renderer)
     this.#disposeKeymap = installKeymap(this.keymap, { diagnostics: this.diagnostics })
     this.keybindings = new KeybindingHost(this.keymap, this.diagnostics, (id) => this.#runCommand(id))
+    // OpenTUI's built-in Ctrl-C destroys the renderer before `main` can await kernel shutdown.
+    // Run ahead of the keymap's own DESTROY listener so its addon fields never disappear while
+    // laziergit's `enabled` layers are still registered.
+    const stopKeybindingsBeforeRenderer = () => this.keybindings.stop()
+    options.renderer.prependOnceListener(CliRenderEvents.DESTROY, stopKeybindingsBeforeRenderer)
+    this.#disposeKeybindingDestroyGuard = () => {
+      options.renderer.off(CliRenderEvents.DESTROY, stopKeybindingsBeforeRenderer)
+    }
     this.#importCopies = new ImportCopyCache({
       directories: this.#searchPath,
       diagnose: (diagnostic) => {
@@ -1294,6 +1307,7 @@ export class ExtensionKernel {
     })
     await this.#attemptShutdown("keybinding cleanup", () => {
       this.keybindings.stop()
+      this.#disposeKeybindingDestroyGuard()
       this.#disposeLeader?.()
       this.#disposeKeymap()
     })

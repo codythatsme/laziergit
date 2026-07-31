@@ -229,6 +229,25 @@ async function pressEscape(session: Session): Promise<void> {
 }
 
 describe("laziergit through a real terminal", () => {
+  it("exits cleanly on Ctrl-C without reporting a keymap teardown warning", async () => {
+    const repo = await createE2eRepo()
+
+    await inTerminal(repo, async (session) => {
+      await waitForText(session, "working tree clean")
+      await pressCtrl(session, "c")
+
+      const result = await session.waitForExit({ timeoutMs: 15_000 })
+      if (result.reason !== "exited") {
+        throw await terminalFailure(session, "the process to exit after Ctrl-C", undefined)
+      }
+
+      expect(result.exit.success).toBeTrue()
+      expect(await session.logs.text()).not.toContain(
+        'unknown-layer-field: [Keymap] Unknown layer field "enabled" was ignored',
+      )
+    })
+  }, 20_000)
+
   it("boots every Bundled Extension pane with live repository content", async () => {
     const repo = await createE2eRepo("all-panes")
     await addOrigin(repo)
@@ -378,8 +397,8 @@ describe("laziergit through a real terminal", () => {
       await waitForText(session, "M  tracked.txt")
 
       await session.keyboard.type("c")
-      // The hint bar, which during a capture is the Pane's two remaining keys.
-      await waitForText(session, "ctrl+s commit")
+      // The popup's own field, which is what says the flow owns the keyboard.
+      await waitForText(session, "Commit summary")
       await session.keyboard.type("q from e2e")
       await waitForText(session, "q from e2e")
       expect((await session.status()).state).toBe("running")
@@ -394,7 +413,7 @@ describe("laziergit through a real terminal", () => {
       await waitForText(session, "M  tracked.txt")
 
       await session.keyboard.type("A")
-      await waitForText(session, "amending the last commit")
+      await waitForText(session, "Amend the last commit")
       await session.keyboard.type(" amended")
       await pressPrimaryModifier(session, "s")
       await waitForText(session, "Amended")
@@ -575,7 +594,13 @@ describe("laziergit through a real terminal", () => {
 
       expect(await repo.git("status", "--porcelain")).toBe("")
 
-      await session.keyboard.type("4")
+      // The four panes share the cell, so the Stash tab is reached by cycling, not by number.
+      await session.keyboard.type("]")
+      await waitForText(session, "[Local branches]")
+      await session.keyboard.type("]")
+      await waitForText(session, "[Commits]")
+      await session.keyboard.type("]")
+      await waitForText(session, "[Stash]")
       await waitForText(session, "from e2e on main")
       await session.keyboard.type("p")
       await waitForText(session, "no stashes")

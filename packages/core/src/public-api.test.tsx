@@ -3,7 +3,17 @@ import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { act } from "react"
 
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "./test-harness"
+import {
+  createHarness,
+  frame,
+  installHarnessLifecycle,
+  press,
+  pressEscape,
+  renderApp,
+  settle,
+  waitForFrame,
+  type Harness,
+} from "./test-harness"
 
 installHarnessLifecycle()
 
@@ -168,33 +178,6 @@ const editorSource = `
   })
 `
 
-/**
- * A key press, plus enough real time for the terminal parser to disambiguate it — a lone
- * escape byte is only a key once the parser has waited for the sequence it could start.
- */
-async function press(harness: Harness, action: () => void): Promise<void> {
-  await act(async () => {
-    action()
-    await Bun.sleep(60)
-  })
-  await settle(harness)
-}
-
-/**
- * Renders until the frame says `text`, since a Command that spawns a child process returns
- * long after the keypress. Times out quietly, so the test's own `expect` reports the failure.
- */
-async function waitForFrame(harness: Harness, text: string, timeoutMs = 4_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await settle(harness)
-    if (frame(harness).includes(text)) return
-    await act(async () => {
-      await Bun.sleep(25)
-    })
-  }
-}
-
 async function withExtensions(harness: Harness, sources: Record<string, string>, config?: string): Promise<void> {
   await Promise.all([
     ...Object.entries(sources).map(([name, source]) => writeFile(join(harness.repo, name), source)),
@@ -222,13 +205,14 @@ describe("useListCursor", () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("G"))
-    expect(frame(harness)).toContain("cursor=2 selected=three")
+    await press(harness, "G")
+    await waitForFrame(harness, "cursor=2 selected=three")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("s"))
-    expect(frame(harness)).toContain("cursor=0 selected=one")
+    await press(harness, "s")
+    await waitForFrame(harness, "cursor=0 selected=one")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("w"))
+    await press(harness, "w")
+    await waitForFrame(harness, "three")
     expect(frame(harness)).toContain("cursor=0 selected=one")
   })
 
@@ -236,8 +220,9 @@ describe("useListCursor", () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("r"))
+    await press(harness, "j")
+    await waitForFrame(harness, "cursor=1 selected=two")
+    await press(harness, "r")
 
     expect(frame(harness)).toContain("cursor=1 selected=two")
   })
@@ -246,25 +231,25 @@ describe("useListCursor", () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("/"))
-    expect(frame(harness)).toContain("Filter:")
+    await press(harness, "/")
+    await waitForFrame(harness, "Filter:")
 
     // `s` is also the Pane's destructive shrink Command. Capture makes it query text only.
     await press(harness, () => void harness.setup.mockInput.typeText("two"))
+    await waitForFrame(harness, "cursor=0 selected=two")
     let rendered = frame(harness)
     expect(rendered).toContain("two")
     expect(rendered).not.toContain("one")
     expect(rendered).not.toContain("three")
-    expect(rendered).toContain("cursor=0 selected=two")
 
     await press(harness, () => harness.setup.mockInput.pressEnter())
-    expect(frame(harness)).toContain("matches for 'two' (1 of 3)")
+    await waitForFrame(harness, "matches for 'two' (1 of 3)")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
+    await waitForFrame(harness, "cursor=1 selected=two")
     rendered = frame(harness)
     expect(rendered).toContain("one")
     expect(rendered).toContain("three")
-    expect(rendered).toContain("cursor=1 selected=two")
     expect(rendered).not.toContain("matches for")
   })
 
@@ -272,26 +257,27 @@ describe("useListCursor", () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, "/")
+    await waitForFrame(harness, "Filter:")
     await press(harness, () => void harness.setup.mockInput.typeText("missing"))
-    expect(frame(harness)).toContain("cursor=0 selected=none")
+    await waitForFrame(harness, "cursor=0 selected=none")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
-    expect(frame(harness)).toContain("cursor=0 selected=one")
+    await pressEscape(harness)
+    await waitForFrame(harness, "cursor=0 selected=one")
   })
 
   it("applies text pasted in the same render tick as Enter", async () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, "/")
     await press(harness, () => {
       void harness.setup.mockInput.typeText("three")
       harness.setup.mockInput.pressEnter()
     })
 
+    await waitForFrame(harness, "matches for 'three' (1 of 3)")
     const rendered = frame(harness)
-    expect(rendered).toContain("matches for 'three' (1 of 3)")
     expect(rendered).toContain("cursor=0 selected=three")
     expect(rendered).not.toContain("one")
   })
@@ -301,39 +287,40 @@ describe("useListCursor", () => {
     const searchSource = rowsSource.replace('mode: "filter"', 'mode: "search"')
     await withExtensions(harness, { "rows.tsx": searchSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, "j")
+    await press(harness, "/")
     await press(harness, () => void harness.setup.mockInput.typeText("e"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
+    await waitForFrame(harness, "matches for 'e' (2 of 2)")
     let rendered = frame(harness)
     expect(rendered).toContain("one")
     expect(rendered).toContain("two")
     expect(rendered).toContain("three")
     expect(rendered).toContain("cursor=2 selected=three")
-    expect(rendered).toContain("matches for 'e' (2 of 2)")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("n"))
-    expect(frame(harness)).toContain("cursor=0 selected=one")
+    await press(harness, "n")
+    await waitForFrame(harness, "cursor=0 selected=one")
 
     // Move below the current match. Previous first returns to that match rather than
     // skipping straight to the match at the other end of the list.
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("N"))
-    rendered = frame(harness)
-    expect(rendered).toContain("cursor=0 selected=one")
-    expect(rendered).toContain("matches for 'e' (1 of 2)")
+    await press(harness, "j")
+    await press(harness, "N")
+    await waitForFrame(
+      harness,
+      (screen) => screen.includes("cursor=0 selected=one") && screen.includes("matches for 'e' (1 of 2)"),
+    )
 
-    await press(harness, () => harness.setup.mockInput.pressKey("N"))
-    expect(frame(harness)).toContain("cursor=2 selected=three")
+    await press(harness, "N")
+    await waitForFrame(harness, "cursor=2 selected=three")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, "/")
     await press(harness, () => {
       void harness.setup.mockInput.typeText("missing")
       harness.setup.mockInput.pressEnter()
     })
+    await waitForFrame(harness, "matches for 'missing' (0 of 0)")
     rendered = frame(harness)
-    expect(rendered).toContain("matches for 'missing' (0 of 0)")
     expect(rendered).toContain("cursor=2 selected=three")
     expect(rendered).toContain("one")
     expect(rendered).toContain("two")
@@ -346,16 +333,16 @@ describe("useListCursor", () => {
     const searchSource = rowsSource.replaceAll(threeRows, fiveRows).replace('mode: "filter"', 'mode: "search"')
     await withExtensions(harness, { "rows.tsx": searchSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("/"))
+    await press(harness, "/")
     await press(harness, () => void harness.setup.mockInput.typeText("o"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
-    expect(frame(harness)).toContain("cursor=1 selected=two")
+    await waitForFrame(harness, "cursor=1 selected=two")
 
     // Moving past `four` makes it the nearest search result. Previous returns there first;
     // retaining the original landing at `two` would incorrectly jump all the way back to it.
-    await press(harness, () => harness.setup.mockInput.pressKey("G"))
-    await press(harness, () => harness.setup.mockInput.pressKey("N"))
-    expect(frame(harness)).toContain("cursor=3 selected=four")
+    await press(harness, "G")
+    await press(harness, "N")
+    await waitForFrame(harness, "cursor=3 selected=four")
     expect(frame(harness)).toContain("matches for 'o' (3 of 3)")
   })
 })
@@ -374,8 +361,8 @@ describe("createRowSource", () => {
     expect(frame(harness)).not.toContain("three [")
     expect(warnSpy).toHaveBeenCalled()
 
-    await press(harness, () => harness.setup.mockInput.pressKey("R"))
-    expect(frame(harness)).toContain("two [late/warning]")
+    await press(harness, "R")
+    await waitForFrame(harness, "two [late/warning]")
     warnSpy.mockRestore()
   })
 
@@ -388,11 +375,11 @@ describe("createRowSource", () => {
 
     // Disposal is how a deactivating Extension's providers stop being called: its ctx scope
     // disposes exactly this handle.
-    await press(harness, () => harness.setup.mockInput.pressKey("F"))
-    expect(frame(harness)).toContain("two [first/warning]")
+    await press(harness, "F")
+    await waitForFrame(harness, "two [first/warning]")
 
     // And a refresh on the dead registration neither throws nor revives it.
-    await press(harness, () => harness.setup.mockInput.pressKey("R"))
+    await press(harness, "R")
     expect(frame(harness)).toContain("two [first/warning]")
     expect(harness.kernel.diagnostics.getSnapshot()).toEqual([])
     warnSpy.mockRestore()
@@ -402,12 +389,12 @@ describe("createRowSource", () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource, "decorations.tsx": decorationsSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("V"))
-    expect(frame(harness)).toContain("selection is one")
+    await press(harness, "V")
+    await waitForFrame(harness, "selection is one")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("V"))
-    expect(frame(harness)).toContain("selection is two")
+    await press(harness, "j")
+    await press(harness, "V")
+    await waitForFrame(harness, "selection is two")
   })
 })
 
@@ -416,16 +403,18 @@ describe("useKeyCapture", () => {
     const harness = await createHarness()
     await withExtensions(harness, { "editor.tsx": editorSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("e"))
+    await press(harness, "e")
+    await waitForFrame(harness, "editor editing saved=0")
     await press(harness, () => void harness.kernel.commands.execute("editor.ask"))
-    expect(frame(harness)).toContain("Really?")
+    await waitForFrame(harness, "Really?")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("s", { ctrl: true }))
+    await press(harness, "s", { ctrl: true })
     expect(frame(harness)).toContain("editor editing saved=0")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("n"))
-    await press(harness, () => harness.setup.mockInput.pressKey("s", { ctrl: true }))
-    expect(frame(harness)).toContain("editor idle saved=1")
+    await press(harness, "n")
+    await waitForFrame(harness, (screen) => !screen.includes("Really?"))
+    await press(harness, "s", { ctrl: true })
+    await waitForFrame(harness, "editor idle saved=1")
   })
 
   it("gives capture Commands a section of their own, listed after the Pane's ordinary keys", async () => {
@@ -433,10 +422,10 @@ describe("useKeyCapture", () => {
     await withExtensions(harness, { "editor.tsx": editorSource })
 
     await press(harness, () => void harness.kernel.openCheatSheet())
+    await waitForFrame(harness, "Keybindings — editor")
 
     const rendered = frame(harness)
     // Titled for the Pane it is about, because it is only about that Pane now.
-    expect(rendered).toContain("Keybindings — editor")
     expect(rendered).toContain("Submit message")
     expect(rendered).toContain("editor (capturing keys)")
     // Against an entry rather than a heading, so this pins the order the name claims: the
@@ -444,25 +433,26 @@ describe("useKeyCapture", () => {
     expect(rendered.indexOf("editor (capturing keys)")).toBeGreaterThan(rendered.indexOf("Begin editing"))
     expect(rendered.indexOf("Global")).toBeGreaterThan(rendered.indexOf("editor (capturing keys)"))
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
   })
 
   it("collapses the cheat sheet to the capturing Pane, because nothing else is live", async () => {
     const harness = await createHarness()
     await withExtensions(harness, { "editor.tsx": editorSource })
 
-    await press(harness, () => harness.setup.mockInput.pressKey("e"))
+    await press(harness, "e")
+    await waitForFrame(harness, "editor editing saved=0")
     await press(harness, () => void harness.kernel.openCheatSheet())
+    await waitForFrame(harness, "editor (capturing keys)")
 
     const rendered = frame(harness)
-    expect(rendered).toContain("editor (capturing keys)")
     expect(rendered).toContain("Submit message")
     // `q` quits and `e` begins an edit, and neither does anything right now: the sheet lists
     // what is live, not what exists.
     expect(rendered).not.toContain("Quit")
     expect(rendered).not.toContain("Begin editing")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
   })
 })
 
@@ -502,14 +492,14 @@ describe("PaneHandle", () => {
     expect(frame(harness)).toContain("list focused")
     expect(frame(harness)).toContain("front blurred")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("v"))
+    await press(harness, "v")
     // The stranded Pane is on screen — and unfocused, so the keys still belong to the Pane
     // the user was driving. That is the whole distinction `reveal` exists for.
-    expect(frame(harness)).toContain("behind blurred")
+    await waitForFrame(harness, "behind blurred")
     expect(frame(harness)).toContain("list focused")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("f"))
-    expect(frame(harness)).toContain("behind focused")
+    await press(harness, "f")
+    await waitForFrame(harness, "behind focused")
     expect(frame(harness)).toContain("list blurred")
   })
 })
@@ -548,18 +538,18 @@ describe("pane-jump keys", () => {
 
     // `2` is the second cell of the first column and `3` carries on into the next: reading
     // order, which is the only order the numbers could mean.
-    await press(harness, () => harness.setup.mockInput.pressKey("2"))
-    expect(frame(harness)).toContain("actions focused")
+    await press(harness, "2")
+    await waitForFrame(harness, "actions focused")
     expect(frame(harness)).toContain("files blurred")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("3"))
-    expect(frame(harness)).toContain("detail focused")
+    await press(harness, "3")
+    await waitForFrame(harness, "detail focused")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("1"))
-    expect(frame(harness)).toContain("files focused")
+    await press(harness, "1")
+    await waitForFrame(harness, "files focused")
 
     // A digit past the end of the Layout is a miss, not an error.
-    await press(harness, () => harness.setup.mockInput.pressKey("9"))
+    await press(harness, "9")
     expect(frame(harness)).toContain("files focused")
   })
 
@@ -571,16 +561,16 @@ describe("pane-jump keys", () => {
       `{ "layout": { "columns": [["jump", "jump.actions"], ["jump.detail"]] } }`,
     )
 
-    await press(harness, () => harness.setup.mockInput.pressKey("?"))
+    await press(harness, "?")
     // The titles the Panes registered, not "pane 2": this sheet is where a user finds out
     // which digit is which. All three at once, because the jump keys trail the rest of the
     // globals and a sheet that had to be scrolled would hide the answer.
+    await waitForFrame(harness, "Focus Files")
     const sheet = frame(harness)
-    expect(sheet).toContain("Focus Files")
     expect(sheet).toContain("Focus Actions")
     expect(sheet).toContain("Focus Diff")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
   })
 
   it("renumbers when the Layout changes under it", async () => {
@@ -589,7 +579,7 @@ describe("pane-jump keys", () => {
 
     // One cell in the Layout, so the two Panes it leaves out fall back to their placement
     // hints — and `1` names whatever ended up first, not whatever registered first.
-    await press(harness, () => harness.setup.mockInput.pressKey("1"))
+    await press(harness, "1")
     expect(frame(harness)).toContain("actions focused")
   })
 })
@@ -626,10 +616,8 @@ describe("ctx.copy", () => {
       ],
     })
     await withExtensions(harness, { "copier.tsx": copySource })
-    await press(harness, () => harness.setup.mockInput.pressKey("y"))
+    await press(harness, "y")
     await waitForFrame(harness, "copied")
-
-    expect(frame(harness)).toContain("copied")
   })
 
   it("reports the failure rather than resolving as if it had copied", async () => {
@@ -637,10 +625,8 @@ describe("ctx.copy", () => {
       clipboardWriters: [[process.execPath, ["-e", `console.error("no display"); process.exit(1)`]]],
     })
     await withExtensions(harness, { "copier.tsx": copySource })
-    await press(harness, () => harness.setup.mockInput.pressKey("y"))
+    await press(harness, "y")
     await waitForFrame(harness, "no display")
-
-    expect(frame(harness)).toContain("no display")
   })
 
   it("settles when the writer leaves something behind holding its pipes", async () => {
@@ -663,9 +649,7 @@ describe("ctx.copy", () => {
       ],
     })
     await withExtensions(harness, { "copier.tsx": copySource })
-    await press(harness, () => harness.setup.mockInput.pressKey("y"))
+    await press(harness, "y")
     await waitForFrame(harness, "copied")
-
-    expect(frame(harness)).toContain("copied")
   })
 })

@@ -9,8 +9,12 @@ import {
   frame,
   highlighted,
   installHarnessLifecycle,
+  press,
+  pressEscape,
+  refreshGit,
   renderApp,
-  settle,
+  waitFor,
+  waitForFrame,
   type Harness,
 } from "../test-harness"
 
@@ -201,46 +205,19 @@ async function seed(harness: Harness): Promise<void> {
   await git(harness, "commit", "--quiet", "--message", "first commit")
 }
 
-async function start(harness: Harness, config?: string): Promise<void> {
+/** The fingerprint poll is parked by default; checkouts made mid-test go through `refreshGit`. */
+async function start(harness: Harness, config = `{ "git": { "refreshIntervalMs": 60000 } }`): Promise<void> {
   await Promise.all([
     symlink(ghWorkflowsExtension, join(harness.bundled, "gh-workflows")),
     writeFile(join(harness.repo, "files.tsx"), filesSource),
-    ...(config === undefined ? [] : [writeFile(harness.configFiles.repo, config)]),
+    writeFile(harness.configFiles.repo, config),
   ])
   await renderApp(harness)
 }
 
-/**
- * A key press, plus enough real time for the terminal parser to disambiguate it — a lone
- * escape byte is only a key once the parser has waited for the sequence it could start.
- */
-async function press(harness: Harness, action: () => void): Promise<void> {
-  await act(async () => {
-    action()
-    await Bun.sleep(60)
-  })
-  await settle(harness)
-}
-
-/**
- * A refresh spawns `gh` in another process, so what follows is worth asserting only once
- * that has landed, the pane has repainted, and React has committed. Polled rather than
- * slept for, and the failure carries the frame.
- */
-async function settleUntil(harness: Harness, what: string, holds: () => boolean | Promise<boolean>): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    await act(async () => {
-      await Bun.sleep(10)
-    })
-    await settle(harness)
-    if (await holds()) return
-  }
-  throw new Error(`Timed out waiting for ${what}. Last frame:\n${frame(harness)}`)
-}
-
 /** The frame, once it shows `text`. Fails the test if it never does. */
 async function frameShowing(harness: Harness, text: string): Promise<string> {
-  await settleUntil(harness, `the frame to show "${text}"`, () => frame(harness).includes(text))
+  await waitForFrame(harness, text)
   return frame(harness)
 }
 
@@ -277,7 +254,7 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     const harness = await workflowsHarness()
     const gh = await installGh(harness)
     await gh.setRuns("main", [run(1, "first run", "completed", "success")])
-    await start(harness, `{ "extensions": { "gh-workflows": { "limit": 3 } } }`)
+    await start(harness, `{ "extensions": { "gh-workflows": { "limit": 3 } }, "git": { "refreshIntervalMs": 60000 } }`)
 
     await frameShowing(harness, "verify — first run")
     expect((await gh.calls())[0]).toContain("--limit 3")
@@ -288,11 +265,11 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     const gh = await installGh(harness)
     await gh.setRuns("main", [run(1, "on main", "completed", "success")])
     await gh.setRuns("topic", [run(2, "on topic", "completed", "success")])
-    // Fast enough for the poll to notice an outside checkout within the test's patience.
-    await start(harness, `{ "git": { "refreshIntervalMs": 250 } }`)
+    await start(harness)
 
     await frameShowing(harness, "verify — on main")
     await git(harness, "checkout", "--quiet", "-b", "topic")
+    await refreshGit(harness)
 
     await frameShowing(harness, "verify — on topic")
     expect(frame(harness)).not.toContain("on main")
@@ -307,14 +284,18 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await frameShowing(harness, "verify — stale run")
     await gh.setRuns("main", [run(2, "fresh run", "completed", "success")])
 
-    await press(harness, () => harness.setup.mockInput.pressKey("p", { ctrl: true }))
+    await press(harness, "p", { ctrl: true })
+    await waitForFrame(harness, "Filter commands")
     await press(harness, () => void harness.setup.mockInput.typeText("GitHub"))
+    await waitForFrame(harness, "GitHub Actions: refresh runs")
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
     await frameShowing(harness, "verify — fresh run")
     // The highlight only paints on the focused Pane, so a lit row is the focus assertion.
-    await settleUntil(harness, "the fresh run's row to be lit", () =>
-      highlighted(harness).some((row) => row.includes("fresh run")),
+    await waitFor(
+      harness,
+      () => highlighted(harness).some((row) => row.includes("fresh run")),
+      "the fresh run's row to be lit",
     )
   })
 
@@ -328,14 +309,14 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await start(harness)
     await frameShowing(harness, "verify — second run")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("2"))
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("o"))
+    await press(harness, "2")
+    await press(harness, "j")
+    await press(harness, "o")
 
-    await settleUntil(
+    await waitFor(
       harness,
-      "the run's URL to reach the opener",
       async () => (await Bun.file(gh.openLog).exists()) && (await gh.opened()) === "https://example.invalid/2",
+      "the run's URL to reach the opener",
     )
   })
 
@@ -365,7 +346,7 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await start(harness)
     await frameShowing(harness, "verify — broken run")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    await press(harness, "2")
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
     // The failed job's steps start visible, the green job's stay folded.
@@ -379,7 +360,7 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await press(harness, () => harness.setup.mockInput.pressEnter())
     await frameShowing(harness, "✓ checkout")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
     const back = await frameShowing(harness, "verify — good run")
     expect(back).not.toContain("run tests")
   })
@@ -392,19 +373,26 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await start(harness)
     await frameShowing(harness, "verify — broken run")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    await press(harness, "2")
     await press(harness, () => harness.setup.mockInput.pressEnter())
     await frameShowing(harness, "✗ run tests")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("r"))
+    await press(harness, "j")
+    await press(harness, "r")
 
-    await settleUntil(harness, "the job rerun to reach gh", async () =>
-      (await gh.calls()).some((line) => line.startsWith("run rerun --job 202")),
+    // The mutation is followed by a fresh `run view`, not a stale frame — and the refetch is
+    // the rerun's last effect, so it is what the wait must cover.
+    await waitFor(
+      harness,
+      async () => {
+        const calls = await gh.calls()
+        return (
+          calls.some((line) => line.startsWith("run rerun --job 202")) &&
+          calls.filter((line) => line.startsWith("run view 2")).length >= 2
+        )
+      },
+      "the job rerun to reach gh and be followed by a fresh run view",
     )
-    // The mutation is followed by a fresh `run view`, not a stale frame.
-    const views = (await gh.calls()).filter((line) => line.startsWith("run view 2"))
-    expect(views.length).toBeGreaterThanOrEqual(2)
   })
 
   it("reruns only the failed jobs of a failed run, everything for a green one", async () => {
@@ -414,16 +402,20 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await start(harness)
     await frameShowing(harness, "verify — broken run")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("2"))
-    await press(harness, () => harness.setup.mockInput.pressKey("r"))
-    await settleUntil(harness, "the failed-only rerun to reach gh", async () =>
-      (await gh.calls()).some((line) => line === "run rerun 2 --failed"),
+    await press(harness, "2")
+    await press(harness, "r")
+    await waitFor(
+      harness,
+      async () => (await gh.calls()).some((line) => line === "run rerun 2 --failed"),
+      "the failed-only rerun to reach gh",
     )
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("r"))
-    await settleUntil(harness, "the full rerun to reach gh", async () =>
-      (await gh.calls()).some((line) => line === "run rerun 1"),
+    await press(harness, "j")
+    await press(harness, "r")
+    await waitFor(
+      harness,
+      async () => (await gh.calls()).some((line) => line === "run rerun 1"),
+      "the full rerun to reach gh",
     )
   })
 
@@ -434,14 +426,16 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await start(harness)
     await frameShowing(harness, "verify — slow run")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("2"))
-    await press(harness, () => harness.setup.mockInput.pressKey("x"))
+    await press(harness, "2")
+    await press(harness, "x")
     await frameShowing(harness, "Cancel verify?")
     expect((await gh.calls()).some((line) => line.startsWith("run cancel"))).toBe(false)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("y"))
-    await settleUntil(harness, "the cancel to reach gh", async () =>
-      (await gh.calls()).some((line) => line === "run cancel 3"),
+    await press(harness, "y")
+    await waitFor(
+      harness,
+      async () => (await gh.calls()).some((line) => line === "run cancel 3"),
+      "the cancel to reach gh",
     )
   })
 
@@ -453,8 +447,8 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await start(harness)
     await frameShowing(harness, "verify — on main")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("2"))
-    await press(harness, () => harness.setup.mockInput.pressKey("a"))
+    await press(harness, "2")
+    await press(harness, "a")
 
     // The all-branches row names its branch; the branch-scoped row never did.
     const all = await frameShowing(harness, "verify — on other")
@@ -462,7 +456,7 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     const listCalls = (await gh.calls()).filter((line) => line.startsWith("run list"))
     expect(listCalls.some((line) => !line.includes("--branch"))).toBe(true)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("a"))
+    await press(harness, "a")
     await frameShowing(harness, "verify — on main")
   })
 
@@ -475,19 +469,19 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await start(harness)
     await frameShowing(harness, "verify — broken run")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("2"))
+    await press(harness, "2")
     await press(harness, () => harness.setup.mockInput.pressEnter())
     await frameShowing(harness, "✗ run tests")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("l"))
+    await press(harness, "j")
+    await press(harness, "l")
 
     // The gh prefix columns are stripped; the words are what the tail shows.
     const log = await frameShowing(harness, "Expected 3, got 4")
     expect(log).toContain("Error: assertion failed")
     expect((await gh.calls()).some((line) => line === "run view --job 202 --log-failed")).toBe(true)
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
     await frameShowing(harness, "✓ build")
   })
 
@@ -495,13 +489,16 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     const harness = await workflowsHarness()
     const gh = await installGh(harness)
     await gh.setRuns("main", [run(3, "slow run", "in_progress", "")])
-    await start(harness, `{ "extensions": { "gh-workflows": { "pollIntervalMs": 250 } } }`)
+    await start(
+      harness,
+      `{ "extensions": { "gh-workflows": { "pollIntervalMs": 250 } }, "git": { "refreshIntervalMs": 60000 } }`,
+    )
     await frameShowing(harness, "verify — slow run")
 
-    await settleUntil(
+    await waitFor(
       harness,
-      "the pane to poll gh repeatedly",
       async () => (await gh.calls()).filter((line) => line.startsWith("run list")).length >= 3,
+      "the pane to poll gh repeatedly",
     )
   })
 })

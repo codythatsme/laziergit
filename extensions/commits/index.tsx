@@ -26,6 +26,13 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`
 }
 
+function validateRef(value: string): string | null {
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return "Name the branch"
+  if (/\s/.test(trimmed)) return "A ref name cannot contain spaces"
+  return null
+}
+
 type ResetMode = "soft" | "mixed" | "hard"
 type RewriteAction = "squash" | "drop" | "edit"
 
@@ -84,6 +91,20 @@ export default defineExtension({
       try {
         await action()
         ctx.popups.notify(done, "success")
+      } catch (error) {
+        report(error)
+      }
+    }
+
+    async function createBranchAt(commit: Commit): Promise<void> {
+      const name = await ctx.popups.prompt({
+        title: `New branch at ${commit.shortOid}`,
+        placeholder: "feature/…",
+        validate: validateRef,
+      })
+      if (name === undefined) return
+      try {
+        await ctx.git.createBranch(name.trim(), { at: commit.oid, checkout: true })
       } catch (error) {
         report(error)
       }
@@ -519,6 +540,14 @@ export default defineExtension({
         if (!focused || selected === undefined) return
         diff.show({ kind: "commit", ref: selected.oid, path: null })
       }, [focused, selected])
+
+      useCommand({
+        id: "commits.create-branch",
+        title: "Create branch here",
+        hint: "new branch",
+        keys: "n",
+        run: () => (selected === undefined ? undefined : createBranchAt(selected)),
+      })
 
       useCommand({
         id: "commits.menu",

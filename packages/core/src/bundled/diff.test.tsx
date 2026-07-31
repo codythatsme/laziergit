@@ -1,11 +1,18 @@
 import { describe, expect, it, spyOn } from "bun:test"
 import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { act } from "react"
 
 import { fetchFor } from "../../../../extensions/diff/fetch"
 import { gitIsolationEnv } from "../git/test-repo"
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  installHarnessLifecycle,
+  renderApp,
+  runCommand,
+  waitForFrame,
+  type Harness,
+} from "../test-harness"
 
 installHarnessLifecycle()
 
@@ -135,7 +142,7 @@ async function createDiffHarness(): Promise<DiffHarness> {
     harness,
     async show(command) {
       await renderApp(harness)
-      await execute(harness, command)
+      await runCommand(harness, command)
     },
   }
 }
@@ -150,30 +157,6 @@ function installSlowDiffGit(harness: Harness, milliseconds: number): void {
     if (argv.includes("--no-ext-diff")) await Bun.sleep(milliseconds)
     return raw(argv, options)
   })
-}
-
-async function execute(harness: Harness, command: string): Promise<void> {
-  await act(async () => {
-    void harness.kernel.commands.execute(command)
-  })
-  await settle(harness)
-}
-
-/**
- * Renders until `predicate` holds, and hands back the frame that matched, so the rest of a test
- * reads that same frame rather than racing the next one. Giving up returns the last frame
- * quietly, leaving the test's own `expect` to report the failure.
- */
-async function waitForFrame(harness: Harness, predicate: (screen: string) => boolean): Promise<string> {
-  const deadline = Date.now() + 3_000
-  for (;;) {
-    await settle(harness)
-    const screen = frame(harness)
-    if (predicate(screen) || Date.now() > deadline) return screen
-    await act(async () => {
-      await Bun.sleep(20)
-    })
-  }
 }
 
 function argvFor(
@@ -218,9 +201,9 @@ describe("the git the diff pane asks for", () => {
     await writeFile(join(diff.harness.directory, "glob1.txt"), "decoy changed\n")
     await diff.show("driver.glob-file")
 
-    const screen = await waitForFrame(diff.harness, (text) => text.includes("bracket changed"))
-    expect(screen).not.toContain("decoy")
-  })
+    await waitForFrame(diff.harness, "bracket changed")
+    expect(frame(diff.harness)).not.toContain("decoy")
+  }, 30_000)
 
   it("diffs an untracked file against /dev/null, outside the index entirely", () => {
     // Plain `git diff` prints nothing for an untracked path. `--no-index` takes filesystem
@@ -311,12 +294,13 @@ describe("splitting git's patch into one section per file", () => {
 
     // `<diff>` renders `patches[0]` and nothing else, so the second and third files are on
     // screen only because the patch was split.
-    const screen = await waitForFrame(diff.harness, (text) => text.includes("beta.txt"))
+    await waitForFrame(diff.harness, "beta.txt")
+    const screen = frame(diff.harness)
     expect(screen).toContain("alpha.txt")
     // A deletion writes `+++ /dev/null`, so this one is named only by the fallback to the
     // `--- a/` side — without it its row would read "(unnamed)".
     expect(screen).toContain("seed.txt")
-  })
+  }, 30_000)
 
   it("renders a merge commit, which git shows nothing for unless told which parent to use", async () => {
     const diff = await createDiffHarness()
@@ -331,10 +315,11 @@ describe("splitting git's patch into one section per file", () => {
     await diff.show("driver.head-commit")
 
     // Without `--first-parent` git suppresses a merge's diff outright.
-    const screen = await waitForFrame(diff.harness, (text) => text.includes("+ merged"))
+    await waitForFrame(diff.harness, "+ merged")
+    const screen = frame(diff.harness)
     expect(screen).toContain("side.txt")
     expect(screen).not.toContain("no changes")
-  })
+  }, 30_000)
 
   it("shows an untracked file's contents rather than reading git's exit code as failure", async () => {
     const diff = await createDiffHarness()
@@ -343,10 +328,11 @@ describe("splitting git's patch into one section per file", () => {
     await diff.show("driver.untracked")
 
     // `--no-index` exits 1 to mean "the two files differ", the ordinary answer here.
-    const screen = await waitForFrame(diff.harness, (text) => text.includes("+ brand"))
+    await waitForFrame(diff.harness, "+ brand")
+    const screen = frame(diff.harness)
     expect(screen).toContain("+ new")
     expect(screen).not.toContain("no changes")
-  })
+  }, 30_000)
 })
 
 describe("moving from one target to the next", () => {
@@ -357,16 +343,17 @@ describe("moving from one target to the next", () => {
     installSlowDiffGit(diff.harness, 400)
     await renderApp(diff.harness)
 
-    await execute(diff.harness, "driver.working-file")
-    expect(await waitForFrame(diff.harness, (text) => text.includes("+ TWO"))).toContain("+ TWO")
+    await runCommand(diff.harness, "driver.working-file")
+    await waitForFrame(diff.harness, "+ TWO")
 
-    await execute(diff.harness, "driver.untracked")
+    await runCommand(diff.harness, "driver.untracked")
 
     // The Pane has been pointed at a target git has not answered for yet.
     const during = frame(diff.harness)
     expect(during).toContain("+ TWO")
     expect(during).not.toContain("loading")
 
-    expect(await waitForFrame(diff.harness, (text) => text.includes("+ brand"))).not.toContain("+ TWO")
-  })
+    await waitForFrame(diff.harness, "+ brand")
+    expect(frame(diff.harness)).not.toContain("+ TWO")
+  }, 30_000)
 })

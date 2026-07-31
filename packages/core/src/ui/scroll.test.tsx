@@ -1,9 +1,16 @@
 import { expect, it } from "bun:test"
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { act } from "react"
 
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  installHarnessLifecycle,
+  press,
+  renderApp,
+  waitForFrame,
+  type Harness,
+} from "../test-harness"
 
 installHarnessLifecycle()
 
@@ -61,15 +68,6 @@ const patchExtension = `
   })
 `
 
-/** A key press, plus enough real time for the terminal parser to disambiguate it. */
-async function press(harness: Harness, key: string): Promise<void> {
-  await act(async () => {
-    harness.setup.mockInput.pressKey(key)
-    await Bun.sleep(60)
-  })
-  await settle(harness)
-}
-
 async function start(harness: Harness, name: string, source: string): Promise<void> {
   await writeFile(join(harness.repo, `${name}.tsx`), source)
   await renderApp(harness)
@@ -79,18 +77,18 @@ it("scrolls a diff taller than its pane, which the diff renderable cannot do on 
   const harness = await createHarness({ width: 40, height: 16 })
   await start(harness, "patch", patchExtension)
 
-  expect(frame(harness)).toContain("patch 1 ")
+  await waitForFrame(harness, "patch 1 ")
   expect(frame(harness)).not.toContain(`patch ${rowCount} `)
   expect(frame(harness)).toContain("PATCH HEADER")
 
   await press(harness, "e")
-  expect(frame(harness)).toContain(`patch ${rowCount} `)
+  await waitForFrame(harness, `patch ${rowCount} `)
   expect(frame(harness)).toContain("PATCH HEADER")
 
   await press(harness, "s")
-  expect(frame(harness)).toContain("patch 1 ")
+  await waitForFrame(harness, "patch 1 ")
 
   // A page is a viewport measurement, which is the one thing an Extension cannot compute.
   await press(harness, "d")
-  expect(frame(harness)).not.toContain("patch 1 ")
-})
+  await waitForFrame(harness, (screen) => !screen.includes("patch 1 "))
+}, 30_000)

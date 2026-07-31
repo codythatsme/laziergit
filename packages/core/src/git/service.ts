@@ -1,4 +1,4 @@
-import { Effect, Queue, Stream } from "effect"
+import { Effect, Queue, Schedule, Stream } from "effect"
 import {
   GitError,
   isUntracked,
@@ -236,7 +236,12 @@ export class GitService {
     const repository = this.#repository
     if (!repository || this.#stopped) return
     try {
-      const read = await this.#run(this.#readState(repository))
+      // Retried across real time, because the error a fresh read can fix — a lost pipe under
+      // load — arrives in bursts that outlive an immediate re-read, and a failed pass leaves
+      // every caller staring at a stale snapshot until the next poll.
+      const read = await this.#run(
+        Effect.retry(this.#readState(repository), { schedule: Schedule.spaced("50 millis"), times: 3 }),
+      )
       if (this.#stopped) return
       // From the same pass that produced the snapshot, so the next poll tick is quiet unless
       // the repository really moved.
@@ -267,6 +272,12 @@ export class GitService {
     )
 
     return Effect.flatMap(reads, (outputs) => {
+      // `status --branch` always answers with headers, even on an unborn HEAD, so zero bytes
+      // is a read whose pipe was lost, not a repository state. Publishing it would demote a
+      // live repository to `noRepository` until the next poll corrects it.
+      if (outputs.status.stdout.length === 0) {
+        return Effect.fail(new GitError([...statusArgs], outputs.status))
+      }
       const status = parseStatus(outputs.status.stdout)
       const headBranch = parseHeadRef(outputs.headRef.stdout, outputs.headRef.exitCode)
       const branches = parseBranches(outputs.branches.stdout, headBranch)
