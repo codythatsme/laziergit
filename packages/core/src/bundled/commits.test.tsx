@@ -184,6 +184,41 @@ describe("searching commits", () => {
   })
 })
 
+describe("creating a branch from a commit", () => {
+  it("creates and checks out a branch at the highlighted commit with n", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await commit(repo, "third commit")
+    const selected = await repo.oid("HEAD~1")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await press(repo.harness, "j")
+    await press(repo.harness, "n")
+
+    expect(frame(repo.harness)).toContain(`New branch at ${await repo.shortOid("HEAD~1")}`)
+
+    await act(async () => {
+      await repo.harness.setup.mockInput.typeText("feature/from-second")
+    })
+    await settle(repo.harness)
+    await act(async () => {
+      repo.harness.setup.mockInput.pressEnter()
+      await Bun.sleep(60)
+    })
+    await settle(repo.harness)
+
+    await waitUntil(
+      repo.harness,
+      "the new branch to be checked out at the highlighted commit",
+      async () => (await repo.run("branch", "--show-current")).trim() === "feature/from-second",
+    )
+    expect(await repo.oid("HEAD")).toBe(selected)
+    expect(await repo.oid("feature/from-second")).toBe(selected)
+  })
+})
+
 describe("the commits action menu", () => {
   it("checks a commit out after saying that HEAD will be detached", async () => {
     const repo = await openRepo()
