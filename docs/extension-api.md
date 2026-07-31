@@ -905,6 +905,9 @@ tagged with the extension name, and routed to the log file / debug pane.
     /** Delete a local branch (`-d`, or `-D` with `force`). */
     deleteBranch(name: string, opts?: { force?: boolean }): Promise<void>;
 
+    /** Delete a branch from a remote repository. */
+    deleteRemoteBranch(remote: string, name: string): Promise<void>;
+
     /**
      * Stage the given paths, or everything (`"all"`). Staging is whole-file in v1; for
      * hunks and lines, build a patch and pipe it (§5.11):

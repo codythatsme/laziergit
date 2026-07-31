@@ -124,6 +124,7 @@ function has(args: readonly string[], ...flags: readonly string[]): boolean {
 export function labelFor(args: readonly string[], subcommand: string): string {
   switch (subcommand) {
     case "push":
+      if (has(args, "--delete")) return "deleting remote branch"
       return has(args, "--force", "--force-with-lease") ? "force-pushing" : "pushing"
     case "pull":
       return has(args, "--rebase") ? "pulling (rebase)" : "pulling"

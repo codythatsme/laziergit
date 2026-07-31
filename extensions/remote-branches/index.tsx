@@ -87,6 +87,22 @@ export default defineExtension({
       }
     }
 
+    async function deleteRemoteBranch(branch: RemoteBranch): Promise<void> {
+      const ref = remoteRef(branch)
+      const accepted = await ctx.popups.confirm({
+        title: `Delete ${ref}?`,
+        message: `Deletes ${branch.name} from ${branch.remote}. Any local branch is kept.`,
+        confirmLabel: "Delete remote branch",
+        danger: true,
+      })
+      if (!accepted) return
+      try {
+        await ctx.git.deleteRemoteBranch(branch.remote, branch.name)
+      } catch (error) {
+        fail(error)
+      }
+    }
+
     async function fetchRemote(remote: string): Promise<void> {
       try {
         await ctx.git.fetch({ remote })
@@ -381,7 +397,8 @@ export default defineExtension({
           items: [
             { key: "c", label: "Create or check out tracking branch", run: checkoutRemoteBranch },
             { key: "n", label: "Create tracking branch with another name…", run: createTrackingBranch },
-            { key: "d", label: "Check out as detached HEAD", run: checkoutRemoteDetached },
+            { key: "d", label: "Delete from remote…", run: deleteRemoteBranch },
+            { key: "h", label: "Check out as detached HEAD", run: checkoutRemoteDetached },
             { key: "u", label: "Set as upstream of current branch…", run: setRemoteAsUpstream },
             { key: "f", label: "Fetch remote", run: (branch) => fetchRemote(branch.remote) },
           ],

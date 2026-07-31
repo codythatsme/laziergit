@@ -259,11 +259,29 @@ it("supports the single-remote branch workflow", async () => {
   await press(harness, () => harness.setup.mockInput.pressEscape())
   expect(frame(harness)).toContain("new-remote")
 
+  await filterCurrentList(harness, "new-remote")
+  await press(harness, () => harness.setup.mockInput.pressKey("x"))
+  expect(frame(harness)).toContain("Delete from remote")
+  await press(harness, () => harness.setup.mockInput.pressKey("d"))
+  expect(frame(harness)).toContain("Delete origin/new-remote?")
+  expect(frame(harness)).toContain("Any local branch is kept")
+  await press(harness, () => harness.setup.mockInput.pressKey("y"))
+  await waitUntil(
+    harness,
+    async () =>
+      (await git(harness, "ls-remote", "--heads", "origin", "refs/heads/new-remote")) === "" &&
+      !harness.kernel.git
+        .getSnapshot()
+        .remoteBranches.some((branch) => branch.remote === "origin" && branch.name === "new-remote"),
+    "the remote branch to be deleted",
+  )
+
+  await press(harness, () => harness.setup.mockInput.pressEscape())
   await filterCurrentList(harness, "remote-only")
   await press(harness, () => harness.setup.mockInput.pressKey("x"))
   expect(frame(harness)).toContain("Remote branch: origin/remote-only")
   expect(frame(harness)).toContain("Check out as detached HEAD")
-  await press(harness, () => harness.setup.mockInput.pressKey("d"))
+  await press(harness, () => harness.setup.mockInput.pressKey("h"))
   await waitUntil(
     harness,
     async () => (await git(harness, "rev-parse", "--abbrev-ref", "HEAD")) === "HEAD",

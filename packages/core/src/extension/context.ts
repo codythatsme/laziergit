@@ -385,6 +385,7 @@ export function createExtensionContext(
     checkout: (ref) => supervised(hosts.git.checkout(ref)),
     createBranch: (name, options) => supervised(hosts.git.createBranch(name, options)),
     deleteBranch: (name, options) => supervised(hosts.git.deleteBranch(name, options)),
+    deleteRemoteBranch: (remote, name) => supervised(hosts.git.deleteRemoteBranch(remote, name)),
     stage: (paths) => supervised(hosts.git.stage(paths)),
     unstage: (paths) => supervised(hosts.git.unstage(paths)),
     discard: (paths) => supervised(hosts.git.discard(paths)),

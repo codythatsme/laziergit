@@ -478,6 +478,12 @@ export class GitService {
     return this.#write(["branch", opts.force === true ? "-D" : "-d", "--", name])
   }
 
+  deleteRemoteBranch(remote: string, name: string): Promise<void> {
+    // Both names come from refs/config rather than user-authored argv. `--` keeps a legal
+    // leading dash in either one from becoming another push option.
+    return this.#write(["push", "--delete", "--", remote, name])
+  }
+
   stage(paths: readonly string[] | "all"): Promise<void> {
     // `--` stops a file named `-f` becoming a flag; it does *not* stop git reading a path as a
     // glob, which is what `literalPathspec` is for.
