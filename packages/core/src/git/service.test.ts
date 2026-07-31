@@ -499,6 +499,23 @@ it("pushes a named ref to its own remote rather than to a remote of that name", 
   })
 })
 
+it("deletes a remote branch and removes its remote-tracking ref from the store", async () => {
+  const repo = await createSeededRepo()
+  await addOrigin(repo)
+  await repo.git("checkout", "--quiet", "-b", "feature")
+  await repo.git("push", "--quiet", "origin", "feature")
+  await repo.git("checkout", "--quiet", "main")
+  const service = await open(repo.path)
+  expect(state(service).remoteBranches.map((branch) => `${branch.remote}/${branch.name}`)).toContain("origin/feature")
+
+  await service.deleteRemoteBranch("origin", "feature")
+
+  expect(state(service).remoteBranches.map((branch) => `${branch.remote}/${branch.name}`)).not.toContain(
+    "origin/feature",
+  )
+  expect(await repo.git("ls-remote", "--heads", "origin", "refs/heads/feature")).toBe("")
+})
+
 // ---- raw ----------------------------------------------------------------------------
 
 it("refreshes after a mutating raw invocation and not after a read", async () => {

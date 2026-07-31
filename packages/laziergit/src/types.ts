@@ -375,6 +375,7 @@ export interface Git {
   checkout(ref: string): Promise<void>
   createBranch(name: string, opts?: { at?: string; checkout?: boolean }): Promise<void>
   deleteBranch(name: string, opts?: { force?: boolean }): Promise<void>
+  deleteRemoteBranch(remote: string, name: string): Promise<void>
   stage(paths: readonly string[] | "all"): Promise<void>
   unstage(paths: readonly string[] | "all"): Promise<void>
   discard(paths: readonly string[]): Promise<void>

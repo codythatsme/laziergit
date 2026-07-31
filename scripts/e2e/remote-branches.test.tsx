@@ -252,11 +252,27 @@ it("supports the single-remote branch workflow", async () => {
   await pressEscape(harness)
   await waitForFrame(harness, "new-remote")
 
+  await filterCurrentList(harness, "new-remote")
+  await press(harness, "d")
+  await waitForFrame(harness, "Delete origin/new-remote?")
+  expect(frame(harness)).toContain("Any local branch is kept")
+  await press(harness, "y")
+  await waitFor(
+    harness,
+    () =>
+      !harness.kernel.git
+        .getSnapshot()
+        .remoteBranches.some((branch) => branch.remote === "origin" && branch.name === "new-remote"),
+    "the remote branch to be deleted",
+  )
+  expect(await git(harness, "ls-remote", "--heads", "origin", "refs/heads/new-remote")).toBe("")
+
+  await pressEscape(harness)
   await filterCurrentList(harness, "remote-only")
   await press(harness, "x")
   await waitForFrame(harness, "Remote branch: origin/remote-only")
   expect(frame(harness)).toContain("Check out as detached HEAD")
-  await press(harness, "d")
+  await press(harness, "h")
   await waitFor(
     harness,
     () => harness.kernel.git.getSnapshot().head.kind === "detached",
