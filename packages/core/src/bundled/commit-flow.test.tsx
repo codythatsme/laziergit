@@ -5,7 +5,18 @@ import { act } from "react"
 
 import commitFlowDefinition from "../../../../extensions/commit-flow"
 import { gitIsolationEnv } from "../git/test-repo"
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  installHarnessLifecycle,
+  press,
+  pressEscape,
+  refreshGit,
+  renderApp,
+  settle,
+  waitForFrame,
+  type Harness,
+} from "../test-harness"
 
 installHarnessLifecycle()
 
@@ -153,49 +164,10 @@ async function startShippedFiles(harness: Harness): Promise<void> {
   await renderApp(harness)
 }
 
-/**
- * A key press, plus enough real time for the terminal parser to disambiguate it — a lone
- * escape byte is only a key once the parser has waited for the sequence it could start.
- */
-async function press(harness: Harness, action: () => void): Promise<void> {
-  await act(async () => {
-    action()
-    await Bun.sleep(60)
-  })
-  await settle(harness)
-}
-
-/**
- * Renders until the screen catches up. A keypress that starts a `git commit` returns long
- * before git does, so anything downstream of a write is waited for rather than asserted on
- * the next frame.
- */
-async function waitFor(harness: Harness, expected: string, timeoutMs = 10_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  let last = ""
-  while (Date.now() < deadline) {
-    await settle(harness)
-    last = frame(harness)
-    if (last.includes(expected)) return
-    await act(async () => {
-      await Bun.sleep(30)
-    })
-  }
-  throw new Error(`Timed out waiting for ${JSON.stringify(expected)} on screen. Last frame:\n${last}`)
-}
-
-/** Republishes the store now, rather than waiting out a poll interval these tests turned off. */
-async function refresh(harness: Harness): Promise<void> {
-  await act(async () => {
-    await harness.kernel.git.refresh()
-  })
-  await settle(harness)
-}
-
 async function stageFile(harness: Harness, path: string): Promise<void> {
   await writeFile(join(harness.directory, path), `${path}\n`)
   await git(harness.directory, "add", "--", path)
-  await refresh(harness)
+  await refreshGit(harness)
 }
 
 /**
@@ -263,7 +235,7 @@ describe("commit-flow popup", () => {
     await startShippedFiles(harness)
     await focusFiles(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, "c")
 
     expect(frame(harness)).toContain(popupMarker)
   }, 30_000)
@@ -275,12 +247,12 @@ describe("commit-flow popup", () => {
     await stageFile(harness, "feature.txt")
     await focusFiles(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, "c")
     await press(harness, () => void harness.setup.mockInput.typeText("quick fix"))
 
     // Like lazygit, Enter accepts the one-line summary; Ctrl+S works from either field.
     await press(harness, () => harness.setup.mockInput.pressEnter())
-    await waitFor(harness, "Committed")
+    await waitForFrame(harness, "Committed")
     expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("quick fix\n")
   }, 30_000)
 
@@ -291,14 +263,14 @@ describe("commit-flow popup", () => {
     await stageFile(harness, "feature.txt")
     await focusFiles(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, "c")
     await press(harness, () => void harness.setup.mockInput.typeText("explain the change"))
     await press(harness, () => harness.setup.mockInput.pressTab())
     await press(harness, () => void harness.setup.mockInput.typeText("The context matters."))
     await press(harness, () => harness.setup.mockInput.pressEnter())
     await press(harness, () => void harness.setup.mockInput.typeText("Keep both body lines."))
     await press(harness, submit(harness))
-    await waitFor(harness, "Committed")
+    await waitForFrame(harness, "Committed")
 
     expect((await git(harness.directory, "log", "-1", "--format=%B")).trimEnd()).toBe(
       "explain the change\n\nThe context matters.\nKeep both body lines.",
@@ -312,24 +284,24 @@ describe("commit-flow popup", () => {
     await stageFile(harness, "feature.txt")
     await focusFiles(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, "c")
     await press(harness, () => void harness.setup.mockInput.typeText("half a thought"))
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
 
     // Escape is the most reflexive key in a TUI: it closes the editor and costs nothing.
-    await waitFor(harness, "Draft kept")
+    await waitForFrame(harness, "Draft kept")
     expect(frame(harness)).toContain("draft kept: half a thought")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, "c")
     expect(frame(harness)).toContain("half a thought")
 
     // Committing consumes the draft, so the next flow starts blank rather than resurrecting it.
     await press(harness, submit(harness))
-    await waitFor(harness, "Committed")
+    await waitForFrame(harness, "Committed")
     expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("half a thought\n")
 
     await stageFile(harness, "another.txt")
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, "c")
     expect(frame(harness)).not.toContain("half a thought")
   }, 30_000)
 
@@ -340,16 +312,16 @@ describe("commit-flow popup", () => {
     await stageFile(harness, "feature.txt")
     await focusFiles(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("r"))
-    await waitFor(harness, "belongs to its commit")
+    await press(harness, "r")
+    await waitForFrame(harness, "belongs to its commit")
     await press(harness, () => void harness.setup.mockInput.typeText(" edited"))
-    await press(harness, () => harness.setup.mockInput.pressEscape())
-    await waitFor(harness, "reword closed #1")
+    await pressEscape(harness)
+    await waitForFrame(harness, "reword closed #1")
 
     // The edited text is another commit's message; resuming it on the next plain commit
     // would write it onto unrelated work.
     expect(frame(harness)).not.toContain("draft kept")
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, "c")
     expect(frame(harness)).not.toContain("belongs to its commit")
   }, 30_000)
 
@@ -370,13 +342,13 @@ describe("commit-flow popup", () => {
 
     // The right-hand cell stays on the diff while the modal takes only keyboard focus.
     expect(frame(harness)).toContain("the diff pane")
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, "c")
     expect(frame(harness)).toContain("the diff pane")
     expect(frame(harness)).toContain(popupMarker)
 
     await press(harness, () => void harness.setup.mockInput.typeText("hand it back"))
     await press(harness, submit(harness))
-    await waitFor(harness, "Committed")
+    await waitForFrame(harness, "Committed")
 
     expect(frame(harness)).toContain("the diff pane")
     expect(frame(harness)).not.toContain(popupMarker)
@@ -388,14 +360,14 @@ describe("commit-flow popup", () => {
     await seed(harness)
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("b"))
+    await press(harness, "b")
     await press(harness, submit(harness))
-    await waitFor(harness, "Write a commit message first")
+    await waitForFrame(harness, "Write a commit message first")
     expect(frame(harness)).toContain(popupMarker)
 
     await press(harness, () => void harness.setup.mockInput.typeText("nothing to commit"))
     await press(harness, submit(harness))
-    await waitFor(harness, "Nothing staged to commit")
+    await waitForFrame(harness, "Nothing staged to commit")
     // Refused, not abandoned: the message the user typed is still theirs.
     expect(frame(harness)).toContain("nothing to commit")
   }, 30_000)
@@ -410,17 +382,17 @@ describe("commit-flow popup", () => {
     await stageFile(harness, "feature.txt")
     await focusFiles(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, "c")
     await press(harness, () => void harness.setup.mockInput.typeText("survives the hook"))
     await press(harness, submit(harness))
 
     // The hook's stderr verbatim — it is the only place the reason exists.
-    await waitFor(harness, "rejected by policy")
+    await waitForFrame(harness, "rejected by policy")
     // And the editor is untouched, because a typed message cannot be recovered.
     expect(frame(harness)).toContain("survives the hook")
     expect(frame(harness)).toContain(popupMarker)
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
     expect(frame(harness)).toContain("1 staged file")
     expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("first commit\n")
   }, 30_000)
@@ -430,20 +402,20 @@ describe("commit-flow popup", () => {
     await seed(harness)
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("b"))
-    await press(harness, () => harness.setup.mockInput.pressEscape())
-    await waitFor(harness, "begin closed #1")
+    await press(harness, "b")
+    await pressEscape(harness)
+    await waitForFrame(harness, "begin closed #1")
 
     // A second `begin` displaces the first, and the displaced caller must not be left waiting
     // on an editor that is no longer on screen. Run rather than pressed, because `m` is a
     // letter while the editor owns the keyboard.
-    await press(harness, () => harness.setup.mockInput.pressKey("b"))
+    await press(harness, "b")
     await press(harness, () => void harness.kernel.commands.execute("files.begin-prefilled"))
-    await waitFor(harness, "begin closed #2")
+    await waitForFrame(harness, "begin closed #2")
     expect(frame(harness)).toContain("handed in")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
-    await waitFor(harness, "prefilled closed #3")
+    await pressEscape(harness)
+    await waitForFrame(harness, "prefilled closed #3")
   }, 30_000)
 
   it("prefills an amend with the whole message of the commit it rewrites", async () => {
@@ -451,8 +423,8 @@ describe("commit-flow popup", () => {
     await seed(harness, "subject line", "body line")
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("n"))
-    await waitFor(harness, "body line")
+    await press(harness, "n")
+    await waitForFrame(harness, "body line")
     const rendered = frame(harness)
     expect(rendered).toContain("Amend the last commit")
     // The subject alone would have silently dropped the body of the commit being rewritten.
@@ -460,7 +432,7 @@ describe("commit-flow popup", () => {
 
     // Amending needs no staged files, which is the one case the empty-index guard allows.
     await press(harness, submit(harness))
-    await waitFor(harness, "Amended")
+    await waitForFrame(harness, "Amended")
     expect(await git(harness.directory, "log", "--format=%s")).toBe("subject line\n")
   }, 30_000)
 
@@ -471,12 +443,12 @@ describe("commit-flow popup", () => {
 
     // The textarea parks a prefilled caret at offset 0, so without the Pane moving it to the
     // end this types " now" onto the front: " nowreword me".
-    await press(harness, () => harness.setup.mockInput.pressKey("n"))
-    await waitFor(harness, "reword me")
+    await press(harness, "n")
+    await waitForFrame(harness, "reword me")
     await press(harness, () => void harness.setup.mockInput.typeText(" now"))
 
     await press(harness, submit(harness))
-    await waitFor(harness, "Amended")
+    await waitForFrame(harness, "Amended")
     expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("reword me now\n")
   }, 30_000)
 
@@ -485,7 +457,7 @@ describe("commit-flow popup", () => {
     await seed(harness)
     await start(harness)
     await writeFile(join(harness.directory, "loose.txt"), "loose\n")
-    await refresh(harness)
+    await refreshGit(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("commit-flow.menu"))
     const menu = frame(harness)
@@ -494,8 +466,8 @@ describe("commit-flow popup", () => {
     // Nothing is staged, so the two entries that would commit an empty index are not offered.
     expect(menu).not.toContain("Commit with signoff")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("a"))
-    await waitFor(harness, "1 staged file")
+    await press(harness, "a")
+    await waitForFrame(harness, "1 staged file")
     expect(frame(harness)).toContain(popupMarker)
   }, 30_000)
 })

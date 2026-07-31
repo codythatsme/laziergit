@@ -6,6 +6,7 @@ import { ensureRuntimePluginSupport } from "@opentui/react/runtime-plugin-suppor
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { format } from "node:util"
 import { act } from "react"
 import * as laziergitRuntime from "laziergit"
 
@@ -84,6 +85,12 @@ export interface HarnessOptions {
   /** Opt into filesystem Theme discovery/schema publication for tests that exercise it. */
   readonly themes?: boolean
   /**
+   * Toasts outlive any single test by default, because an expiry timer firing between two
+   * assertions is an update no test could have waited for. Pass a short lifetime only where
+   * expiry itself is the subject.
+   */
+  readonly toastLifetimeMs?: number
+  /**
    * Initialise the harness directory as a git repository with one commit. Off by default:
    * a harness without one exercises the degraded path, where the store serves the empty
    * snapshot and nothing polls.
@@ -118,27 +125,51 @@ async function initRepository(directory: string): Promise<void> {
   }
 }
 
-const harnesses: Harness[] = []
 const actGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
-let hadActEnvironment = false
-let previousActEnvironment: boolean | undefined
+
+/**
+ * The registry of the lifecycle currently accepting harnesses. Each `installHarnessLifecycle`
+ * call owns its own list, so one file's teardown can only ever destroy harnesses that file
+ * created — never a repository another file is still using.
+ */
+let activeHarnesses: Harness[] | null = null
 
 /**
  * Registers the lifecycle every kernel test needs: the runtime module hooks Extensions
- * resolve `"laziergit"` through, React's act environment, and teardown of every harness
- * a test created. Call once at the top of a test file.
+ * resolve `"laziergit"` through, React's act environment, teardown of every harness a test
+ * created, and a trap that fails any test whose React updates escaped `act` — a leaked
+ * update is work the test did not wait for, which is exactly how CI-only flakes start.
+ * Call once at the top of a test file.
  */
 export function installHarnessLifecycle(): void {
+  const harnesses: Harness[] = []
+  const leakedUpdates: string[] = []
+  let hadActEnvironment = false
+  let previousActEnvironment: boolean | undefined
+  let originalConsoleError: typeof console.error | undefined
+
   beforeAll(() => {
     ensureRuntimePluginSupport({ additional: { laziergit: laziergitRuntime } })
     hadActEnvironment = Object.hasOwn(actGlobal, "IS_REACT_ACT_ENVIRONMENT")
     previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT
     actGlobal.IS_REACT_ACT_ENVIRONMENT = true
+    activeHarnesses = harnesses
+
+    originalConsoleError = console.error
+    console.error = (...args: unknown[]) => {
+      if (typeof args[0] === "string" && args[0].includes("not wrapped in act")) {
+        leakedUpdates.push(format(...args))
+        return
+      }
+      originalConsoleError?.(...args)
+    }
   })
 
   afterAll(() => {
     if (hadActEnvironment) actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
     else delete actGlobal.IS_REACT_ACT_ENVIRONMENT
+    if (originalConsoleError) console.error = originalConsoleError
+    if (activeHarnesses === harnesses) activeHarnesses = null
   })
 
   afterEach(async () => {
@@ -156,6 +187,13 @@ export function installHarnessLifecycle(): void {
       }
       await rm(harness.directory, { recursive: true, force: true })
       await rm(harness.configDirectory, { recursive: true, force: true })
+    }
+
+    if (leakedUpdates.length > 0) {
+      const details = leakedUpdates.splice(0).join("\n\n")
+      throw new Error(
+        `React updates escaped act during this test — wait for them with waitForFrame/waitFor:\n${details}`,
+      )
     }
   })
 }
@@ -187,6 +225,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     pollMs: options.pollMs ?? options.debounceMs,
     onQuit: options.onQuit,
     clipboardWriters: options.clipboardWriters,
+    toastLifetimeMs: options.toastLifetimeMs ?? 60_000,
   })
   const harness: Harness = {
     directory,
@@ -200,7 +239,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     kernel,
     root: null,
   }
-  harnesses.push(harness)
+  if (activeHarnesses === null) throw new Error("createHarness needs installHarnessLifecycle() at the top of the file")
+  activeHarnesses.push(harness)
   return harness
 }
 
@@ -219,6 +259,113 @@ export async function settle(harness: Harness): Promise<void> {
   })
   await harness.setup.renderOnce()
   await harness.setup.renderOnce()
+}
+
+/**
+ * A key press through the mock terminal, drained through dispatch and the React commit.
+ * The Command a key starts is deliberately fire-and-forget in production, so this returns
+ * while that work may still be running: assert its outcome with {@link waitForFrame} or
+ * {@link waitFor}, never against the very next frame.
+ */
+export async function press(
+  harness: Harness,
+  key: string | (() => void),
+  modifiers?: Parameters<Harness["setup"]["mockInput"]["pressKey"]>[1],
+): Promise<void> {
+  await act(async () => {
+    if (typeof key === "function") key()
+    else harness.setup.mockInput.pressKey(key, modifiers)
+  })
+  await settle(harness)
+}
+
+/**
+ * A lone escape byte is only a key once the terminal parser has waited out the sequence it
+ * could start, so this is the one press that must spend real time.
+ */
+export async function pressEscape(harness: Harness): Promise<void> {
+  await act(async () => {
+    harness.setup.mockInput.pressEscape()
+    await Bun.sleep(60)
+  })
+  await settle(harness)
+}
+
+export interface WaitOptions {
+  readonly timeoutMs?: number
+}
+
+/**
+ * Polls until `condition` holds, settling the renderer between looks. The condition runs
+ * inside `act` because it may await — shell out to git, say — while the store publishes and
+ * Panes re-render. Timing out reports the last frame, so a CI log shows what the screen
+ * actually held.
+ */
+export async function waitFor(
+  harness: Harness,
+  condition: () => boolean | Promise<boolean>,
+  what: string,
+  options: WaitOptions = {},
+): Promise<void> {
+  const deadline = Date.now() + (options.timeoutMs ?? 10_000)
+  for (;;) {
+    await settle(harness)
+    let met = false
+    await act(async () => {
+      met = await condition()
+    })
+    if (met) return
+    if (Date.now() >= deadline) break
+    await act(async () => {
+      await Bun.sleep(15)
+    })
+  }
+  const diagnostics = harness.kernel.diagnostics
+    .getSnapshot()
+    .map((entry) => `${entry.phase}: ${entry.message}`)
+    .join("\n")
+  throw new Error(
+    `Timed out waiting for ${what}. Last frame:\n${frame(harness)}\n` +
+      (diagnostics.length === 0 ? "No diagnostics." : `Diagnostics:\n${diagnostics}`),
+  )
+}
+
+/** Waits until the frame contains `expected` — or satisfies it, when given a predicate. */
+export async function waitForFrame(
+  harness: Harness,
+  expected: string | ((screen: string) => boolean),
+  options: WaitOptions = {},
+): Promise<void> {
+  const what = typeof expected === "string" ? `the frame to contain ${JSON.stringify(expected)}` : "the frame to match"
+  await waitFor(
+    harness,
+    () => (typeof expected === "string" ? frame(harness).includes(expected) : expected(frame(harness))),
+    what,
+    options,
+  )
+}
+
+/**
+ * Runs a Command to completion, unlike the keyboard path, which cannot await it. For
+ * behaviour tests; whether a key reaches the Command is a routing fact to assert off
+ * `kernel.commands.getSnapshot()` or with one focused keyboard test.
+ */
+export async function runCommand(harness: Harness, id: string): Promise<void> {
+  await act(async () => {
+    await harness.kernel.commands.execute(id)
+  })
+  await settle(harness)
+}
+
+/**
+ * Publishes the store after a git mutation made behind the app's back, without waiting out
+ * the fingerprint poll — tests that are about the poll itself configure a real interval.
+ */
+export async function refreshGit(harness: Harness): Promise<void> {
+  await act(async () => {
+    await harness.kernel.git.refresh()
+  })
+  await settle(harness)
 }
 
 export async function writeExtension(directory: string, name: string, source: string): Promise<void> {

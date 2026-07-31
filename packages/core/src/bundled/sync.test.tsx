@@ -5,7 +5,18 @@ import { join, resolve } from "node:path"
 import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  installHarnessLifecycle,
+  press,
+  refreshGit,
+  renderApp,
+  settle,
+  waitFor,
+  waitForFrame,
+  type Harness,
+} from "../test-harness"
 
 installHarnessLifecycle()
 
@@ -45,8 +56,9 @@ interface RepoOptions {
 async function startRepo(options: RepoOptions = {}): Promise<Harness> {
   const harness = await createHarness({ git: true })
   await symlink(syncExtension, join(harness.bundled, "sync"))
-  // Several tests move the repository from outside laziergit; the poll is what catches that.
-  await writeFile(harness.configFiles.repo, `{ "git": { "refreshIntervalMs": 250 } }`)
+  // Mutations made from outside laziergit reach the store through `refreshGit`, so the
+  // fingerprint poll is parked out of every test's way.
+  await writeFile(harness.configFiles.repo, `{ "git": { "refreshIntervalMs": 60000 } }`)
 
   if (options.unborn !== true) {
     await writeFile(join(harness.directory, "seed.txt"), "seed\n")
@@ -86,41 +98,12 @@ function toasts(harness: Harness): readonly string[] {
 }
 
 /**
- * One keypress, plus enough real time for the terminal parser to disambiguate it. An
- * uppercase letter arrives as the shift stroke the Command bound (`"P"` → `shift+p`).
+ * Push, pull, and fetch each spawn git, so nothing they produce is available on the render
+ * after the keypress; the toast queue is where their outcomes land. An uppercase letter
+ * arrives as the shift stroke the Command bound (`"P"` → `shift+p`).
  */
-async function press(harness: Harness, key: string): Promise<void> {
-  await act(async () => {
-    harness.setup.mockInput.pressKey(key)
-    await Bun.sleep(60)
-  })
-  await settle(harness)
-}
-
-/**
- * Renders until the screen (or the toast queue) catches up. Push, pull, and fetch each
- * spawn git, so nothing they produce is available on the render after the keypress.
- */
-async function waitFor(harness: Harness, condition: () => boolean, description: string): Promise<void> {
-  const deadline = Date.now() + 15_000
-  while (Date.now() < deadline) {
-    await settle(harness)
-    if (condition()) return
-    await act(async () => {
-      await Bun.sleep(25)
-    })
-  }
-  throw new Error(
-    `Timed out waiting for ${description}.\nFrame:\n${frame(harness)}\nToasts: ${JSON.stringify(toasts(harness))}`,
-  )
-}
-
 function waitForToast(harness: Harness, fragment: string): Promise<void> {
   return waitFor(harness, () => toasts(harness).some((toast) => toast.includes(fragment)), `a toast saying ${fragment}`)
-}
-
-function waitForFrame(harness: Harness, fragment: string): Promise<void> {
-  return waitFor(harness, () => frame(harness).includes(fragment), `${JSON.stringify(fragment)} on screen`)
 }
 
 describe("sync.push", () => {
@@ -172,6 +155,7 @@ describe("sync.push", () => {
     await press(harness, "P")
     await waitForFrame(harness, "Push feature to origin?")
     await press(harness, "n")
+    await waitForFrame(harness, (screen) => !screen.includes("Push feature to origin?"))
 
     expect(await git(origin, "branch", "--list", "feature")).toBe("")
     expect(toasts(harness)).toEqual([])
@@ -387,6 +371,7 @@ describe("the status line segment", () => {
     expect(frame(harness)).not.toContain("↑")
 
     await commitIn(harness.directory, "ahead.txt", "one\n")
+    await refreshGit(harness)
     await waitForFrame(harness, "main ↑1")
   })
 

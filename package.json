@@ -32,11 +32,12 @@
     "lint": "oxlint --deny-warnings packages extensions scripts",
     "precommit": "bun run format:check && bun run lint && bun run typecheck",
     "prepare": "git config core.hooksPath .githooks",
+    "check:sleeps": "bun scripts/check-test-sleeps.ts",
     "test": "bun scripts/test.ts",
     "test:e2e": "bun test ./scripts/e2e",
     "test:runtime": "bun packages/core/src/extension/reload.fixture.ts",
     "typecheck": "bun run --filter '*' typecheck",
-    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
+    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run check:sleeps && bun run test"
   },
   "devDependencies": {
     "@kitlangton/terminal-control": "catalog:",
