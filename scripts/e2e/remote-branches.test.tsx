@@ -260,8 +260,6 @@ it("supports the single-remote branch workflow", async () => {
   expect(frame(harness)).toContain("new-remote")
 
   await filterCurrentList(harness, "new-remote")
-  await press(harness, () => harness.setup.mockInput.pressKey("x"))
-  expect(frame(harness)).toContain("Delete from remote")
   await press(harness, () => harness.setup.mockInput.pressKey("d"))
   expect(frame(harness)).toContain("Delete origin/new-remote?")
   expect(frame(harness)).toContain("Any local branch is kept")

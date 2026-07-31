@@ -277,6 +277,13 @@ export default defineExtension({
         run: () => (selected === undefined ? undefined : createTrackingBranch(selected)),
       })
       useCommand({
+        id: "remote-branches.delete",
+        title: "Delete branch from remote",
+        hint: "delete",
+        keys: "d",
+        run: () => (selected === undefined ? undefined : deleteRemoteBranch(selected)),
+      })
+      useCommand({
         id: "remote-branches.fetch",
         title: "Fetch selected remote",
         hint: "fetch",
