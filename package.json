@@ -30,14 +30,14 @@
     "format": "oxfmt --write packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
     "format:check": "oxfmt --check packages extensions scripts package.json tsconfig.base.json .oxfmtrc.json .oxlintrc.json",
     "lint": "oxlint --deny-warnings packages extensions scripts",
-    "precommit": "bun run format:check && bun run lint && bun run typecheck",
+    "precommit": "bun run format:check && bun run lint && bun run typecheck && bun run check:tests",
     "prepare": "git config core.hooksPath .githooks",
-    "check:sleeps": "bun scripts/check-test-sleeps.ts",
+    "check:tests": "bun scripts/check-tests.ts",
     "test": "bun scripts/test.ts",
     "test:e2e": "bun test ./scripts/e2e",
     "test:runtime": "bun packages/core/src/extension/reload.fixture.ts",
     "typecheck": "bun run --filter '*' typecheck",
-    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run check:sleeps && bun run test"
+    "verify": "bun run precommit && bun run test"
   },
   "devDependencies": {
     "@kitlangton/terminal-control": "catalog:",
