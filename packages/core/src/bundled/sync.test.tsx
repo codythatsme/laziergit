@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
 import {
@@ -12,7 +11,6 @@ import {
   press,
   refreshGit,
   renderApp,
-  settle,
   waitFor,
   waitForFrame,
   type Harness,
@@ -398,54 +396,21 @@ describe("the status line segment", () => {
     expect(frame(harness)).toContain("main")
   })
 
-  it("animates a loader beside the branch while a push runs, instead of replacing it", async () => {
+  it("does not put operation activity in the bottom status segment", async () => {
     const harness = await startRepo()
     await addOrigin(harness)
     await commitIn(harness.directory, "ahead.txt", "one\n")
-    // A hook is what makes the busy state observable: a local push is otherwise over before
-    // the loader is worth revealing.
-    await writeFile(join(harness.directory, ".git/hooks/pre-push"), "#!/bin/sh\nsleep 2\n")
-    await chmod(join(harness.directory, ".git/hooks/pre-push"), 0o755)
     await renderApp(harness)
-    await waitForFrame(harness, "↑1")
+    await waitForFrame(harness, "main ↑1")
 
-    await press(harness, "P")
-    await waitForFrame(harness, "pushing")
-
-    const frames: string[] = []
-    const signatures = new Set<string>()
-    while (frames.length < 12 && frame(harness).includes("pushing")) {
-      const line = frame(harness)
-        .split("\n")
-        .find((row) => row.includes("pushing"))
-      if (line === undefined) break
-      frames.push(line)
-      // What the branch and the counts must never do: move. Recorded as the branch's start
-      // column plus the printed width of the row, so a frame that measured wider shows up as
-      // a second signature. Code points, because braille is one code point and one cell.
-      signatures.add(`${line.indexOf("main")}:${Array.from(line).length}`)
-      await act(async () => {
-        // oxlint-disable-next-line no-restricted-properties -- sampling animation frames over real time
-        await Bun.sleep(70)
-      })
-      await settle(harness)
-    }
-
-    // The branch and its divergence stay on screen for the whole operation, rather than being
-    // replaced by the loader.
-    for (const line of frames) {
-      expect(line).toContain("main")
-      expect(line).toContain("↑1")
-    }
-    // Motion, not a static glyph: distinct frames of the wave over the same run.
-    const glyphs = new Set(frames.flatMap((line) => Array.from(line).filter((char) => char >= "⠀" && char <= "⣿")))
-    expect(glyphs.size).toBeGreaterThan(3)
-    expect(signatures.size).toBe(1)
-
-    await waitForToast(harness, "Pushed main to origin/main")
-    // And it goes away again, leaving the segment exactly as it was.
-    await waitFor(harness, () => !frame(harness).includes("pushing"), "the loader to withdraw")
-    expect(harness.kernel.diagnostics.getSnapshot()).toEqual([])
+    // Activity is global core state. The sync segment deliberately ignores it now: its
+    // bottom-right responsibility is repository context, while the branches Pane owns the
+    // in-place operation treatment.
+    const end = harness.kernel.git.activity.begin("pushing")
+    await waitFor(harness, () => harness.kernel.git.activity.getSnapshot().length === 1, "activity to be revealed")
+    expect(frame(harness)).toContain("main ↑1")
+    expect(frame(harness)).not.toContain("pushing")
+    end()
   })
 
   it("survives a fetch, which used to collapse it for the rest of the session", async () => {

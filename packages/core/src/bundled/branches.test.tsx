@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import { RGBA } from "@opentui/core"
 import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
 import {
@@ -12,6 +13,7 @@ import {
   pressEscape,
   refreshGit,
   renderApp,
+  settle,
   waitFor,
   waitForFrame,
   type Harness,
@@ -126,6 +128,51 @@ async function openMergeMenuForSecondBranch(harness: Harness, branch: string): P
   await press(harness, "M")
   await waitForFrame(harness, `Merge ${branch} into main`)
 }
+
+describe("operation activity", () => {
+  it("animates a commit loader at the end of the checked-out branch row", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await git(harness, "branch", "other")
+    await start(harness)
+
+    const end = harness.kernel.git.activity.begin("committing")
+    await waitForFrame(harness, "committing")
+
+    const frames: string[] = []
+    while (frames.length < 12 && frame(harness).includes("committing")) {
+      const line = frame(harness)
+        .split("\n")
+        .find((row) => row.includes("committing"))
+      if (line === undefined) break
+      frames.push(line)
+      await act(async () => {
+        // oxlint-disable-next-line no-restricted-properties -- sampling animation frames over real time
+        await Bun.sleep(70)
+      })
+      await settle(harness)
+    }
+
+    for (const line of frames) {
+      expect(line).toContain("* main")
+      const activityEnd = line.indexOf("committing") + "committing".length
+      expect(activityEnd).toBeGreaterThan(line.indexOf("main"))
+      // Right-aligned in the row: after the label there is only the Pane's own padding and
+      // border, not unused row width.
+      const borderDistance = line.slice(activityEnd).indexOf("│")
+      expect(borderDistance).toBeGreaterThanOrEqual(0)
+      expect(borderDistance).toBeLessThanOrEqual(2)
+      expect(line).not.toContain("  other  committing")
+    }
+    const glyphs = new Set(frames.flatMap((line) => Array.from(line).filter((char) => char >= "⠀" && char <= "⣿")))
+    expect(glyphs.size).toBeGreaterThan(3)
+
+    act(() => end())
+    await waitFor(harness, () => !frame(harness).includes("committing"), "the inline loader to withdraw")
+    expect(frame(harness)).toContain("* main")
+    expect(harness.kernel.diagnostics.getSnapshot()).toEqual([])
+  })
+})
 
 describe("checking out", () => {
   it("switches to the selected branch, and says so rather than doing nothing on HEAD", async () => {
