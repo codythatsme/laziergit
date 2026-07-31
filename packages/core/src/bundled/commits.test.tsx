@@ -454,7 +454,7 @@ describe("the commits action menu", () => {
     expect(await Bun.file(droppedFile).exists()).toBe(false)
   })
 
-  it("rewords an older commit in the full message editor", async () => {
+  it("rewords an older commit in the message popup", async () => {
     const repo = await openRepo()
     await commit(repo, "first commit")
     await commit(repo, "second commit")
@@ -465,9 +465,9 @@ describe("the commits action menu", () => {
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "r")
-    await waitForFrame(repo.harness, "amending the last commit")
+    await waitForFrame(repo.harness, "Amend the last commit")
 
-    expect(frame(repo.harness)).toContain("amending the last commit")
+    expect(frame(repo.harness)).toContain("Amend the last commit")
     expect(frame(repo.harness)).toContain("second commit")
     await act(async () => {
       await repo.harness.setup.mockInput.typeText(" reworded")
@@ -492,7 +492,7 @@ describe("the commits action menu", () => {
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "r")
-    await waitForFrame(repo.harness, "amending the last commit")
+    await waitForFrame(repo.harness, "Amend the last commit")
     await press(repo.harness, "ESCAPE")
     await waitForFrame(repo.harness, "Reword cancelled; original history restored")
 

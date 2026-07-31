@@ -359,7 +359,7 @@ declare module "laziergit" {
     /** Data-driven, keyboard-first menus that other extensions can splice into. */
     readonly menus: MenuRegistry<TName>;
 
-    /** Modal toolkit: confirm / prompt / select / menu / notify. */
+    /** Modal toolkit: confirm / prompt / compose / select / menu / notify. */
     readonly popups: PopupToolkit;
 
     /** Status line segments (small React components). */
@@ -1788,6 +1788,23 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
       validate?(value: string): string | null;
     }): Promise<string | undefined>;
 
+    /**
+     * Commit-style summary and description editor. The resolved string joins
+     * non-empty descriptions to the summary with Git's conventional blank line;
+     * resolves undefined on escape. Enter submits the summary, Tab switches
+     * fields, and Ctrl+S submits from either one.
+     */
+    compose(opts: {
+      title: string;
+      summaryTitle?: string;
+      descriptionTitle?: string;
+      initial?: string;
+      /** Return an error message to block submission, null to accept. */
+      validate?(value: string): string | null;
+      /** Receives the complete joined value after every edit. */
+      onChange?(value: string): void;
+    }): Promise<string | undefined>;
+
     /** Filterable list picker. Resolves the chosen value, or undefined on escape. */
     select<T>(opts: {
       title: string;
@@ -2736,7 +2753,7 @@ check (or pass the signal along). This is what makes the corpus's fire-and-forge
 written.
 
 **Modal UI across reload.** Popups and menus are modal state, and modal state belongs to
-scopes. A popup (`confirm` / `prompt` / `select` / `popups.menu`) belongs to its caller: if the
+scopes. A popup (`confirm` / `prompt` / `compose` / `select` / `popups.menu`) belongs to its caller: if the
 caller deactivates mid-await, the popup closes and the pending promise is parked by the
 async-tail rule — the flow is abandoned, never resumed against a stale ctx; the user re-invokes
 after the reload. An open registered menu is a **snapshot** of the merged spec and target taken
@@ -2963,12 +2980,6 @@ renderer still handles ctrl+C independently of the kernel, so the process itself
   is piped. SSH keys via an agent, and any configured credential helper, work untouched.
   Interactive authentication needs a pty and prompt detection (lazygit's approach) and is
   post-v1; until then `push`/`pull`/`fetch` surface the failure as an ordinary {@link GitError}.
-- **A multi-line prompt** — {@link PopupToolkit.prompt} is one line by design. A commit message
-  is not a prompt: it is an editing surface with its own layout, validation, and keys, so the
-  bundled `commit-flow` renders one from OpenTUI's `<textarea>` in the Pane it already owns.
-  Any extension can do the same — `useKeyCapture` is the piece that makes it safe, silencing
-  every other binding while the editor has the keys (§5.8) — and widening the popup toolkit
-  would make every caller pay for the one case that needs it.
 - **Soft dependencies** (`extensions.find`) — an optional lookup has no ordering guarantee,
   reintroducing exactly the staleness `needs` + ripple restart exist to prevent; declare the need.
 - **Semver ranges on `needs`** — extensions are source-compiled TS checked against the host's

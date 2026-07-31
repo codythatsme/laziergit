@@ -54,6 +54,16 @@ export interface PromptPopup extends PopupBase {
   submit(value: string): void
 }
 
+export interface ComposePopup extends PopupBase {
+  readonly kind: "compose"
+  readonly summaryTitle: string
+  readonly descriptionTitle: string
+  readonly initial: string
+  validate(value: string): string | null
+  change(value: string): void
+  submit(value: string): void
+}
+
 export interface ChoosePopup extends PopupBase {
   readonly kind: "choose"
   readonly choices: readonly PopupChoice[]
@@ -74,7 +84,7 @@ export interface CheatSheetPopup extends PopupBase {
   readonly sections: readonly CheatSheetSection[]
 }
 
-export type Popup = ConfirmPopup | PromptPopup | ChoosePopup | ActionsPopup | CheatSheetPopup
+export type Popup = ConfirmPopup | PromptPopup | ComposePopup | ChoosePopup | ActionsPopup | CheatSheetPopup
 
 export interface ConfirmOptions {
   readonly title: string
@@ -88,6 +98,15 @@ export interface PromptOptions {
   readonly placeholder?: string
   readonly initial?: string
   validate?(value: string): string | null
+}
+
+export interface ComposeOptions {
+  readonly title: string
+  readonly summaryTitle?: string
+  readonly descriptionTitle?: string
+  readonly initial?: string
+  validate?(value: string): string | null
+  onChange?(value: string): void
 }
 
 export interface ChooseOptions {
@@ -165,6 +184,42 @@ export class PopupHost {
       validate: (value) => options.validate?.(value) ?? null,
       submit: (value) => settle(value),
     }))
+  }
+
+  compose(owner: string, options: ComposeOptions): PopupHandle<string | undefined> {
+    // One Extension can compose only one message at a time. Replacing it also settles the
+    // displaced caller, so a programmatic second flow cannot leave a hidden popup underneath.
+    for (const popup of this.#stack) {
+      if (popup.kind === "compose" && popup.contributors.has(owner)) popup.dismiss()
+    }
+
+    let active = true
+    const change = (value: string): void => {
+      if (!active) return
+      try {
+        options.onChange?.(value)
+      } catch {
+        // A draft observer cannot poison the modal stack.
+      }
+    }
+    return this.#open<string | undefined>(
+      owner,
+      options.title,
+      undefined,
+      (base, settle) => ({
+        ...base,
+        kind: "compose",
+        summaryTitle: options.summaryTitle ?? "Summary",
+        descriptionTitle: options.descriptionTitle ?? "Description",
+        initial: options.initial ?? "",
+        validate: (value) => options.validate?.(value) ?? null,
+        change,
+        submit: (value) => settle(value),
+      }),
+      () => {
+        active = false
+      },
+    )
   }
 
   choose(owner: string, options: ChooseOptions): PopupHandle<number | undefined> {

@@ -1,6 +1,13 @@
 import { expect, it } from "bun:test"
 
-import { PopupHost, type ChoosePopup, type ConfirmPopup, type Popup, type PromptPopup } from "./popup-host"
+import {
+  PopupHost,
+  type ChoosePopup,
+  type ComposePopup,
+  type ConfirmPopup,
+  type Popup,
+  type PromptPopup,
+} from "./popup-host"
 
 function confirmPopup(popup: Popup | undefined): ConfirmPopup {
   if (popup?.kind !== "confirm") throw new Error(`Expected a confirm popup, found ${popup?.kind ?? "an empty stack"}`)
@@ -9,6 +16,11 @@ function confirmPopup(popup: Popup | undefined): ConfirmPopup {
 
 function promptPopup(popup: Popup | undefined): PromptPopup {
   if (popup?.kind !== "prompt") throw new Error(`Expected a prompt popup, found ${popup?.kind ?? "an empty stack"}`)
+  return popup
+}
+
+function composePopup(popup: Popup | undefined): ComposePopup {
+  if (popup?.kind !== "compose") throw new Error(`Expected a compose popup, found ${popup?.kind ?? "an empty stack"}`)
   return popup
 }
 
@@ -70,6 +82,48 @@ it("stacks a prompt popup and resolves it with the submitted value", async () =>
 
   expect(await handle.promise).toBe("feature/popups")
   expect(host.getSnapshot()).toEqual([])
+})
+
+it("composes a summary and description while reporting draft changes", async () => {
+  const host = new PopupHost()
+  const drafts: string[] = []
+  const handle = host.compose("owner", {
+    title: "Commit",
+    summaryTitle: "Commit summary",
+    descriptionTitle: "Commit description",
+    initial: "subject\n\nbody",
+    validate: (value) => (value.trim().length === 0 ? "Required" : null),
+    onChange: (value) => drafts.push(value),
+  })
+  const popup = composePopup(host.top)
+
+  expect(popup).toEqual(
+    expect.objectContaining({
+      title: "Commit",
+      summaryTitle: "Commit summary",
+      descriptionTitle: "Commit description",
+      initial: "subject\n\nbody",
+    }),
+  )
+  expect(popup.validate("")).toBe("Required")
+  popup.change("new subject\n\nnew body")
+  popup.submit("new subject\n\nnew body")
+
+  expect(drafts).toEqual(["new subject\n\nnew body"])
+  expect(await handle.promise).toBe("new subject\n\nnew body")
+  expect(host.getSnapshot()).toEqual([])
+})
+
+it("replaces an owner's open composer and settles the displaced call", async () => {
+  const host = new PopupHost()
+  const first = host.compose("owner", { title: "First" })
+  const second = host.compose("owner", { title: "Second" })
+
+  expect(await first.promise).toBeUndefined()
+  expect(titles(host)).toEqual(["Second"])
+
+  second.dismiss()
+  expect(await second.promise).toBeUndefined()
 })
 
 it("stacks a choose popup and resolves it with the chosen index", async () => {
@@ -159,14 +213,16 @@ it("resolves every popup kind with its cancelled outcome when dismissed", async 
   const host = new PopupHost()
   const confirm = host.confirm("owner", { title: "Confirm" })
   const prompt = host.prompt("owner", { title: "Prompt" })
+  const compose = host.compose("owner", { title: "Compose" })
   const choose = host.choose("owner", { title: "Choose", choices: [{ label: "only" }] })
   const actions = host.actions("owner", { title: "Actions", groups: [] })
   const cheatSheet = host.cheatSheet("owner", "Cheat sheet", [])
 
-  for (const handle of [confirm, prompt, choose, actions, cheatSheet]) handle.dismiss()
+  for (const handle of [confirm, prompt, compose, choose, actions, cheatSheet]) handle.dismiss()
 
   expect(await confirm.promise).toBe(false)
   expect(await prompt.promise).toBeUndefined()
+  expect(await compose.promise).toBeUndefined()
   expect(await choose.promise).toBeUndefined()
   expect(await actions.promise).toBeUndefined()
   expect(await cheatSheet.promise).toBeUndefined()
