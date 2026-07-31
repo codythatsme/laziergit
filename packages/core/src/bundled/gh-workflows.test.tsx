@@ -440,8 +440,10 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
 
     // Settle the run before the test ends: the cancel's follow-up refetch and the live-run
     // poll both update the pane on their own schedule, and an update landing after the last
-    // wait is an update outside act.
-    await gh.setRuns("main", [run(3, "slow run", "completed", "success")])
+    // wait is an update outside act. The write itself sits inside act for the same reason.
+    await act(async () => {
+      await gh.setRuns("main", [run(3, "slow run", "completed", "success")])
+    })
     await waitForFrame(harness, "✓ verify — slow run")
   })
 
@@ -508,8 +510,11 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     )
 
     // A completed run is what parks the poll; waiting for it on screen absorbs the last
-    // fetch inside act before the test ends.
-    await gh.setRuns("main", [run(3, "slow run", "completed", "success")])
+    // fetch inside act before the test ends, and the write sits inside act because a poll
+    // can land while it is awaited.
+    await act(async () => {
+      await gh.setRuns("main", [run(3, "slow run", "completed", "success")])
+    })
     await waitForFrame(harness, "✓ verify — slow run")
   })
 })
