@@ -425,6 +425,7 @@ describe("the status line segment", () => {
       // a second signature. Code points, because braille is one code point and one cell.
       signatures.add(`${line.indexOf("main")}:${Array.from(line).length}`)
       await act(async () => {
+        // oxlint-disable-next-line no-restricted-properties -- sampling animation frames over real time
         await Bun.sleep(70)
       })
       await settle(harness)

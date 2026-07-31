@@ -154,6 +154,7 @@ async function createDiffHarness(): Promise<DiffHarness> {
 function installSlowDiffGit(harness: Harness, milliseconds: number): void {
   const raw = harness.kernel.git.raw.bind(harness.kernel.git)
   spyOn(harness.kernel.git, "raw").mockImplementation(async (argv, options) => {
+    // oxlint-disable-next-line no-restricted-properties -- the stall is the fixture, not a wait
     if (argv.includes("--no-ext-diff")) await Bun.sleep(milliseconds)
     return raw(argv, options)
   })
