@@ -448,7 +448,7 @@ export class ExtensionKernel {
   }
 
   async openThemePicker(): Promise<void> {
-    const entries: ThemePickerEntry[] = [
+    const availableEntries: readonly ThemePickerEntry[] = [
       {
         label: "system",
         selection: "system",
@@ -457,6 +457,11 @@ export class ExtensionKernel {
         label: entry.name,
         selection: entry.name,
       })),
+    ]
+    const selectedName = this.#selectedThemeName()
+    const entries = [
+      ...availableEntries.filter((entry) => entry.selection === selectedName),
+      ...availableEntries.filter((entry) => entry.selection !== selectedName),
     ]
     const previous = this.theme.getSnapshot()
     const overrides = this.#config.core.themeConfiguration.overrides
@@ -700,8 +705,12 @@ export class ExtensionKernel {
   }
 
   #usesSystemTheme(): boolean {
+    return this.#selectedThemeName() === "system"
+  }
+
+  #selectedThemeName(): string {
     const selection = this.#config.core.themeConfiguration.selection
-    return typeof selection === "string" ? selection === "system" : selection[this.#appearance] === "system"
+    return typeof selection === "string" ? selection : selection[this.#appearance]
   }
 
   #refreshConfiguredTheme(): void {
