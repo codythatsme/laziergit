@@ -1,10 +1,17 @@
 import { describe, expect, it } from "bun:test"
 import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  installHarnessLifecycle,
+  renderApp,
+  runCommand,
+  waitForFrame,
+  type Harness,
+} from "../test-harness"
 
 installHarnessLifecycle()
 
@@ -72,41 +79,27 @@ const driverSource = `
   })
 `
 
-async function press(harness: Harness, action: () => void): Promise<void> {
-  await act(async () => {
-    action()
-    await Bun.sleep(40)
-  })
-  await settle(harness)
-}
-
-/** Waits for the diff Pane's asynchronous fetch, which no keypress can be synchronous with. */
-async function waitForFrame(harness: Harness, text: string, timeoutMs = 10_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await settle(harness)
-    if (frame(harness).includes(text)) return
-    await act(async () => {
-      await Bun.sleep(30)
-    })
-  }
-  throw new Error(`Timed out waiting for ${JSON.stringify(text)}. Last frame:\n${frame(harness)}`)
-}
-
 async function start(harness: Harness): Promise<void> {
   await Promise.all([
     symlink(diffExtension, join(harness.bundled, "diff")),
     writeFile(join(harness.repo, "driver.tsx"), driverSource),
-    // A wide diff column, so a header line survives without wrapping into the assertion.
-    writeFile(harness.configFiles.repo, `{ "layout": { "columns": [["driver"], ["diff"]] } }`),
+    // A wide diff column, so a header line survives without wrapping into the assertion. The
+    // fingerprint poll is parked: every fixture is complete before the kernel starts.
+    writeFile(
+      harness.configFiles.repo,
+      `{ "layout": { "columns": [["driver"], ["diff"]] }, "git": { "refreshIntervalMs": 60000 } }`,
+    ),
   ])
   await renderApp(harness)
 }
 
-/** Points the Pane at a target and waits for git to answer. */
+/**
+ * Points the Pane at a target. The fetch is an effect the Pane runs afterwards, so each test
+ * waits for its output on the frame.
+ */
 async function show(harness: Harness, target: unknown): Promise<void> {
   await writeFile(join(harness.directory, "target.json"), JSON.stringify(target))
-  await press(harness, () => void harness.kernel.commands.execute("driver.show"))
+  await runCommand(harness, "driver.show")
 }
 
 async function seed(harness: Harness): Promise<void> {
@@ -159,10 +152,12 @@ describe("the diff Pane's context header", () => {
     await start(harness)
     await show(harness, { kind: "branch", ref: long, path: null })
 
+    // The name alone is on screen before git answers — the chrome line names the target the
+    // moment `show` lands — so the patch is what marks the fetch complete.
+    await waitForFrame(harness, "seed")
     // The point of the `branch` kind: the row clips this name, and `{ kind: "commit" }` could
     // only ever name the tip.
-    await waitForFrame(harness, long)
-    expect(frame(harness)).toContain("seed")
+    expect(frame(harness)).toContain(long)
   }, 30_000)
 
   it("resolves a branch whose name is also a path, which git alone reads as ambiguous", async () => {

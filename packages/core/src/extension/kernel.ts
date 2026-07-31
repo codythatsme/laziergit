@@ -54,7 +54,7 @@ import { GitService } from "../git/service"
 import { gitStateSlices } from "../git/state"
 import type { GitPublication } from "../git/store"
 import { ImportCopyCache, type ImportCopyLease } from "./import-copy-cache"
-import { createNotifier } from "./notifier"
+import { createNotifier, type Notifier } from "./notifier"
 import { PaneHost } from "./pane-host"
 import { defaultTheme, findThemePreset, themePresets, ThemeStore } from "./theme"
 import { publishTypeEnvironment } from "./type-environment"
@@ -112,6 +112,8 @@ export interface ExtensionKernelOptions {
   readonly pollMs?: number
   /** Invoked by the `app.quit` Command; the process owner decides what quitting means. */
   readonly onQuit?: () => void
+  /** How long a toast stays on screen before expiring on its own. */
+  readonly toastLifetimeMs?: number
   /** Overrides the platform clipboard cascade; useful to embedders with their own writer. */
   readonly clipboardWriters?: readonly ClipboardWriterSpec[]
 }
@@ -172,7 +174,7 @@ export class ExtensionKernel {
   readonly panes: PaneHost
   readonly layout = new LayoutHost()
   readonly popups = new PopupHost()
-  readonly notifications = new NotificationHost()
+  readonly notifications: NotificationHost
   readonly listQuery = new ListQueryHost()
   readonly statusline: StatuslineHost
   readonly menus: MenuHost
@@ -198,7 +200,7 @@ export class ExtensionKernel {
   readonly #listeners = new Set<() => void>()
   /** Keyed by Extension name, in activation order — the order deactivation walks in reverse. */
   readonly #activations = new Map<string, Activation>()
-  readonly #notifier = createNotifier(this.notifications.publish)
+  readonly #notifier: Notifier
   readonly #slotOwners = new SlotOwners()
   readonly #disposeSlotErrors: () => void
   readonly #importCopies: ImportCopyCache
@@ -254,6 +256,8 @@ export class ExtensionKernel {
     this.#appearance = options.renderer.themeMode ?? "dark"
     this.#onQuit = options.onQuit
     this.#clipboardWriters = options.clipboardWriters
+    this.notifications = new NotificationHost(options.toastLifetimeMs)
+    this.#notifier = createNotifier(this.notifications.publish)
 
     this.registry = createReactSlotRegistry<UiSlots, PluginContext>(options.renderer, {})
     this.#disposeSlotErrors = this.#slotOwners.watch(this.registry, this.diagnostics)

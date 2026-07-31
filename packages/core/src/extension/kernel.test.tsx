@@ -6,7 +6,15 @@ import { act } from "react"
 import { StaleContextError, type ExtensionContext, type PaneHandle } from "laziergit"
 
 import { parseJsonc } from "../config/jsonc"
-import { createHarness, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  installHarnessLifecycle,
+  renderApp,
+  settle,
+  waitFor,
+  waitForFrame,
+  type Harness,
+} from "../test-harness"
 import { importCopyContainerName, importCopyIgnoreName } from "./discovery"
 import { findThemePreset } from "./theme"
 import type { ChoosePopup } from "../ui/popup-host"
@@ -449,7 +457,11 @@ describe("ExtensionKernel lifecycle", () => {
     await writeFile(entry, source("first"))
     await harness.kernel.start()
     await writeFile(entry, source("second"))
-    await Bun.sleep(30)
+    await waitFor(
+      harness,
+      () => testGlobals().__laziergitWatcherActivations === 2,
+      "the watcher to activate the rewritten Extension",
+    )
 
     const firstStop = harness.kernel.stop()
     const secondStop = harness.kernel.stop()
@@ -458,7 +470,11 @@ describe("ExtensionKernel lifecycle", () => {
     const activationsAfterStop = testGlobals().__laziergitWatcherActivations
 
     await writeFile(entry, source("third"))
-    await Bun.sleep(120)
+    // A disarmed watcher shows itself only through absence: several poll intervals must
+    // elapse with no reactivation before that absence proves anything.
+    await act(async () => {
+      await Bun.sleep(120)
+    })
     expect(testGlobals().__laziergitWatcherActivations).toBe(activationsAfterStop)
     expect(await cacheNames(harness)).toEqual([])
   })
@@ -813,20 +829,19 @@ describe("Theme resources", () => {
           tokens: { accent: "#abcdef" },
         }),
       )
-      await Bun.sleep(120)
     })
-    await settle(harness)
-
-    expect(harness.setup.captureCharFrame()).toContain("#abcdef:mount:1")
+    await waitForFrame(harness, "#abcdef:mount:1")
     expect(testGlobals().__laziergitThemeMounts).toBe(1)
 
     await act(async () => {
       await writeFile(themePath, `{ "name": "custom", "tokens": }`)
-      await Bun.sleep(120)
     })
-    await settle(harness)
+    await waitFor(
+      harness,
+      () => harness.kernel.diagnostics.getSnapshot().some((entry) => entry.message.includes(themePath)),
+      "the broken theme file to be reported",
+    )
     expect(harness.setup.captureCharFrame()).toContain("#abcdef:mount:1")
-    expect(harness.kernel.diagnostics.getSnapshot().some((entry) => entry.message.includes(themePath))).toBeTrue()
 
     const configSchema = JSON.parse(await readFile(join(harness.configDirectory, "config.schema.json"), "utf8")) as {
       properties: { theme: { properties: { preset: { oneOf: [{ enum: string[] }] } } } }
@@ -906,8 +921,7 @@ describe("Application shell", () => {
     await act(async () => {
       harness.kernel.theme.replace({ ...harness.kernel.theme.getSnapshot(), accent: "#abcdef" })
     })
-    await harness.setup.renderOnce()
-    await harness.setup.renderOnce()
+    await settle(harness)
 
     expect(harness.setup.captureCharFrame()).toContain("#abcdef:mount:1")
     expect(testGlobals().__laziergitThemeMounts).toBe(1)

@@ -2,10 +2,20 @@ import { describe, expect, it } from "bun:test"
 import { RGBA } from "@opentui/core"
 import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  installHarnessLifecycle,
+  press,
+  pressEscape,
+  refreshGit,
+  renderApp,
+  waitFor,
+  waitForFrame,
+  type Harness,
+} from "../test-harness"
 
 installHarnessLifecycle()
 
@@ -86,22 +96,11 @@ async function commit(harness: Harness, contents: string, message: string, date?
 }
 
 /**
- * A key press, plus enough real time for the terminal parser to disambiguate it — a lone
- * escape byte is only a key once the parser has waited for the sequence it could start.
- */
-async function press(harness: Harness, action: () => void): Promise<void> {
-  await act(async () => {
-    action()
-    await Bun.sleep(60)
-  })
-  await settle(harness)
-}
-
-/**
  * Renders with the real branches Extension loaded. Startup focus is the Layout's first cell,
  * so a test that needs the branches Pane unfocused writes a Layout putting the diff Pane in
  * front of it. `"tabbed"` puts both Panes in one cell, where `]` hides — and therefore
- * unmounts — the one that was showing.
+ * unmounts — the one that was showing. Mutations made behind the app's back reach the store
+ * through {@link refreshGit}, so the fingerprint poll is parked out of every test's way.
  */
 async function start(harness: Harness, focus: "branches" | "diff" | "tabbed" = "branches"): Promise<void> {
   const columns =
@@ -113,44 +112,19 @@ async function start(harness: Harness, focus: "branches" | "diff" | "tabbed" = "
   await Promise.all([
     symlink(branchesExtension, join(harness.bundled, "branches")),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
-    writeFile(harness.configFiles.repo, `{ "layout": { "columns": ${columns} } }`),
+    writeFile(
+      harness.configFiles.repo,
+      `{ "layout": { "columns": ${columns} }, "git": { "refreshIntervalMs": 60000 } }`,
+    ),
   ])
   await renderApp(harness)
-  if (focus === "branches") await press(harness, () => harness.setup.mockInput.pressKey("1"))
-}
-
-/** Waits for work a keypress started — a git write, then the refresh and render behind it. */
-async function waitUntil(
-  harness: Harness,
-  condition: () => Promise<boolean>,
-  what: string,
-  timeoutMs = 10_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await settle(harness)
-    // Inside `act`, because the condition shells out to git: the store can publish and the
-    // Panes re-render while it is running.
-    let met = false
-    await act(async () => {
-      met = await condition()
-    })
-    if (met) return
-    await act(async () => {
-      await Bun.sleep(30)
-    })
-  }
-  throw new Error(`Timed out waiting for ${what}. Last frame:\n${frame(harness)}`)
+  if (focus === "branches") await press(harness, "1")
 }
 
 async function openMergeMenuForSecondBranch(harness: Harness, branch: string): Promise<void> {
-  await press(harness, () => harness.setup.mockInput.pressKey("j"))
-  await press(harness, () => harness.setup.mockInput.pressKey("M"))
-  await waitUntil(
-    harness,
-    async () => frame(harness).includes(`Merge ${branch} into main`),
-    `the merge menu for ${branch}`,
-  )
+  await press(harness, "j")
+  await press(harness, "M")
+  await waitForFrame(harness, `Merge ${branch} into main`)
 }
 
 describe("checking out", () => {
@@ -162,15 +136,15 @@ describe("checking out", () => {
     await start(harness)
 
     // The cursor starts on HEAD, where a checkout would succeed and change nothing.
-    await press(harness, () => harness.setup.mockInput.pressKey(" "))
-    expect(frame(harness)).toContain("Already on main")
+    await press(harness, " ")
+    await waitForFrame(harness, "Already on main")
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey(" "))
+    await press(harness, "j")
+    await press(harness, " ")
     // The marker moves because the store refreshed behind the write, which is why a checkout
     // goes through the porcelain helper rather than `raw`.
-    await waitUntil(harness, async () => frame(harness).includes("* other"), "the pane to follow the checkout")
+    await waitForFrame(harness, "* other")
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("other")
   }, 30_000)
 })
@@ -182,20 +156,17 @@ describe("creating a branch", () => {
 
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("n"))
-    expect(frame(harness)).toContain("New branch at main")
+    await press(harness, "n")
+    await waitForFrame(harness, "New branch at main")
 
     await press(harness, () => harness.setup.mockInput.pressEnter())
-    expect(frame(harness)).toContain("Name the branch")
+    await waitForFrame(harness, "Name the branch")
 
     await press(harness, () => void harness.setup.mockInput.typeText("feature/x"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "rev-parse", "--abbrev-ref", "HEAD")) === "feature/x",
-      "the new branch to be checked out",
-    )
+    await waitForFrame(harness, "* feature/x")
+    expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("feature/x")
     // Created *at* the selected branch, which is what "here" in the menu label means.
     expect(await git(harness, "rev-parse", "feature/x")).toBe(await git(harness, "rev-parse", "main"))
   }, 30_000)
@@ -206,11 +177,12 @@ describe("creating a branch", () => {
 
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("n"))
+    await press(harness, "n")
+    await waitForFrame(harness, "New branch at main")
     await press(harness, () => void harness.setup.mockInput.typeText("two words"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
 
-    expect(frame(harness)).toContain("cannot contain spaces")
+    await waitForFrame(harness, "cannot contain spaces")
     expect(await git(harness, "branch", "--list", "--format=%(refname:short)")).toBe("main")
   }, 30_000)
 })
@@ -250,20 +222,19 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("M"))
-    expect(frame(harness)).toContain("Cannot merge main into itself")
+    await press(harness, "M")
+    await waitForFrame(harness, "Cannot merge main into itself")
 
     await openMergeMenuForSecondBranch(harness, "topic")
     expect(frame(harness)).toContain("Regular merge (fast-forward)")
     expect(frame(harness)).toContain("Regular merge (with merge commit)")
     expect(frame(harness)).toContain("Squash merge and leave uncommitted")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("m"))
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "rev-parse", "main")) === target,
-      "main to fast-forward to topic",
-    )
+    await press(harness, "m")
+    // The toast is the command's last act, after the write and its follow-up refresh, so
+    // once it shows the repository below is in its final state.
+    await waitForFrame(harness, "Merged topic into main")
+    expect(await git(harness, "rev-parse", "main")).toBe(target)
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main")
   }, 30_000)
 
@@ -277,12 +248,9 @@ describe("merging a branch into the checked-out branch", () => {
     expect(frame(harness)).toContain("Regular merge (with merge commit)")
     expect(frame(harness)).not.toContain("Regular merge (fast-forward)")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("m"))
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "show", "--no-patch", "--format=%P", "HEAD")).split(" ").length === 2,
-      "the merge commit",
-    )
+    await press(harness, "m")
+    await waitForFrame(harness, "Merged topic into main")
+    expect((await git(harness, "show", "--no-patch", "--format=%P", "HEAD")).split(" ")).toHaveLength(2)
     expect(await git(harness, "log", "-1", "--format=%s")).toBe("Merge branch 'topic'")
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main")
   }, 30_000)
@@ -294,13 +262,10 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, () => harness.setup.mockInput.pressKey("s"))
+    await press(harness, "s")
 
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "diff", "--cached", "--name-only")) === "work.txt",
-      "the squash result to be staged",
-    )
+    await waitForFrame(harness, "Squash-merged topic; the changes are staged")
+    expect(await git(harness, "diff", "--cached", "--name-only")).toBe("work.txt")
     expect(await git(harness, "rev-parse", "HEAD")).toBe(before)
     expect(await git(harness, "show", "HEAD:work.txt")).toBe("one")
   }, 30_000)
@@ -311,13 +276,10 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, () => harness.setup.mockInput.pressKey("S"))
+    await press(harness, "S")
 
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "log", "-1", "--format=%s")) === "Squash merge topic into main",
-      "the squash commit",
-    )
+    await waitForFrame(harness, "Squash-merged topic into main")
+    expect(await git(harness, "log", "-1", "--format=%s")).toBe("Squash merge topic into main")
     expect((await git(harness, "show", "--no-patch", "--format=%P", "HEAD")).split(" ")).toHaveLength(1)
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main")
   }, 30_000)
@@ -328,23 +290,16 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, () => harness.setup.mockInput.pressKey("m"))
-    await waitUntil(
-      harness,
-      async () => frame(harness).includes("Merge topic stopped with conflicts"),
-      "the conflict menu",
-    )
+    await press(harness, "m")
+    await waitForFrame(harness, "Merge topic stopped with conflicts")
 
     expect(frame(harness)).toContain("View conflicted files")
     expect(frame(harness)).toContain("Abort merge")
     expect(await git(harness, "diff", "--name-only", "--diff-filter=U")).toBe("work.txt")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("a"))
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "status", "--porcelain")) === "",
-      "the merge abort to restore the working tree",
-    )
+    await press(harness, "a")
+    await waitForFrame(harness, "Merge aborted")
+    expect(await git(harness, "status", "--porcelain")).toBe("")
     expect(await git(harness, "show", "HEAD:work.txt")).toBe("main")
   }, 30_000)
 
@@ -354,22 +309,15 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, () => harness.setup.mockInput.pressKey("s"))
-    await waitUntil(
-      harness,
-      async () => frame(harness).includes("Merge topic stopped with conflicts"),
-      "the squash conflict menu",
-    )
+    await press(harness, "s")
+    await waitForFrame(harness, "Merge topic stopped with conflicts")
     expect(frame(harness)).toContain("Abort squash merge")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("a"))
-    expect(frame(harness)).toContain("Abort the squash merge?")
-    await press(harness, () => harness.setup.mockInput.pressKey("y"))
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "status", "--porcelain")) === "",
-      "the squash abort to restore the working tree",
-    )
+    await press(harness, "a")
+    await waitForFrame(harness, "Abort the squash merge?")
+    await press(harness, "y")
+    await waitForFrame(harness, "Squash merge aborted")
+    expect(await git(harness, "status", "--porcelain")).toBe("")
     expect(await git(harness, "show", "HEAD:work.txt")).toBe("main")
   }, 30_000)
 
@@ -379,36 +327,22 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, () => harness.setup.mockInput.pressKey("m"))
-    await waitUntil(
-      harness,
-      async () => frame(harness).includes("Merge topic stopped with conflicts"),
-      "the conflict menu",
-    )
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await press(harness, "m")
+    await waitForFrame(harness, "Merge topic stopped with conflicts")
+    await pressEscape(harness)
 
     await writeFile(join(harness.directory, "work.txt"), "resolved\n")
     await git(harness, "add", "work.txt")
-    await act(async () => {
-      await harness.kernel.git.refresh()
-    })
-    await settle(harness)
+    await refreshGit(harness)
 
-    await press(harness, () => harness.setup.mockInput.pressKey("M"))
-    await waitUntil(
-      harness,
-      async () => frame(harness).includes("Merge in progress on main"),
-      "the merge recovery menu",
-    )
+    await press(harness, "M")
+    await waitForFrame(harness, "Merge in progress on main")
     expect(frame(harness)).toContain("Continue merge")
     expect(frame(harness)).toContain("Abort merge")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("c"))
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "show", "--no-patch", "--format=%P", "HEAD")).split(" ").length === 2,
-      "the continued merge commit",
-    )
+    await press(harness, "c")
+    await waitForFrame(harness, "Merge completed")
+    expect((await git(harness, "show", "--no-patch", "--format=%P", "HEAD")).split(" ")).toHaveLength(2)
     expect(await git(harness, "show", "HEAD:work.txt")).toBe("resolved")
   }, 30_000)
 })
@@ -427,22 +361,21 @@ describe("deleting a branch", () => {
     await withUnmergedBranch(harness)
 
     await start(harness)
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("d"))
-    expect(frame(harness)).toContain("Delete wip?")
+    await press(harness, "j")
+    await press(harness, "d")
+    await waitForFrame(harness, "Delete wip?")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("y"))
+    await press(harness, "y")
     // git's refusal is read, not assumed: the second confirm only appears because the branch
     // is unmerged.
-    await waitUntil(harness, async () => frame(harness).includes("Force delete wip?"), "the force confirm to open")
+    await waitForFrame(harness, "Force delete wip?")
     expect(frame(harness)).toContain("commits no other branch has")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("y"))
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "branch", "--list", "wip", "--format=%(refname:short)")) === "",
-      "the branch to be deleted",
-    )
+    await press(harness, "y")
+    // The row leaving the screen is the store publishing the delete, which is the write's
+    // last effect.
+    await waitForFrame(harness, (screen) => !screen.includes("wip"))
+    expect(await git(harness, "branch", "--list", "wip", "--format=%(refname:short)")).toBe("")
   }, 30_000)
 
   it("keeps the branch when the force confirm is declined", async () => {
@@ -450,16 +383,15 @@ describe("deleting a branch", () => {
     await withUnmergedBranch(harness)
 
     await start(harness)
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("d"))
-    await press(harness, () => harness.setup.mockInput.pressKey("y"))
-    await waitUntil(harness, async () => frame(harness).includes("Force delete wip?"), "the force confirm to open")
+    await press(harness, "j")
+    await press(harness, "d")
+    await waitForFrame(harness, "Delete wip?")
+    await press(harness, "y")
+    await waitForFrame(harness, "Force delete wip?")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("n"))
-    await settle(harness)
-
+    await press(harness, "n")
+    await waitForFrame(harness, (screen) => !screen.includes("Force delete wip?"))
     expect(await git(harness, "branch", "--list", "wip", "--format=%(refname:short)")).toBe("wip")
-    expect(frame(harness)).not.toContain("Force delete wip?")
   }, 30_000)
 
   it("refuses to delete the branch you are on, without asking git", async () => {
@@ -467,9 +399,9 @@ describe("deleting a branch", () => {
     await seed(harness)
 
     await start(harness)
-    await press(harness, () => harness.setup.mockInput.pressKey("d"))
+    await press(harness, "d")
 
-    expect(frame(harness)).toContain("you are on it")
+    await waitForFrame(harness, "you are on it")
     expect(frame(harness)).not.toContain("Delete main?")
   }, 30_000)
 })
@@ -493,10 +425,10 @@ describe("the branch menu", () => {
     await withBehindBranch(harness)
 
     await start(harness)
-    await press(harness, () => harness.setup.mockInput.pressKey("x"))
+    await press(harness, "x")
+    await waitForFrame(harness, "Branch: main")
 
     const onHead = frame(harness)
-    expect(onHead).toContain("Branch: main")
     expect(onHead).toContain("Create branch here")
     // Nothing that would act on the branch you are standing on.
     expect(onHead).not.toContain("Check out")
@@ -505,12 +437,12 @@ describe("the branch menu", () => {
     // In sync is not behind, so there is nothing to fast-forward.
     expect(onHead).not.toContain("Fast-forward")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("x"))
+    await pressEscape(harness)
+    await press(harness, "j")
+    await press(harness, "x")
+    await waitForFrame(harness, "Branch: stale")
 
     const onStale = frame(harness)
-    expect(onStale).toContain("Branch: stale")
     expect(onStale).toContain("Check out")
     expect(onStale).toContain("Merge into current branch")
     expect(onStale).toContain("Force delete")
@@ -518,7 +450,7 @@ describe("the branch menu", () => {
     // It has an upstream already, so there is nothing to set one up for.
     expect(onStale).not.toContain("Push, setting upstream")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
   }, 30_000)
 
   /**
@@ -531,12 +463,12 @@ describe("the branch menu", () => {
     await addOrigin(harness)
 
     await start(harness)
-    await press(harness, () => harness.setup.mockInput.pressKey("x"))
+    await press(harness, "x")
+    await waitForFrame(harness, "Branch: main")
 
-    expect(frame(harness)).toContain("Branch: main")
     expect(frame(harness)).not.toContain("Open a pull request")
 
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
   }, 30_000)
 
   it("offers a pull request when the remote is a hosting service", async () => {
@@ -545,11 +477,10 @@ describe("the branch menu", () => {
     await git(harness, "remote", "add", "origin", "git@github.com:acme/tools.git")
 
     await start(harness)
-    await press(harness, () => harness.setup.mockInput.pressKey("x"))
+    await press(harness, "x")
+    await waitForFrame(harness, "Open a pull request")
 
-    expect(frame(harness)).toContain("Open a pull request")
-
-    await press(harness, () => harness.setup.mockInput.pressEscape())
+    await pressEscape(harness)
   }, 30_000)
 
   it("fast-forwards a branch that is not checked out", async () => {
@@ -559,15 +490,15 @@ describe("the branch menu", () => {
     expect(await git(harness, "rev-parse", "stale")).not.toBe(target)
 
     await start(harness)
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await press(harness, () => harness.setup.mockInput.pressKey("x"))
-    await press(harness, () => harness.setup.mockInput.pressKey("f"))
+    // The behind marker is what the fast-forward erases, so its presence is the baseline.
+    await waitForFrame(harness, "↓1")
+    await press(harness, "j")
+    await press(harness, "x")
+    await waitForFrame(harness, "Branch: stale")
+    await press(harness, "f")
 
-    await waitUntil(
-      harness,
-      async () => (await git(harness, "rev-parse", "stale")) === target,
-      "stale to catch up with its upstream",
-    )
+    await waitForFrame(harness, (screen) => !screen.includes("↓1"))
+    expect(await git(harness, "rev-parse", "stale")).toBe(target)
     // The user never left the branch they were on.
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main")
   }, 30_000)
@@ -578,16 +509,16 @@ describe("the branch menu", () => {
     await addOrigin(harness)
 
     await start(harness)
-    await press(harness, () => harness.setup.mockInput.pressKey("x"))
-    expect(frame(harness)).toContain("Push, setting upstream")
+    await press(harness, "x")
+    await waitForFrame(harness, "Push, setting upstream")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("p"))
+    await press(harness, "p")
     // A row says nothing about an upstream that is in sync, so the outcome is read from the
     // store rather than from the frame. Waiting for the store also waits for the write's
     // follow-up refresh, not merely for git's first on-disk side effect.
-    await waitUntil(
+    await waitFor(
       harness,
-      async () => {
+      () => {
         const upstream = harness.kernel.git.getSnapshot().branches.find((branch) => branch.name === "main")?.upstream
         return upstream?.remote === "origin" && upstream.branch === "main"
       },
@@ -611,26 +542,27 @@ describe("the branch menu", () => {
     await start(harness)
     // The stub prints the DiffTarget it was handed, so this pins the kind the Pane pushes:
     // `branch`, which is what lets the detail view name what a clipped row cut off.
-    expect(frame(harness)).toContain("diff branch main")
+    await waitForFrame(harness, "diff branch main")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("j"))
-    await waitUntil(
-      harness,
-      async () => frame(harness).includes("diff branch topic"),
-      "the diff to follow the cursor onto topic",
-    )
+    await press(harness, "j")
+    await waitForFrame(harness, "diff branch topic")
 
-    await press(harness, () => harness.setup.mockInput.pressKey("x"))
-    await press(harness, () => harness.setup.mockInput.pressKey("u"))
-    expect(frame(harness)).toContain("Upstream for topic")
+    await press(harness, "x")
+    await waitForFrame(harness, "Branch: topic")
+    await press(harness, "u")
+    await waitForFrame(harness, "Upstream for topic")
     expect(frame(harness)).toContain("origin/topic")
 
     await press(harness, () => harness.setup.mockInput.pressEnter())
-    await waitUntil(
+    await waitFor(
       harness,
-      async () => (await git(harness, "config", "--get", "branch.topic.merge")) === "refs/heads/topic",
+      () => {
+        const upstream = harness.kernel.git.getSnapshot().branches.find((branch) => branch.name === "topic")?.upstream
+        return upstream?.remote === "origin" && upstream.branch === "topic"
+      },
       "the upstream to be configured",
     )
+    expect(await git(harness, "config", "--get", "branch.topic.merge")).toBe("refs/heads/topic")
   }, 30_000)
 })
 
@@ -645,13 +577,13 @@ describe("what a row says about its upstream", () => {
     await start(harness)
 
     // Ahead by one, behind by none: the row says `↑1` and stops there.
-    await waitUntil(harness, async () => frame(harness).includes("* main"), "the branch row")
-    const ahead = frame(harness)
-    expect(ahead).toContain("↑1")
-    expect(ahead).not.toContain("↓")
+    await waitForFrame(harness, "↑1")
+    expect(frame(harness)).toContain("* main")
+    expect(frame(harness)).not.toContain("↓")
 
     await git(harness, "push", "--quiet")
-    await waitUntil(harness, async () => !frame(harness).includes("↑1"), "the push to land in the row")
+    await refreshGit(harness)
+    await waitForFrame(harness, (screen) => !screen.includes("↑1"))
     // In sync now, so the whole column goes away rather than becoming a tick.
     const synced = frame(harness)
     expect(synced).toContain("* main")
@@ -669,7 +601,7 @@ describe("what a row says about its upstream", () => {
     await git(harness, "fetch", "--quiet", "--prune")
 
     await start(harness)
-    await waitUntil(harness, async () => frame(harness).includes("abandoned"), "the branch row")
+    await waitForFrame(harness, "abandoned")
 
     // `gone` is reported by git as `↑0 ↓0`, byte-identical to a branch in sync, so colour is
     // the whole signal — and the char frame cannot see it. Spans can.
@@ -693,7 +625,7 @@ describe("what a row says about its upstream", () => {
     await git(harness, "branch", long)
 
     await start(harness)
-    await waitUntil(harness, async () => frame(harness).includes("feature/PROJ"), "the long branch row")
+    await waitForFrame(harness, "feature/PROJ")
 
     // Clipped, not wrapped: the tail of the name is absent, and no row below it moved down.
     const lines = frame(harness).split("\n")

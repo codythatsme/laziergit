@@ -8,8 +8,11 @@ import {
   createHarness,
   frame,
   installHarnessLifecycle,
+  press,
+  pressEscape,
   renderApp,
-  settle,
+  waitFor,
+  waitForFrame,
   type Harness,
 } from "../../packages/core/src/test-harness"
 
@@ -61,21 +64,26 @@ const diffStub = `
   })
 `
 
+/** Inside `act`, because a refresh landing mid-spawn is a React update. */
 async function git(harness: Harness, ...args: readonly string[]): Promise<string> {
-  const child = Bun.spawn(["git", ...args], {
-    cwd: harness.directory,
-    env: { ...process.env, ...gitIsolationEnv },
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
+  let stdout = ""
+  await act(async () => {
+    const child = Bun.spawn(["git", ...args], {
+      cwd: harness.directory,
+      env: { ...process.env, ...gitIsolationEnv },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [out, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    if (exitCode !== 0) throw new Error(`git ${args.join(" ")} exited ${exitCode}: ${stderr.trim()}`)
+    stdout = out.trim()
   })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  if (exitCode !== 0) throw new Error(`git ${args.join(" ")} exited ${exitCode}: ${stderr.trim()}`)
-  return stdout.trim()
+  return stdout
 }
 
 async function seed(harness: Harness): Promise<void> {
@@ -95,20 +103,15 @@ async function commit(harness: Harness, contents: string, message: string): Prom
   await git(harness, "commit", "--quiet", "--all", "--message", message)
 }
 
-async function press(harness: Harness, action: () => void): Promise<void> {
-  await act(async () => {
-    action()
-    await Bun.sleep(60)
-  })
-  await settle(harness)
-}
-
 async function start(harness: Harness): Promise<void> {
   await Promise.all([
     symlink(branchesExtension, join(harness.bundled, "branches")),
     symlink(remoteBranchesExtension, join(harness.bundled, "remote-branches")),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
-    writeFile(harness.configFiles.repo, `{ "layout": { "columns": [["branches"], ["diff"]] } }`),
+    writeFile(
+      harness.configFiles.repo,
+      `{ "layout": { "columns": [["branches"], ["diff"]] }, "git": { "refreshIntervalMs": 60000 } }`,
+    ),
   ])
   await renderApp(harness)
 }
@@ -119,39 +122,19 @@ async function startNumberedLayout(harness: Harness): Promise<void> {
     symlink(remoteBranchesExtension, join(harness.bundled, "remote-branches")),
     writeFile(join(harness.repo, "files.tsx"), filesStub),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
-    writeFile(harness.configFiles.repo, `{ "layout": { "columns": [["files", "branches"], ["diff"]] } }`),
+    writeFile(
+      harness.configFiles.repo,
+      `{ "layout": { "columns": [["files", "branches"], ["diff"]] }, "git": { "refreshIntervalMs": 60000 } }`,
+    ),
   ])
   await renderApp(harness)
 }
 
-async function waitUntil(
-  harness: Harness,
-  condition: () => Promise<boolean>,
-  what: string,
-  timeoutMs = 10_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await settle(harness)
-    let met = false
-    await act(async () => {
-      met = await condition()
-    })
-    if (met) return
-    await act(async () => {
-      await Bun.sleep(30)
-    })
-  }
-  throw new Error(`Timed out waiting for ${what}. Last frame:\n${frame(harness)}`)
-}
-
 async function filterCurrentList(harness: Harness, query: string): Promise<void> {
-  await press(harness, () => harness.setup.mockInput.pressKey("/"))
-  await act(async () => {
-    await harness.setup.mockInput.typeText(query)
-    await Bun.sleep(60)
-  })
-  await settle(harness)
+  await press(harness, "/")
+  await waitForFrame(harness, "Filter:")
+  await press(harness, () => void harness.setup.mockInput.typeText(query))
+  await waitForFrame(harness, `Filter: ${query}`)
   await press(harness, () => harness.setup.mockInput.pressEnter())
 }
 
@@ -175,23 +158,23 @@ it("keeps local and remote branches in pane 2 and cycles its tabs with 2 or brac
   await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
 
   await startNumberedLayout(harness)
-  await press(harness, () => harness.setup.mockInput.pressKey("2"))
-  expect(frame(harness)).toContain("[Local branches] - Remote")
+  await press(harness, "2")
+  await waitForFrame(harness, "[Local branches] - Remote")
 
-  await press(harness, () => harness.setup.mockInput.pressKey("2"))
-  expect(frame(harness)).toContain("Local branches - [Remote]")
+  await press(harness, "2")
+  await waitForFrame(harness, "Local branches - [Remote]")
 
-  await press(harness, () => harness.setup.mockInput.pressKey("2"))
-  expect(frame(harness)).toContain("[Local branches] - Remote")
+  await press(harness, "2")
+  await waitForFrame(harness, "[Local branches] - Remote")
 
-  await press(harness, () => harness.setup.mockInput.pressKey("]"))
-  expect(frame(harness)).toContain("Local branches - [Remote]")
-  await press(harness, () => harness.setup.mockInput.pressKey("["))
-  expect(frame(harness)).toContain("[Local branches] - Remote")
+  await press(harness, "]")
+  await waitForFrame(harness, "Local branches - [Remote]")
+  await press(harness, "[")
+  await waitForFrame(harness, "[Local branches] - Remote")
 
-  await press(harness, () => harness.setup.mockInput.pressKey("3"))
-  await press(harness, () => harness.setup.mockInput.pressKey("z"))
-  expect(frame(harness)).toContain("diff focused focused")
+  await press(harness, "3")
+  await press(harness, "z")
+  await waitForFrame(harness, "diff focused focused")
 }, 30_000)
 
 it("supports the single-remote branch workflow", async () => {
@@ -203,70 +186,80 @@ it("supports the single-remote branch workflow", async () => {
   await start(harness)
   expect(frame(harness)).toContain("[Local branches] - Remote")
 
-  await press(harness, () => harness.setup.mockInput.pressKey("]"))
-  expect(frame(harness)).toContain("Local branches - [Remote]")
+  await press(harness, "]")
+  await waitForFrame(harness, "Local branches - [Remote]")
   expect(frame(harness)).toContain(" origin")
   expect(frame(harness)).toContain("remote-only")
 
   await filterCurrentList(harness, "remote-only")
-  await press(harness, () => harness.setup.mockInput.pressKey(" "))
-  await waitUntil(
+  await press(harness, " ")
+  // From the store, so the wait also covers the write's follow-up refresh.
+  await waitFor(
     harness,
-    async () => (await git(harness, "rev-parse", "--abbrev-ref", "HEAD")) === "remote-only",
+    () => {
+      const head = harness.kernel.git.getSnapshot().head
+      return head.kind === "onBranch" && head.branch === "remote-only"
+    },
     "the tracking branch to be checked out",
   )
   expect(await git(harness, "rev-parse", "HEAD")).toBe(oid)
   expect(await git(harness, "config", "--get", "branch.remote-only.remote")).toBe("origin")
   expect(await git(harness, "config", "--get", "branch.remote-only.merge")).toBe("refs/heads/remote-only")
 
-  await press(harness, () => harness.setup.mockInput.pressEscape())
+  await pressEscape(harness)
   await filterCurrentList(harness, "custom-source")
-  await press(harness, () => harness.setup.mockInput.pressKey("n"))
-  expect(frame(harness)).toContain("New local branch from origin/custom-source")
+  await press(harness, "n")
+  await waitForFrame(harness, "New local branch from origin/custom-source")
   await press(harness, () => void harness.setup.mockInput.typeText("-local"))
   await press(harness, () => harness.setup.mockInput.pressEnter())
-  await waitUntil(
+  await waitFor(
     harness,
-    async () => (await git(harness, "rev-parse", "--abbrev-ref", "HEAD")) === "custom-source-local",
+    () => {
+      const head = harness.kernel.git.getSnapshot().head
+      return head.kind === "onBranch" && head.branch === "custom-source-local"
+    },
     "the custom tracking branch to be checked out",
   )
   expect(await git(harness, "config", "--get", "branch.custom-source-local.remote")).toBe("origin")
   expect(await git(harness, "config", "--get", "branch.custom-source-local.merge")).toBe("refs/heads/custom-source")
 
-  await press(harness, () => harness.setup.mockInput.pressEscape())
+  await pressEscape(harness)
   await filterCurrentList(harness, "remote-only")
-  await press(harness, () => harness.setup.mockInput.pressKey("u"))
-  expect(frame(harness)).toContain("Set upstream for custom-source-local?")
+  await press(harness, "u")
+  await waitForFrame(harness, "Set upstream for custom-source-local?")
   expect(frame(harness)).toContain("custom-source-local will track origin/remote-only")
-  await press(harness, () => harness.setup.mockInput.pressKey("y"))
-  await waitUntil(
+  await press(harness, "y")
+  await waitFor(
     harness,
-    async () =>
-      (await git(harness, "config", "--get", "branch.custom-source-local.merge")) === "refs/heads/remote-only",
+    () =>
+      harness.kernel.git
+        .getSnapshot()
+        .branches.some((branch) => branch.name === "custom-source-local" && branch.upstream?.branch === "remote-only"),
     "the selected remote branch to become the current branch's upstream",
   )
+  expect(await git(harness, "config", "--get", "branch.custom-source-local.merge")).toBe("refs/heads/remote-only")
 
   await git(harness, "--git-dir", join(harness.directory, "origin.git"), "update-ref", "refs/heads/new-remote", oid)
-  await press(harness, () => harness.setup.mockInput.pressKey("f"))
-  await waitUntil(
+  await press(harness, "f")
+  await waitFor(
     harness,
-    async () =>
+    () =>
       harness.kernel.git
         .getSnapshot()
         .remoteBranches.some((branch) => branch.remote === "origin" && branch.name === "new-remote"),
     "fetch to refresh the remote branch list",
   )
-  await press(harness, () => harness.setup.mockInput.pressEscape())
-  expect(frame(harness)).toContain("new-remote")
+  await pressEscape(harness)
+  await waitForFrame(harness, "new-remote")
 
   await filterCurrentList(harness, "remote-only")
-  await press(harness, () => harness.setup.mockInput.pressKey("x"))
-  expect(frame(harness)).toContain("Remote branch: origin/remote-only")
+  await press(harness, "x")
+  await waitForFrame(harness, "Remote branch: origin/remote-only")
   expect(frame(harness)).toContain("Check out as detached HEAD")
-  await press(harness, () => harness.setup.mockInput.pressKey("d"))
-  await waitUntil(
+  await press(harness, "d")
+  await waitFor(
     harness,
-    async () => (await git(harness, "rev-parse", "--abbrev-ref", "HEAD")) === "HEAD",
+    () => harness.kernel.git.getSnapshot().head.kind === "detached",
     "HEAD to detach at the remote branch",
   )
   expect(await git(harness, "rev-parse", "HEAD")).toBe(oid)
@@ -281,20 +274,21 @@ it("requires choosing a remote when more than one is configured", async () => {
   await git(harness, "fetch", "--quiet", "upstream")
 
   await start(harness)
-  await press(harness, () => harness.setup.mockInput.pressKey("]"))
+  await press(harness, "]")
+  await waitForFrame(harness, "1 branch")
 
   const picker = frame(harness)
   expect(picker).toContain("origin")
   expect(picker).toContain("upstream")
-  expect(picker).toContain("1 branch")
 
-  await press(harness, () => harness.setup.mockInput.pressKey("j"))
-  await press(harness, () => harness.setup.mockInput.pressKey(" "))
-  expect(frame(harness)).toContain(" upstream")
+  await press(harness, "j")
+  await press(harness, " ")
+  // The picker leaving is what says the choice landed, not the names, which it also shows.
+  await waitForFrame(harness, (screen) => !screen.includes("1 branch") && screen.includes(" upstream"))
   expect(frame(harness)).toContain("main")
 
-  await press(harness, () => harness.setup.mockInput.pressEscape())
+  await pressEscape(harness)
+  await waitForFrame(harness, "1 branch")
   expect(frame(harness)).toContain("origin")
   expect(frame(harness)).toContain("upstream")
-  expect(frame(harness)).toContain("1 branch")
 }, 30_000)

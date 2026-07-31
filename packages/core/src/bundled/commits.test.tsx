@@ -1,10 +1,19 @@
 import { describe, expect, it } from "bun:test"
 import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
-import { createHarness, frame, installHarnessLifecycle, renderApp, settle, type Harness } from "../test-harness"
+import {
+  createHarness,
+  frame,
+  installHarnessLifecycle,
+  press,
+  pressEscape,
+  renderApp,
+  waitFor,
+  waitForFrame,
+  type Harness,
+} from "../test-harness"
 
 installHarnessLifecycle()
 
@@ -82,9 +91,10 @@ const diffStub = `
 /**
  * The diff Pane is listed first so it owns the initial focus: the rule under test is that the
  * commits Pane drives the diff only while *it* is focused, which needs a frame where it is not.
+ * Every mutation these tests make goes through laziergit, so the fingerprint poll is parked.
  */
-function layout(git = ""): string {
-  return `{ "layout": { "columns": [["diff"], ["commits"]] }${git} }`
+function layout(): string {
+  return `{ "layout": { "columns": [["diff"], ["commits"]] }, "git": { "refreshIntervalMs": 60000 } }`
 }
 
 interface Repo {
@@ -123,36 +133,34 @@ async function commit(repo: Repo, subject: string): Promise<void> {
 }
 
 /**
- * A key press, plus enough real time for the terminal parser to disambiguate it — a lone
- * escape byte is only a key once the parser has waited for the sequence it could start.
+ * Opens the action menu for the selected commit and waits for it to be on screen. The oid is
+ * read before the press: a git spawn between press and wait is an await no `act` covers, and
+ * the menu render would land in it.
  */
-async function press(harness: Harness, key: string, modifiers?: { readonly ctrl?: boolean }): Promise<void> {
-  await act(async () => {
-    harness.setup.mockInput.pressKey(key, modifiers)
-    await Bun.sleep(60)
-  })
-  await settle(harness)
+async function openMenu(repo: Repo, revision: string): Promise<void> {
+  const short = await repo.shortOid(revision)
+  await press(repo.harness, "x")
+  await waitForFrame(repo.harness, `Commit ${short}`)
 }
 
 /**
- * Renders until the screen (or the repository) catches up. Menu actions are async and the
- * store refresh that follows them lands on its own turn, so the assertion is about the
- * settled result rather than whatever the next microtask happened to produce.
+ * Confirms a reset and waits for its success toast. The toast repeats the confirmation's
+ * title word for word, so the wait also requires the confirmation's message to be gone —
+ * `title` alone would match the popup that is still closing.
  */
-async function waitUntil(harness: Harness, what: string, ready: () => Promise<boolean> | boolean): Promise<void> {
-  const deadline = Date.now() + 10_000
-  while (Date.now() < deadline) {
-    await settle(harness)
-    if (await ready()) return
-    await act(async () => {
-      await Bun.sleep(30)
-    })
-  }
-  throw new Error(`Timed out waiting for ${what}. Last frame:\n${frame(harness)}`)
-}
-
-function waitForFrame(harness: Harness, expected: string): Promise<void> {
-  return waitUntil(harness, JSON.stringify(expected), () => frame(harness).includes(expected))
+async function confirmReset(repo: Repo, title: string, message: string, target: string): Promise<void> {
+  await press(repo.harness, "y")
+  await waitForFrame(repo.harness, (screen) => screen.includes(title) && !screen.includes(message))
+  // The store's head is the write's last effect; the toast text alone can coincide with
+  // popup chrome still leaving the frame.
+  await waitFor(
+    repo.harness,
+    () => {
+      const head = repo.harness.kernel.git.getSnapshot().head
+      return head.kind === "onBranch" && head.oid === target
+    },
+    `HEAD to move to ${target}`,
+  )
 }
 
 describe("searching commits", () => {
@@ -161,26 +169,22 @@ describe("searching commits", () => {
     await commit(repo, "first commit")
     await commit(repo, "second commit")
     await commit(repo, "third commit")
+    const match = await repo.shortOid("HEAD~1")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "/")
-    await act(async () => {
-      await repo.harness.setup.mockInput.typeText("second")
-    })
-    await settle(repo.harness)
-    await act(async () => {
-      repo.harness.setup.mockInput.pressEnter()
-      await Bun.sleep(60)
-    })
-    await settle(repo.harness)
+    await waitForFrame(repo.harness, "Search: ")
+    await press(repo.harness, () => void repo.harness.setup.mockInput.typeText("second"))
+    await press(repo.harness, () => repo.harness.setup.mockInput.pressEnter())
 
+    await waitForFrame(repo.harness, "matches for 'second' (1 of 1)")
+    // The landing pushes the match into the diff, which is the jump's last observable effect.
+    await waitForFrame(repo.harness, `diff: commit ${match}`)
     const rendered = frame(repo.harness)
     expect(rendered).toContain("first commit")
     expect(rendered).toContain("second commit")
     expect(rendered).toContain("third commit")
-    expect(rendered).toContain("matches for 'second' (1 of 1)")
-    expect(rendered).toContain(`diff: commit ${await repo.shortOid("HEAD~1")}`)
   })
 })
 
@@ -191,28 +195,25 @@ describe("creating a branch from a commit", () => {
     await commit(repo, "second commit")
     await commit(repo, "third commit")
     const selected = await repo.oid("HEAD~1")
+    const short = await repo.shortOid("HEAD~1")
 
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "n")
+    await waitForFrame(repo.harness, `New branch at ${short}`)
 
-    expect(frame(repo.harness)).toContain(`New branch at ${await repo.shortOid("HEAD~1")}`)
+    await press(repo.harness, () => void repo.harness.setup.mockInput.typeText("feature/from-second"))
+    await press(repo.harness, () => repo.harness.setup.mockInput.pressEnter())
 
-    await act(async () => {
-      await repo.harness.setup.mockInput.typeText("feature/from-second")
-    })
-    await settle(repo.harness)
-    await act(async () => {
-      repo.harness.setup.mockInput.pressEnter()
-      await Bun.sleep(60)
-    })
-    await settle(repo.harness)
-
-    await waitUntil(
+    // From the store, so the wait also covers the write's follow-up refresh.
+    await waitFor(
       repo.harness,
+      () => {
+        const head = repo.harness.kernel.git.getSnapshot().head
+        return head.kind === "onBranch" && head.branch === "feature/from-second"
+      },
       "the new branch to be checked out at the highlighted commit",
-      async () => (await repo.run("branch", "--show-current")).trim() === "feature/from-second",
     )
     expect(await repo.oid("HEAD")).toBe(selected)
     expect(await repo.oid("feature/from-second")).toBe(selected)
@@ -228,17 +229,15 @@ describe("the commits action menu", () => {
     const parent = await repo.oid("HEAD~1")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
-
-    expect(frame(repo.harness)).toContain(`Commit ${await repo.shortOid("HEAD~1")}`)
+    await openMenu(repo, "HEAD~1")
     expect(frame(repo.harness)).toContain("Check out this commit")
 
     await press(repo.harness, "c")
     // The word that matters: a checkout from a log is a detach, and saying so before the
     // keypress is the difference between a feature and a trap.
-    expect(frame(repo.harness)).toContain("HEAD will be detached at")
+    await waitForFrame(repo.harness, "HEAD will be detached at")
 
     await press(repo.harness, "y")
     await waitForFrame(repo.harness, "HEAD detached at")
@@ -253,12 +252,15 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "c")
-    await press(repo.harness, "n")
+    await waitForFrame(repo.harness, "HEAD will be detached at")
 
+    await press(repo.harness, "n")
+    // The popup leaving is the decline's only effect; nothing reaches git behind it.
+    await waitForFrame(repo.harness, (screen) => !screen.includes("HEAD will be detached at"))
     expect(await repo.oid("HEAD")).toBe(head)
     expect((await repo.run("branch", "--show-current")).trim()).toBe("main")
   })
@@ -273,16 +275,15 @@ describe("the commits action menu", () => {
     await writeFile(join(repo.harness.directory, "first-commit.txt"), "edited\n")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "h")
 
-    expect(frame(repo.harness)).toContain("1 uncommitted change destroyed for good")
+    await waitForFrame(repo.harness, "1 uncommitted change destroyed for good")
     expect(frame(repo.harness)).toContain("reflog")
 
-    await press(repo.harness, "y")
-    await waitForFrame(repo.harness, "Reset hard to")
+    await confirmReset(repo, "Reset hard to", "destroyed for good", parent)
     expect(await repo.oid("HEAD")).toBe(parent)
     // Still on the branch — a reset moves it, unlike the checkout above.
     expect((await repo.run("branch", "--show-current")).trim()).toBe("main")
@@ -300,18 +301,17 @@ describe("the commits action menu", () => {
     await repo.run("add", "first-commit.txt")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "m")
 
     // A mixed reset moves the branch as far as the hard one, so it asks first — and says what
     // it costs.
-    expect(frame(repo.harness)).toContain("1 staged change unstaged, though kept in the working tree")
+    await waitForFrame(repo.harness, "1 staged change unstaged, though kept in the working tree")
     expect(frame(repo.harness)).toContain("1 commit off this branch, left only in the reflog")
 
-    await press(repo.harness, "y")
-    await waitForFrame(repo.harness, "Reset mixed to")
+    await confirmReset(repo, "Reset mixed to", "though kept in the working tree", parent)
     expect(await repo.oid("HEAD")).toBe(parent)
     // The file the undone commit added survives as untracked: mixed keeps the working tree.
     expect(await Bun.file(join(repo.harness.directory, "second-commit.txt")).text()).toBe("second commit\n")
@@ -326,17 +326,18 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "s")
 
     // Soft touches neither the index nor the files, and still takes a commit off the branch
     // with only the reflog to get it back.
-    expect(frame(repo.harness)).toContain("Reset soft to")
+    await waitForFrame(repo.harness, "Reset soft to")
     expect(frame(repo.harness)).toContain("1 commit off this branch, left only in the reflog")
 
     await press(repo.harness, "n")
+    await waitForFrame(repo.harness, (screen) => !screen.includes("Reset soft to"))
     expect(await repo.oid("HEAD")).toBe(head)
   })
 
@@ -348,16 +349,16 @@ describe("the commits action menu", () => {
     const parent = await repo.oid("HEAD~1")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "s")
+    await waitForFrame(repo.harness, "1 commit off this branch, left only in the reflog")
 
     // Nothing has moved yet — the popup is on screen and the reset is behind it.
     expect(await repo.oid("HEAD")).toBe(head)
 
-    await press(repo.harness, "y")
-    await waitForFrame(repo.harness, "Reset soft to")
+    await confirmReset(repo, "Reset soft to", "left only in the reflog", parent)
     expect(await repo.oid("HEAD")).toBe(parent)
     // Soft keeps the index, so the undone commit's file is staged rather than untracked.
     expect((await repo.run("diff", "--cached", "--name-only")).trim()).toBe("second-commit.txt")
@@ -370,11 +371,11 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
-    await press(repo.harness, "x")
+    await press(repo.harness, "2")
+    await openMenu(repo, "HEAD")
     await press(repo.harness, "v")
 
-    expect(frame(repo.harness)).toContain("will undo")
+    await waitForFrame(repo.harness, "will undo")
 
     await press(repo.harness, "y")
     await waitForFrame(repo.harness, "Reverted")
@@ -394,25 +395,24 @@ describe("the commits action menu", () => {
     await repo.run("merge", "--quiet", "--no-ff", "--no-edit", "-m", "merge feature", "feature")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
-    await press(repo.harness, "x")
-
+    await press(repo.harness, "2")
     // The merge is the newest commit and so the selected row. Offering the item here would
     // promise an undo `git revert` rejects for want of `-m`.
-    expect(frame(repo.harness)).toContain("Check out this commit")
-    expect(frame(repo.harness)).not.toContain("Revert this commit")
-    expect(frame(repo.harness)).not.toContain("Squash into the parent commit")
-    expect(frame(repo.harness)).not.toContain("Reword this commit")
-    expect(frame(repo.harness)).not.toContain("Drop this commit")
+    await openMenu(repo, "HEAD")
 
-    // `"ESCAPE"`, not `"escape"`: the mock sends a named key's byte sequence and any other
-    // string as literal characters, so the lowercase spelling would type e-s-c-a-p-e.
-    await press(repo.harness, "ESCAPE")
+    const merge = frame(repo.harness)
+    expect(merge).toContain("Check out this commit")
+    expect(merge).not.toContain("Revert this commit")
+    expect(merge).not.toContain("Squash into the parent commit")
+    expect(merge).not.toContain("Reword this commit")
+    expect(merge).not.toContain("Drop this commit")
+
+    await pressEscape(repo.harness)
     await press(repo.harness, "j")
     await press(repo.harness, "x")
 
     // Back on the very next row, so this is a gate on merges and not a missing feature.
-    expect(frame(repo.harness)).toContain("Revert this commit")
+    await waitForFrame(repo.harness, "Revert this commit")
   })
 
   it("hides the remote item when the remote is a directory nobody can browse", async () => {
@@ -421,8 +421,8 @@ describe("the commits action menu", () => {
     await repo.run("remote", "add", "origin", repo.harness.directory)
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
-    await press(repo.harness, "x")
+    await press(repo.harness, "2")
+    await openMenu(repo, "HEAD")
 
     expect(frame(repo.harness)).toContain("Check out this commit")
     expect(frame(repo.harness)).not.toContain("Open this commit on the remote")
@@ -434,10 +434,10 @@ describe("the commits action menu", () => {
     await repo.run("remote", "add", "origin", "git@github.com:acme/tools.git")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "x")
 
-    expect(frame(repo.harness)).toContain("Open this commit on the remote")
+    await waitForFrame(repo.harness, "Open this commit on the remote")
   })
 
   it("squashes the selected commit into its parent and replays newer history", async () => {
@@ -448,12 +448,12 @@ describe("the commits action menu", () => {
     const originalHead = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "q")
 
-    expect(frame(repo.harness)).toContain("will be folded into")
+    await waitForFrame(repo.harness, "will be folded into")
     expect(frame(repo.harness)).toContain("every newer commit will get a new oid")
 
     await press(repo.harness, "y")
@@ -472,15 +472,16 @@ describe("the commits action menu", () => {
     const droppedFile = join(repo.harness.directory, "second-commit.txt")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "d")
 
-    expect(frame(repo.harness)).toContain("will be removed and every newer")
-    expect(frame(repo.harness)).toContain("commit replayed")
-    expect(frame(repo.harness)).toContain("history remains recoverable")
-    expect(frame(repo.harness)).toContain("from the reflog")
+    await waitForFrame(repo.harness, "will be removed and every newer")
+    const confirmation = frame(repo.harness)
+    expect(confirmation).toContain("commit replayed")
+    expect(confirmation).toContain("history remains recoverable")
+    expect(confirmation).toContain("from the reflog")
 
     await press(repo.harness, "y")
     await waitForFrame(repo.harness, "Pushed history now needs force-with-lease")
@@ -496,18 +497,14 @@ describe("the commits action menu", () => {
     await commit(repo, "third commit")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "r")
     await waitForFrame(repo.harness, "Amend the last commit")
 
-    expect(frame(repo.harness)).toContain("Amend the last commit")
     expect(frame(repo.harness)).toContain("second commit")
-    await act(async () => {
-      await repo.harness.setup.mockInput.typeText(" reworded")
-    })
-    await settle(repo.harness)
+    await press(repo.harness, () => void repo.harness.setup.mockInput.typeText(" reworded"))
     await press(repo.harness, "s", { ctrl: true })
     await waitForFrame(repo.harness, "Pushed history now needs force-with-lease")
 
@@ -523,12 +520,12 @@ describe("the commits action menu", () => {
     const originalHead = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "r")
     await waitForFrame(repo.harness, "Amend the last commit")
-    await press(repo.harness, "ESCAPE")
+    await pressEscape(repo.harness)
     await waitForFrame(repo.harness, "Reword cancelled; original history restored")
 
     expect(await repo.oid("HEAD")).toBe(originalHead)
@@ -544,8 +541,8 @@ describe("the commits action menu", () => {
     await writeFile(join(repo.harness.directory, "first-commit.txt"), "unfinished\n")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
-    await press(repo.harness, "x")
+    await press(repo.harness, "2")
+    await openMenu(repo, "HEAD")
     await press(repo.harness, "q")
     await waitForFrame(repo.harness, "Commit rewrites need a clean working tree")
 
@@ -566,10 +563,11 @@ describe("the commits action menu", () => {
     const originalHead = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await openMenu(repo, "HEAD~1")
     await press(repo.harness, "d")
+    await waitForFrame(repo.harness, "will be removed and every newer")
     await press(repo.harness, "y")
     await waitForFrame(repo.harness, "Rewrite failed; original history restored")
 

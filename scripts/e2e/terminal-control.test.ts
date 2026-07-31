@@ -397,8 +397,8 @@ describe("laziergit through a real terminal", () => {
       await waitForText(session, "M  tracked.txt")
 
       await session.keyboard.type("c")
-      // The hint bar, which during a capture is the Pane's two remaining keys.
-      await waitForText(session, "ctrl+s commit")
+      // The popup's own field, which is what says the flow owns the keyboard.
+      await waitForText(session, "Commit summary")
       await session.keyboard.type("q from e2e")
       await waitForText(session, "q from e2e")
       expect((await session.status()).state).toBe("running")
@@ -594,7 +594,13 @@ describe("laziergit through a real terminal", () => {
 
       expect(await repo.git("status", "--porcelain")).toBe("")
 
-      await session.keyboard.type("4")
+      // The four panes share the cell, so the Stash tab is reached by cycling, not by number.
+      await session.keyboard.type("]")
+      await waitForText(session, "[Local branches]")
+      await session.keyboard.type("]")
+      await waitForText(session, "[Commits]")
+      await session.keyboard.type("]")
+      await waitForText(session, "[Stash]")
       await waitForText(session, "from e2e on main")
       await session.keyboard.type("p")
       await waitForText(session, "no stashes")
