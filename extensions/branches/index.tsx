@@ -8,6 +8,7 @@ import {
   toneColor,
   useCommand,
   useGit,
+  useGitActivity,
   useListCursor,
   useTheme,
   type Branch,
@@ -21,6 +22,7 @@ import { useEffect } from "react"
 
 import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
 import { pullRequestUrl } from "./pull-request"
+import { useSpinner } from "./spinner"
 
 function divergence(upstream: UpstreamInfo | null): string {
   if (upstream === null || upstream.gone) return ""
@@ -364,6 +366,26 @@ export default defineExtension({
       void ctx.menus.open("branches.actions", branch).catch(fail)
     }
 
+    /**
+     * Repository writes are shown beside the checked-out branch instead of in the app-wide
+     * status line. Kept in a child component so only HEAD subscribes to activity and owns an
+     * animation timer; repositories with hundreds of branches still have one spinner.
+     */
+    function BranchActivity() {
+      const theme = useTheme()
+      // The newest operation is the one a single row can name when writes overlap.
+      const busy = useGitActivity().at(-1) ?? null
+      const wave = useSpinner(busy !== null)
+      if (busy === null || wave === null) return null
+
+      return (
+        <text wrapMode="none" flexShrink={0}>
+          <span fg={theme.accent}>{`  ${wave}`}</span>
+          <span fg={theme.textMuted}>{` ${busy.label}`}</span>
+        </text>
+      )
+    }
+
     function BranchRow({
       branch,
       id,
@@ -384,12 +406,22 @@ export default defineExtension({
       const badge = decoration?.badge
 
       return (
-        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined} onMouseDown={onSelect}>
-          <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "*" : " "}</span>
-          <span fg={nameColor(branch, theme, dim)}>{` ${branch.name}`}</span>
-          {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}
-          {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
-        </text>
+        <box
+          id={id}
+          width="100%"
+          flexDirection="row"
+          justifyContent="space-between"
+          backgroundColor={selected && focused ? theme.selection : undefined}
+          onMouseDown={onSelect}
+        >
+          <text wrapMode="none" flexShrink={1}>
+            <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "*" : " "}</span>
+            <span fg={nameColor(branch, theme, dim)}>{` ${branch.name}`}</span>
+            {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}
+            {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
+          </text>
+          {branch.isHead ? <BranchActivity /> : null}
+        </box>
       )
     }
 

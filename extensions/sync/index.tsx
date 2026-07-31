@@ -5,14 +5,11 @@ import {
   GitError,
   remoteWebUrl,
   useGit,
-  useGitActivity,
   useTheme,
   type Head,
   type Theme,
   type UpstreamInfo,
 } from "laziergit"
-
-import { useSpinner } from "./spinner"
 
 /** The last segment of the repository root — an Extension has no `node:path`. */
 function directoryName(root: string): string {
@@ -128,9 +125,8 @@ export default defineExtension({
     const repoName = directoryName(root)
 
     /**
-     * The operation in flight: a mutual-exclusion latch, not progress — the status segment
-     * reads core's own activity. A reload landing mid-push never clears it, which is harmless
-     * because `activate` runs again and builds a fresh one.
+     * The operation in flight: a mutual-exclusion latch. A reload landing mid-push never
+     * clears it, which is harmless because `activate` runs again and builds a fresh one.
      */
     let running: string | null = null
 
@@ -293,22 +289,12 @@ export default defineExtension({
     function SyncSegment() {
       const theme = useTheme()
       const head = useGit((state) => state.head)
-      // Core's activity, not this Extension's, so the segment also covers writes sync never
-      // sees. `.at(-1)`: the most recently started, when two overlap.
-      const busy = useGitActivity().at(-1) ?? null
-      const wave = useSpinner(busy !== null)
 
       const tokens: Token[] = []
       if (head.kind === "detached") {
         tokens.push({ key: "head", text: `detached at ${head.oid.slice(0, 7)}`, color: theme.warning })
       } else if (head.kind !== "noRepository") {
         tokens.push({ key: "head", text: head.branch, color: theme.accent })
-      }
-
-      // Beside the branch rather than over it: a push must not cost you the branch name.
-      if (busy !== null && wave !== null) {
-        tokens.push({ key: "wave", text: wave, color: theme.accent })
-        tokens.push({ key: "busy", text: busy.label, color: theme.textMuted })
       }
 
       tokens.push(...upstreamTokens(head.kind === "onBranch" ? head.upstream : null, theme))

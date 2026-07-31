@@ -3,7 +3,7 @@ import type { GitActivity } from "laziergit"
 /**
  * How long an operation must run before it is worth telling the user about. `ctx.git.stage` on
  * one file settles in single-digit milliseconds, and the diff Pane stages hunks as you press
- * keys — publishing those would put a spinner on the status line for one frame per keystroke.
+ * keys — publishing those would blink a spinner on the affected row once per keystroke.
  * Anything faster than this never reaches a listener, so it costs no publish and no re-render.
  */
 const revealMs = 120
