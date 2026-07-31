@@ -15,8 +15,9 @@ import {
   type CommitsApi,
   type Head,
   type PaneProps,
+  type Theme,
 } from "laziergit"
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 
 function isMerge(commit: Commit): boolean {
   return commit.parents.length > 1
@@ -36,12 +37,77 @@ function validateRef(value: string): string | null {
 type ResetMode = "soft" | "mixed" | "hard"
 type RewriteAction = "squash" | "drop" | "edit"
 
+interface CommitFile {
+  /** `git diff --name-status`'s one-letter status after removing a rename score. */
+  readonly status: string
+  readonly path: string
+  readonly previousPath: string | null
+}
+
+type CommitFilesLoad =
+  | { readonly kind: "loading" }
+  | { readonly kind: "ready"; readonly files: readonly CommitFile[] }
+  | { readonly kind: "failed"; readonly message: string }
+
+type CommitPaneView =
+  | { readonly kind: "list"; readonly selectedOid: string | null }
+  | { readonly kind: "files"; readonly commit: Commit }
+
 /** Why there is no log to draw. All three read as zero rows and mean different things. */
 type EmptyReason = "noRepository" | "unborn" | "loaded"
 
 function emptyReason(head: Head): EmptyReason {
   if (head.kind === "noRepository") return "noRepository"
   return head.kind === "unborn" ? "unborn" : "loaded"
+}
+
+/**
+ * Parses `--name-status -z`: ordinary entries are status/path pairs, while renames and
+ * copies carry status/old-path/new-path triples. NUL framing is what keeps tabs, spaces,
+ * quotes, and backslashes in a repository path from becoming syntax.
+ */
+function parseCommitFiles(output: string): readonly CommitFile[] {
+  if (output.length === 0) return []
+  const fields = output.endsWith("\0") ? output.slice(0, -1).split("\0") : output.split("\0")
+  const files: CommitFile[] = []
+
+  for (let index = 0; index < fields.length; ) {
+    const rawStatus = fields[index]
+    if (rawStatus === undefined || rawStatus.length === 0) {
+      throw new Error("git returned a changed file without a status")
+    }
+    index += 1
+
+    const status = rawStatus[0] ?? rawStatus
+    if (status === "R" || status === "C") {
+      const previousPath = fields[index]
+      const path = fields[index + 1]
+      if (previousPath === undefined || path === undefined) {
+        throw new Error(`git returned an incomplete ${status === "R" ? "rename" : "copy"}`)
+      }
+      files.push({ status, path, previousPath })
+      index += 2
+      continue
+    }
+
+    const path = fields[index]
+    if (path === undefined) throw new Error(`git returned an incomplete ${rawStatus} file change`)
+    files.push({ status, path, previousPath: null })
+    index += 1
+  }
+
+  return files
+}
+
+function commitFileColor(status: string, theme: Theme): string {
+  if (status === "A") return theme.success
+  if (status === "D") return theme.danger
+  if (status === "R" || status === "C") return theme.info
+  return theme.warning
+}
+
+function commitFileLabel(file: CommitFile): string {
+  return file.previousPath === null ? file.path : `${file.previousPath} → ${file.path}`
 }
 
 /**
@@ -187,6 +253,17 @@ export default defineExtension({
     function canDrop(commit: Commit): boolean {
       if (!canRewrite(commit)) return false
       return commit.parents.length > 0 || firstParentChain().length > 1
+    }
+
+    async function filesIn(commit: Commit): Promise<readonly CommitFile[]> {
+      // This is the same first-parent comparison lazygit uses for its transient commit-files
+      // context. `diff-tree --root` is needed only for the initial commit, where no parent
+      // exists to give ordinary `git diff`.
+      const args =
+        commit.parents[0] === undefined
+          ? ["diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-z", "--find-renames", commit.oid, "--"]
+          : ["diff", "--no-ext-diff", "--name-status", "-z", "--find-renames", commit.parents[0], commit.oid, "--"]
+      return parseCommitFiles((await ctx.git.raw(args)).stdout)
     }
 
     async function refExists(ref: string): Promise<boolean> {
@@ -515,7 +592,15 @@ export default defineExtension({
       )
     }
 
-    function CommitsPane({ focused }: PaneProps) {
+    function CommitList({
+      focused,
+      selectedOid,
+      onOpen,
+    }: {
+      readonly focused: boolean
+      readonly selectedOid: string | null
+      readonly onOpen: (commit: Commit) => void
+    }) {
       const theme = useTheme()
       const commits = useGit((state) => state.commits)
       const empty = useGit((state) => emptyReason(state.head))
@@ -529,6 +614,12 @@ export default defineExtension({
         },
       })
       const selected = cursor.selected
+
+      useEffect(() => {
+        if (selectedOid === null) return
+        const index = commits.findIndex((commit) => commit.oid === selectedOid)
+        if (index !== -1) cursor.setIndex(index)
+      }, [commits, selectedOid])
 
       useEffect(() => {
         rows.setSelected(selected)
@@ -557,6 +648,17 @@ export default defineExtension({
         run: async () => {
           if (selected === undefined) return
           await ctx.menus.open("commits.actions", selected)
+        },
+      })
+
+      // OpenTUI calls the key `return`; `enter` would appear in the cheat sheet but never run.
+      useCommand({
+        id: "commits.view-files",
+        title: "View files changed by commit",
+        hint: "files",
+        keys: "return",
+        run: () => {
+          if (selected !== undefined) onOpen(selected)
         },
       })
 
@@ -599,6 +701,110 @@ export default defineExtension({
             />
           ) : null}
         </box>
+      )
+    }
+
+    function CommitFiles({
+      commit,
+      focused,
+      onBack,
+    }: {
+      readonly commit: Commit
+      readonly focused: boolean
+      readonly onBack: () => void
+    }) {
+      const theme = useTheme()
+      const [load, setLoad] = useState<CommitFilesLoad>({ kind: "loading" })
+      const files = load.kind === "ready" ? load.files : []
+      const cursor = useListCursor({
+        items: files,
+        idPrefix: "commits.files",
+        noun: "changed file",
+        query: {
+          mode: "filter",
+          fields: (file) =>
+            file.previousPath === null ? [file.status, file.path] : [file.status, file.previousPath, file.path],
+        },
+      })
+      const selected = cursor.selected
+
+      useEffect(() => {
+        let current = true
+        setLoad({ kind: "loading" })
+        void filesIn(commit).then(
+          (next) => {
+            if (current) setLoad({ kind: "ready", files: next })
+          },
+          (error) => {
+            if (current) setLoad({ kind: "failed", message: describeGitFailure(error) })
+          },
+        )
+        return () => {
+          current = false
+        }
+      }, [commit])
+
+      useEffect(() => {
+        if (!focused) return
+        diff.show({ kind: "commit", ref: commit.oid, path: selected?.path ?? null })
+      }, [commit, focused, selected])
+
+      useCommand({
+        id: "commits.files.back",
+        title: "Back to commits",
+        hint: "back",
+        keys: "escape",
+        run: onBack,
+      })
+
+      return (
+        <box flexDirection="column" flexGrow={1} flexBasis={0}>
+          <text wrapMode="none">
+            <span fg={theme.accent}>{`${commit.shortOid}  `}</span>
+            <span fg={theme.text}>{commit.subject}</span>
+          </text>
+          {load.kind === "loading" ? (
+            <text fg={theme.textMuted} content="loading changed files…" />
+          ) : load.kind === "failed" ? (
+            <text fg={theme.danger} content={load.message} />
+          ) : files.length === 0 ? (
+            <text fg={theme.textMuted} content="no files changed" />
+          ) : cursor.items.length === 0 ? (
+            <text fg={theme.textMuted} content="no matching files" />
+          ) : (
+            <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
+              {cursor.items.map((file, index) => (
+                <text
+                  key={`${file.previousPath ?? ""}\0${file.path}`}
+                  id={cursor.rowId(index)}
+                  wrapMode="none"
+                  bg={index === cursor.index && focused ? theme.selection : undefined}
+                  onMouseDown={() => cursor.setIndex(index)}
+                >
+                  <span fg={commitFileColor(file.status, theme)}>{`${file.status}  `}</span>
+                  <span fg={theme.text}>{commitFileLabel(file)}</span>
+                </text>
+              ))}
+            </scrollbox>
+          )}
+        </box>
+      )
+    }
+
+    function CommitsPane({ focused }: PaneProps) {
+      const [view, setView] = useState<CommitPaneView>({ kind: "list", selectedOid: null })
+      return view.kind === "list" ? (
+        <CommitList
+          focused={focused}
+          selectedOid={view.selectedOid}
+          onOpen={(commit) => setView({ kind: "files", commit })}
+        />
+      ) : (
+        <CommitFiles
+          commit={view.commit}
+          focused={focused}
+          onBack={() => setView({ kind: "list", selectedOid: view.commit.oid })}
+        />
       )
     }
 
