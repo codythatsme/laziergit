@@ -188,6 +188,76 @@ describe("searching commits", () => {
   })
 })
 
+describe("viewing files changed by a commit", () => {
+  it("dives into a root commit, narrows the diff as the cursor moves, and returns with escape", async () => {
+    const repo = await openRepo()
+    await writeFile(join(repo.harness.directory, "alpha.txt"), "alpha\n")
+    await writeFile(join(repo.harness.directory, "beta.txt"), "beta\n")
+    await repo.run("add", "--all")
+    await repo.run("commit", "--quiet", "--message", "initial pair")
+    const head = await repo.shortOid("HEAD")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await press(repo.harness, "\r")
+    await waitForFrame(repo.harness, "A  alpha.txt")
+
+    const filesFrame = frame(repo.harness)
+    expect(filesFrame).toContain(`${head}  initial pair`)
+    expect(filesFrame).toContain("A  alpha.txt")
+    expect(filesFrame).toContain("A  beta.txt")
+    expect(filesFrame).toContain(`diff: commit ${head} path=alpha.txt`)
+
+    await press(repo.harness, "j")
+    await waitForFrame(repo.harness, `diff: commit ${head} path=beta.txt`)
+
+    await pressEscape(repo.harness)
+    await waitForFrame(repo.harness, `diff: commit ${head} path=none`)
+    expect(frame(repo.harness)).not.toContain("A  alpha.txt")
+    expect(frame(repo.harness)).not.toContain("A  beta.txt")
+  })
+
+  it("keeps both paths of a rename intact and diffs the destination", async () => {
+    const repo = await openRepo()
+    await writeFile(join(repo.harness.directory, "before.txt"), "same contents\n")
+    await repo.run("add", "--all")
+    await repo.run("commit", "--quiet", "--message", "add original")
+    await repo.run("mv", "before.txt", "after.txt")
+    await repo.run("commit", "--quiet", "--all", "--message", "rename original")
+    const head = await repo.shortOid("HEAD")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await press(repo.harness, "\r")
+    await waitForFrame(repo.harness, "before.txt → after.txt")
+
+    expect(frame(repo.harness)).toContain("R  before.txt → after.txt")
+    await waitForFrame(repo.harness, `diff: commit ${head} path=after.txt`)
+  })
+
+  it("returns to the commit that was opened rather than jumping back to HEAD", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await commit(repo, "third commit")
+    const second = await repo.shortOid("HEAD~1")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await press(repo.harness, "j")
+    await press(repo.harness, "\r")
+    await waitForFrame(repo.harness, "A  second-commit.txt")
+
+    await pressEscape(repo.harness)
+    await waitForFrame(repo.harness, `diff: commit ${second} path=none`)
+
+    // Enter again proves the restored commit owns the cursor, not merely the last diff frame.
+    await press(repo.harness, "\r")
+    await waitForFrame(repo.harness, "A  second-commit.txt")
+    expect(frame(repo.harness)).toContain(`diff: commit ${second} path=second-commit.txt`)
+  })
+})
+
 describe("creating a branch from a commit", () => {
   it("creates and checks out a branch at the highlighted commit with n", async () => {
     const repo = await openRepo()
