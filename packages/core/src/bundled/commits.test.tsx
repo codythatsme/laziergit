@@ -163,7 +163,7 @@ describe("searching commits", () => {
     await commit(repo, "third commit")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "/")
     await act(async () => {
       await repo.harness.setup.mockInput.typeText("second")
@@ -181,6 +181,74 @@ describe("searching commits", () => {
     expect(rendered).toContain("third commit")
     expect(rendered).toContain("matches for 'second' (1 of 1)")
     expect(rendered).toContain(`diff: commit ${await repo.shortOid("HEAD~1")}`)
+  })
+})
+
+describe("viewing files changed by a commit", () => {
+  it("dives into a root commit, narrows the diff as the cursor moves, and returns with escape", async () => {
+    const repo = await openRepo()
+    await writeFile(join(repo.harness.directory, "alpha.txt"), "alpha\n")
+    await writeFile(join(repo.harness.directory, "beta.txt"), "beta\n")
+    await repo.run("add", "--all")
+    await repo.run("commit", "--quiet", "--message", "initial pair")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await press(repo.harness, "\r")
+    await waitForFrame(repo.harness, "A  alpha.txt")
+
+    const filesFrame = frame(repo.harness)
+    expect(filesFrame).toContain(`${await repo.shortOid("HEAD")}  initial pair`)
+    expect(filesFrame).toContain("A  alpha.txt")
+    expect(filesFrame).toContain("A  beta.txt")
+    expect(filesFrame).toContain(`diff: commit ${await repo.shortOid("HEAD")} path=alpha.txt`)
+
+    await press(repo.harness, "j")
+    expect(frame(repo.harness)).toContain(`diff: commit ${await repo.shortOid("HEAD")} path=beta.txt`)
+
+    await press(repo.harness, "ESCAPE")
+    await waitForFrame(repo.harness, `diff: commit ${await repo.shortOid("HEAD")} path=none`)
+    expect(frame(repo.harness)).not.toContain("A  alpha.txt")
+    expect(frame(repo.harness)).not.toContain("A  beta.txt")
+  })
+
+  it("keeps both paths of a rename intact and diffs the destination", async () => {
+    const repo = await openRepo()
+    await writeFile(join(repo.harness.directory, "before.txt"), "same contents\n")
+    await repo.run("add", "--all")
+    await repo.run("commit", "--quiet", "--message", "add original")
+    await repo.run("mv", "before.txt", "after.txt")
+    await repo.run("commit", "--quiet", "--all", "--message", "rename original")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await press(repo.harness, "\r")
+    await waitForFrame(repo.harness, "before.txt → after.txt")
+
+    expect(frame(repo.harness)).toContain("R  before.txt → after.txt")
+    expect(frame(repo.harness)).toContain(`diff: commit ${await repo.shortOid("HEAD")} path=after.txt`)
+  })
+
+  it("returns to the commit that was opened rather than jumping back to HEAD", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await commit(repo, "third commit")
+    const second = await repo.shortOid("HEAD~1")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await press(repo.harness, "j")
+    await press(repo.harness, "\r")
+    await waitForFrame(repo.harness, "A  second-commit.txt")
+
+    await press(repo.harness, "ESCAPE")
+    await waitForFrame(repo.harness, `diff: commit ${second} path=none`)
+
+    // Enter again proves the restored commit owns the cursor, not merely the last diff frame.
+    await press(repo.harness, "\r")
+    await waitForFrame(repo.harness, "A  second-commit.txt")
+    expect(frame(repo.harness)).toContain(`diff: commit ${second} path=second-commit.txt`)
   })
 })
 
@@ -228,7 +296,7 @@ describe("the commits action menu", () => {
     const parent = await repo.oid("HEAD~1")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
 
@@ -253,7 +321,7 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "c")
@@ -273,7 +341,7 @@ describe("the commits action menu", () => {
     await writeFile(join(repo.harness.directory, "first-commit.txt"), "edited\n")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "h")
@@ -300,7 +368,7 @@ describe("the commits action menu", () => {
     await repo.run("add", "first-commit.txt")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "m")
@@ -326,7 +394,7 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "s")
@@ -348,7 +416,7 @@ describe("the commits action menu", () => {
     const parent = await repo.oid("HEAD~1")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "s")
@@ -370,7 +438,7 @@ describe("the commits action menu", () => {
     const head = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "x")
     await press(repo.harness, "v")
 
@@ -394,7 +462,7 @@ describe("the commits action menu", () => {
     await repo.run("merge", "--quiet", "--no-ff", "--no-edit", "-m", "merge feature", "feature")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "x")
 
     // The merge is the newest commit and so the selected row. Offering the item here would
@@ -421,7 +489,7 @@ describe("the commits action menu", () => {
     await repo.run("remote", "add", "origin", repo.harness.directory)
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "x")
 
     expect(frame(repo.harness)).toContain("Check out this commit")
@@ -434,7 +502,7 @@ describe("the commits action menu", () => {
     await repo.run("remote", "add", "origin", "git@github.com:acme/tools.git")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "x")
 
     expect(frame(repo.harness)).toContain("Open this commit on the remote")
@@ -448,7 +516,7 @@ describe("the commits action menu", () => {
     const originalHead = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "q")
@@ -472,7 +540,7 @@ describe("the commits action menu", () => {
     const droppedFile = join(repo.harness.directory, "second-commit.txt")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "d")
@@ -496,7 +564,7 @@ describe("the commits action menu", () => {
     await commit(repo, "third commit")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "r")
@@ -523,7 +591,7 @@ describe("the commits action menu", () => {
     const originalHead = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "r")
@@ -544,7 +612,7 @@ describe("the commits action menu", () => {
     await writeFile(join(repo.harness.directory, "first-commit.txt"), "unfinished\n")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "x")
     await press(repo.harness, "q")
     await waitForFrame(repo.harness, "Commit rewrites need a clean working tree")
@@ -566,7 +634,7 @@ describe("the commits action menu", () => {
     const originalHead = await repo.oid("HEAD")
 
     await renderApp(repo.harness)
-    await press(repo.harness, "3")
+    await press(repo.harness, "2")
     await press(repo.harness, "j")
     await press(repo.harness, "x")
     await press(repo.harness, "d")
