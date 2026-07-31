@@ -229,6 +229,25 @@ async function pressEscape(session: Session): Promise<void> {
 }
 
 describe("laziergit through a real terminal", () => {
+  it("exits cleanly on Ctrl-C without reporting a keymap teardown warning", async () => {
+    const repo = await createE2eRepo()
+
+    await inTerminal(repo, async (session) => {
+      await waitForText(session, "working tree clean")
+      await pressCtrl(session, "c")
+
+      const result = await session.waitForExit({ timeoutMs: 15_000 })
+      if (result.reason !== "exited") {
+        throw await terminalFailure(session, "the process to exit after Ctrl-C", undefined)
+      }
+
+      expect(result.exit.success).toBeTrue()
+      expect(await session.logs.text()).not.toContain(
+        'unknown-layer-field: [Keymap] Unknown layer field "enabled" was ignored',
+      )
+    })
+  }, 20_000)
+
   it("boots every Bundled Extension pane with live repository content", async () => {
     const repo = await createE2eRepo("all-panes")
     await addOrigin(repo)

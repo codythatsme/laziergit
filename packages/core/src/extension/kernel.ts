@@ -202,6 +202,7 @@ export class ExtensionKernel {
   readonly #slotOwners = new SlotOwners()
   readonly #disposeSlotErrors: () => void
   readonly #importCopies: ImportCopyCache
+  readonly #disposeKeybindingDestroyGuard: () => void
   readonly #disposeKeymap: () => void
   readonly #disposeThemeBackground: () => void
   /** Live `useKeyCapture` claims, most recent last — React unmounts in no particular order. */
@@ -282,6 +283,14 @@ export class ExtensionKernel {
     this.keymap = createOpenTuiKeymap(options.renderer)
     this.#disposeKeymap = installKeymap(this.keymap, { diagnostics: this.diagnostics })
     this.keybindings = new KeybindingHost(this.keymap, this.diagnostics, (id) => this.#runCommand(id))
+    // OpenTUI's built-in Ctrl-C destroys the renderer before `main` can await kernel shutdown.
+    // Run ahead of the keymap's own DESTROY listener so its addon fields never disappear while
+    // laziergit's `enabled` layers are still registered.
+    const stopKeybindingsBeforeRenderer = () => this.keybindings.stop()
+    options.renderer.prependOnceListener(CliRenderEvents.DESTROY, stopKeybindingsBeforeRenderer)
+    this.#disposeKeybindingDestroyGuard = () => {
+      options.renderer.off(CliRenderEvents.DESTROY, stopKeybindingsBeforeRenderer)
+    }
     this.#importCopies = new ImportCopyCache({
       directories: this.#searchPath,
       diagnose: (diagnostic) => {
@@ -1294,6 +1303,7 @@ export class ExtensionKernel {
     })
     await this.#attemptShutdown("keybinding cleanup", () => {
       this.keybindings.stop()
+      this.#disposeKeybindingDestroyGuard()
       this.#disposeLeader?.()
       this.#disposeKeymap()
     })
