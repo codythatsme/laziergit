@@ -234,10 +234,13 @@ describe("commit-flow popup", () => {
     await writeFile(join(harness.directory, "tracked.txt"), "changed\n")
     await startShippedFiles(harness)
     await focusFiles(harness)
+    // The shipped diff Pane fetches for the selected file on its own; the test must not end
+    // while that fetch is still due to land, so it settles before the popup opens over it.
+    await waitForFrame(harness, (screen) => screen.includes("tracked.txt") && !screen.includes("loading"))
 
     await press(harness, "c")
 
-    expect(frame(harness)).toContain(popupMarker)
+    await waitForFrame(harness, popupMarker)
   }, 30_000)
 
   it("commits what was typed", async () => {
