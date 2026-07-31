@@ -10,6 +10,7 @@ import type {
   ActionsPopup,
   CheatSheetPopup,
   ChoosePopup,
+  ComposePopup,
   ConfirmPopup,
   Popup,
   PopupHost,
@@ -51,6 +52,7 @@ function PopupFrame({
   footer,
   theme,
   holdsFocus = true,
+  width = popupWidth,
   children,
 }: {
   title: string
@@ -62,13 +64,14 @@ function PopupFrame({
    * text field claim it instead, which is what pulls focus off the Panes underneath.
    */
   holdsFocus?: boolean
+  width?: number
   children?: ReactNode
 }) {
   return (
     <box
       focusable={holdsFocus}
       focused={holdsFocus}
-      width={popupWidth}
+      width={width}
       maxWidth="90%"
       flexDirection="column"
       border
@@ -87,6 +90,125 @@ function PopupFrame({
       {children}
       <text content={footer} style={{ fg: theme.textMuted, marginTop: 1 }} />
     </box>
+  )
+}
+
+/** Git's conventional blank line belongs between these two fields, not inside either one. */
+function splitMessage(message: string): { summary: string; description: string } {
+  const newline = message.indexOf("\n")
+  if (newline === -1) return { summary: message, description: "" }
+  const remainder = message.slice(newline + 1)
+  return {
+    summary: message.slice(0, newline),
+    description: remainder.startsWith("\n") ? remainder.slice(1) : remainder,
+  }
+}
+
+function joinMessage(summary: string, description: string): string {
+  return description.length === 0 ? summary : `${summary}\n\n${description}`
+}
+
+function ComposeView({ popup, theme }: { popup: ComposePopup; theme: Theme }) {
+  const initial = useMemo(() => splitMessage(popup.initial), [popup.initial])
+  const [summary, setSummary] = useState(initial.summary)
+  const [focusedField, setFocusedField] = useState<"summary" | "description">("summary")
+  const [error, setError] = useState<string | null>(null)
+  const description = useRef<{ readonly plainText: string; cursorOffset: number } | null>(null)
+  const latest = useRef(initial)
+
+  useEffect(() => {
+    const editor = description.current
+    if (editor !== null) editor.cursorOffset = editor.plainText.length
+  }, [popup])
+
+  const changed = (next: { summary: string; description: string }): void => {
+    latest.current = { ...latest.current, ...next }
+    popup.change(joinMessage(next.summary, next.description))
+    setError(null)
+  }
+  const submit = (): void => {
+    const value = joinMessage(latest.current.summary, latest.current.description)
+    const problem = popup.validate(value)
+    if (problem === null) popup.submit(value)
+    else setError(problem)
+  }
+  const focus = (field: "summary" | "description"): void => {
+    setFocusedField(field)
+  }
+
+  useBindings(
+    () => ({
+      priority: modalLayerPriority,
+      bindings: [
+        { key: "escape", cmd: () => popup.dismiss() },
+        { key: "tab", cmd: () => focus(focusedField === "summary" ? "description" : "summary") },
+        { key: "shift+tab", cmd: () => focus(focusedField === "summary" ? "description" : "summary") },
+        { key: "ctrl+s", cmd: submit },
+        { key: "mod+s", cmd: submit },
+        ...(focusedField === "summary" ? [{ key: "return", cmd: submit }] : []),
+      ],
+    }),
+    [focusedField, popup],
+  )
+
+  return (
+    <PopupFrame
+      title={popup.title}
+      footer={
+        focusedField === "summary"
+          ? "enter submit  ·  tab description  ·  escape cancel"
+          : "tab summary  ·  ctrl+s submit  ·  escape cancel"
+      }
+      theme={theme}
+      holdsFocus={false}
+      width={80}
+    >
+      <box
+        height={3}
+        border
+        borderStyle="rounded"
+        borderColor={focusedField === "summary" ? theme.accent : theme.border}
+        title={` ${popup.summaryTitle} `}
+        titleColor={focusedField === "summary" ? theme.accent : theme.textMuted}
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        <input
+          focused={focusedField === "summary"}
+          width="100%"
+          value={summary}
+          keyBindings={textInputKeyBindings}
+          onInput={(next: string) => {
+            setSummary(next)
+            changed({ summary: next, description: latest.current.description })
+          }}
+        />
+      </box>
+      <box
+        height={8}
+        border
+        borderStyle="rounded"
+        borderColor={focusedField === "description" ? theme.accent : theme.border}
+        title={` ${popup.descriptionTitle} `}
+        titleColor={focusedField === "description" ? theme.accent : theme.textMuted}
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        <textarea
+          ref={(editor) => {
+            description.current = editor
+          }}
+          focused={focusedField === "description"}
+          initialValue={initial.description}
+          flexGrow={1}
+          onContentChange={() => {
+            const next = description.current?.plainText ?? ""
+            changed({ summary: latest.current.summary, description: next })
+          }}
+        />
+      </box>
+      {error === null ? null : <text content={error} style={{ fg: theme.danger }} />}
+    </PopupFrame>
   )
 }
 
@@ -349,6 +471,8 @@ function PopupView({ popup }: { popup: Popup }) {
       return <ConfirmView popup={popup} theme={theme} />
     case "prompt":
       return <PromptView popup={popup} theme={theme} />
+    case "compose":
+      return <ComposeView popup={popup} theme={theme} />
     case "choose":
       return <ChooseView popup={popup} theme={theme} />
     case "actions":

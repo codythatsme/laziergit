@@ -7,17 +7,14 @@ import {
   isStaged,
   isUnstaged,
   isUntracked,
-  useCommand,
   useGit,
-  useKeyCapture,
   useTheme,
   type CommitFlowApi,
   type CommitFlowResult,
   type FileChange,
   type Head,
-  type PaneProps,
 } from "laziergit"
-import { useEffect, useMemo, useRef } from "react"
+import { useMemo } from "react"
 
 function hasCommit(head: Head): boolean {
   return head.kind === "detached" || head.kind === "onBranch"
@@ -29,28 +26,20 @@ const listedPaths = 6
 /** How much of a kept draft the idle summary quotes back. */
 const draftPreview = 40
 
-/**
- * The slice of OpenTUI's textarea this Pane reads. Declared structurally because an Extension
- * may not import `@opentui/core`, where `TextareaRenderable` lives.
- */
-interface MessageEditor {
-  /** The whole buffer. The textarea is uncontrolled, so the renderable is the message. */
-  readonly plainText: string
-  cursorOffset: number
-}
-
 interface CommitDraft {
-  /** A textarea applies `initialValue` once per renderable, so this is its React `key`. */
-  readonly id: number
   readonly initial: string
   readonly amend: boolean
   readonly signoff: boolean
   readonly messageOnly: boolean
+}
+
+interface ActiveFlow {
+  readonly draft: CommitDraft
+  /** The popup reports every edit here, so displacement and Escape cannot lose the buffer. */
+  message: string
   /** Settles the promise `begin` handed its caller. Idempotent: a flow closes exactly once. */
   readonly close: (result: CommitFlowResult) => void
 }
-
-type FlowState = { readonly kind: "idle" } | { readonly kind: "editing"; readonly draft: CommitDraft }
 
 interface OpenOptions {
   readonly message?: string
@@ -72,8 +61,8 @@ function firstLine(text: string): string {
   return line.length > draftPreview ? `${line.slice(0, draftPreview - 1)}…` : line
 }
 
-function editingHeader(draft: CommitDraft, stagedCount: number): string {
-  const parts = draft.amend ? ["amending the last commit", countLabel(stagedCount)] : [countLabel(stagedCount)]
+function editingTitle(draft: CommitDraft, stagedCount: number): string {
+  const parts = [draft.amend ? "Amend the last commit" : "Commit", countLabel(stagedCount)]
   if (draft.signoff) parts.push("signoff")
   return parts.join("  ·  ")
 }
@@ -83,24 +72,9 @@ export default defineExtension({
   description: "Commit message editor",
 
   activate(ctx): CommitFlowApi {
-    const flow = createCell<FlowState>({ kind: "idle" })
     /** The message the user typed and did not commit, so `escape` never destroys one. */
     const kept = createCell("")
-    let nextDraftId = 1
-
-    /**
-     * Reads the open editor's buffer, published by the Pane while it is mounted. Null while
-     * nothing is mounted; every path that abandons a flow runs outside the component.
-     */
-    let readDraft: (() => string) | null = null
-
-    // `PaneHandle.focus()` has no inverse, so the Pane remembers what it displaced.
-    let focusedPane: string | null = null
-    let returnTo: string | null = null
-    ctx.events.on("app.pane.focused", ({ paneId, previous }) => {
-      focusedPane = paneId
-      if (paneId === "commit-flow" && previous !== null && previous !== "commit-flow") returnTo = previous
-    })
+    let active: ActiveFlow | null = null
 
     /**
      * Remembers a message worth resuming. An untouched prefill is not one, and neither is a
@@ -112,71 +86,73 @@ export default defineExtension({
       return true
     }
 
-    /**
-     * Ends the open flow, settling its promise and keeping whatever was typed. Returns whether
-     * a draft was kept. Leaves the screen alone — see {@link closeFlow} for the other half.
-     */
-    function endFlow(result: CommitFlowResult): boolean {
-      const current = flow.get()
-      if (current.kind === "idle") return false
-      // Read before going idle, which unmounts the textarea the draft lives in.
-      const retained = result === "abandoned" && keep(current.draft, readDraft?.() ?? "")
-      if (result === "committed") kept.set("")
-      // Idle first, so anything resuming on the settled promise already sees a closed Pane.
-      flow.set({ kind: "idle" })
-      current.draft.close(result)
-      return retained
-    }
-
-    /**
-     * Puts the keyboard on `paneId`. There is no public verb for focusing someone else's Pane,
-     * but executing a Pane-scoped Command focuses its Pane first — so a no-op Command
-     * registered against `paneId` reaches it.
-     */
-    async function focusPane(paneId: string): Promise<void> {
-      const handle = ctx.commands.register({
-        id: "commit-flow.return-focus",
-        title: "Return focus to the pane the commit came from",
-        hidden: true,
-        pane: paneId,
-        run: () => undefined,
-      })
-      try {
-        await ctx.commands.execute("commit-flow.return-focus")
-      } catch {
-        // That Pane is gone, so there is nothing to hand the keyboard to.
-      } finally {
-        handle.dispose()
-      }
-    }
-
-    /**
-     * Gives the screen back the way `open` found it. `focus()` latches this Pane as its cell's
-     * visible tab and nothing un-latches it, so `app.tab.next` hands the cell to its neighbour
-     * — a no-op when this Pane has the cell to itself.
-     */
-    async function handBack(): Promise<void> {
-      // Only while this Pane still owns the keyboard: the user may have tabbed away mid-edit.
-      if (focusedPane !== "commit-flow") return
-      const target = returnTo
-      returnTo = null
-      await ctx.commands.execute("app.tab.next")
-      if (target !== null && target !== "commit-flow") await focusPane(target)
-    }
-
-    /** Ends the open flow and hands the screen back. */
-    async function closeFlow(result: CommitFlowResult): Promise<boolean> {
-      const wasOpen = flow.get().kind === "editing"
-      const retained = endFlow(result)
-      if (wasOpen) await handBack()
-      return retained
-    }
-
     // `%B` rather than the store, which keeps subjects only: an amend must prefill the body too.
     async function lastCommitMessage(): Promise<string> {
       const output = await ctx.git.raw(["log", "-1", "--format=%B"], { allowFailure: true })
       // `%B` ends in a newline, which would park the cursor on a blank line below the text.
       return output.exitCode === 0 ? output.stdout.replace(/\n+$/, "") : ""
+    }
+
+    function validationProblem(draft: CommitDraft, message: string): string | null {
+      const summary = message.split("\n", 1)[0] ?? ""
+      if (summary.trim().length === 0) return "Write a commit message first"
+      // An amend is the one case where an empty index does not mean an empty commit.
+      if (!draft.amend && !ctx.git.state.status.files.some(isStaged)) return "Nothing staged to commit"
+      return null
+    }
+
+    /** Owns the modal for one flow, reopening it with the same text if git rejects the commit. */
+    async function edit(flow: ActiveFlow): Promise<void> {
+      let initial = flow.draft.initial
+
+      while (active === flow) {
+        flow.message = initial
+        const message = await ctx.popups.compose({
+          title: editingTitle(flow.draft, ctx.git.state.status.files.filter(isStaged).length),
+          summaryTitle: "Commit summary",
+          descriptionTitle: "Commit description",
+          initial,
+          validate: (value) => validationProblem(flow.draft, value),
+          onChange: (value) => {
+            if (active === flow) flow.message = value
+          },
+        })
+
+        // Another `begin` replaced this one and already settled its caller.
+        if (active !== flow) return
+
+        if (message === undefined) {
+          active = null
+          const retained = keep(flow.draft, flow.message)
+          flow.close("abandoned")
+          if (retained) ctx.popups.notify("Draft kept — c resumes it", "info")
+          return
+        }
+
+        flow.message = message
+        try {
+          await ctx.git.commit(message, {
+            amend: flow.draft.amend,
+            signoff: flow.draft.signoff,
+            messageOnly: flow.draft.messageOnly,
+          })
+        } catch (error) {
+          if (active !== flow) return
+          ctx.popups.notify(describeGitFailure(error), "error")
+          initial = message
+          continue
+        }
+
+        // A programmatic second flow can arrive while git is running. The completed write
+        // must not dismiss its popup or consume the newer flow's draft.
+        if (active === flow) {
+          active = null
+          kept.set("")
+          flow.close("committed")
+          ctx.popups.notify(flow.draft.amend ? "Amended" : "Committed", "success")
+        }
+        return
+      }
     }
 
     /** Opens the editor and resolves when it closes, whichever way it closes. */
@@ -187,38 +163,41 @@ export default defineExtension({
         return "abandoned"
       }
 
+      // A second `begin` displaces the first. Preserve its live text before choosing the new
+      // prefill, then let PopupHost replace the old modal when this flow starts composing.
+      const displaced = active
+      if (displaced !== null) {
+        keep(displaced.draft, displaced.message)
+        active = null
+        displaced.close("abandoned")
+      }
+
       // A kept draft outranks the amend prefill and yields to a caller's own message.
-      const draft = kept.get()
-      const initial = options.message ?? (draft.length > 0 ? draft : amend ? await lastCommitMessage() : "")
+      const saved = kept.get()
+      const initial = options.message ?? (saved.length > 0 ? saved : amend ? await lastCommitMessage() : "")
       const settled = Promise.withResolvers<CommitFlowResult>()
       let closed = false
-
-      // One Pane holds one message: a second `begin` displaces the first and settles its
-      // caller now. `endFlow`, not `closeFlow` — the screen belongs to the flow opening below.
-      endFlow("abandoned")
-      flow.set({
-        kind: "editing",
+      const flow: ActiveFlow = {
         draft: {
-          id: nextDraftId++,
           initial,
           amend,
           signoff: options.signoff === true,
           messageOnly: options.messageOnly === true,
-          close: (result) => {
-            if (closed) return
-            closed = true
-            settled.resolve(result)
-          },
         },
-      })
-
-      try {
-        pane.focus()
-      } catch (error) {
-        // A Layout that leaves this Pane out gives the editor no keyboard at all.
-        endFlow("abandoned")
-        ctx.popups.notify(describeGitFailure(error), "error")
+        message: initial,
+        close: (result) => {
+          if (closed) return
+          closed = true
+          settled.resolve(result)
+        },
       }
+      active = flow
+      void edit(flow).catch((error: unknown) => {
+        if (active !== flow) return
+        active = null
+        flow.close("abandoned")
+        ctx.popups.notify(describeGitFailure(error), "error")
+      })
       return settled.promise
     }
 
@@ -227,101 +206,13 @@ export default defineExtension({
       return open(options).then(() => undefined)
     }
 
-    /** Commits, or explains why it did not. Only success closes the flow. */
-    async function commit(draft: CommitDraft, message: string): Promise<void> {
-      if (message.trim().length === 0) {
-        ctx.popups.notify("Write a commit message first", "warning")
-        return
-      }
-      // An amend is the one case where an empty index does not mean an empty commit.
-      if (!draft.amend && !ctx.git.state.status.files.some(isStaged)) {
-        ctx.popups.notify("Nothing staged to commit", "warning")
-        return
-      }
-
-      try {
-        await ctx.git.commit(message, {
-          amend: draft.amend,
-          signoff: draft.signoff,
-          messageOnly: draft.messageOnly,
-        })
-      } catch (error) {
-        ctx.popups.notify(describeGitFailure(error), "error")
-        return
-      }
-      await closeFlow("committed")
-      ctx.popups.notify(draft.amend ? "Amended" : "Committed", "success")
-    }
-
-    function CommitFlowPane({ focused }: PaneProps) {
+    function CommitFlowPane() {
       const theme = useTheme()
-      const current = flow.use()
       const keptDraft = kept.use()
       // Filter outside the selector: `useGit((s) => s.…filter(…))` returns a fresh array every
       // snapshot, so the store's `Object.is` check never holds and the Pane re-renders forever.
       const files = useGit((state) => state.status.files)
       const staged = useMemo(() => files.filter(isStaged), [files])
-      const editor = useRef<MessageEditor | null>(null)
-
-      // Publishes the buffer to the flow, which closes from places this component cannot see.
-      useEffect(() => {
-        const read = () => editor.current?.plainText ?? ""
-        readDraft = read
-        return () => {
-          if (readDraft === read) readDraft = null
-        }
-      }, [])
-
-      // The textarea parks a prefilled caret at offset 0, so typing would prepend onto the
-      // prefill. Keyed on the draft id: moving the caret on every render would fight the user.
-      const editingId = current.kind === "editing" ? current.draft.id : null
-      useEffect(() => {
-        const node = editor.current
-        if (node !== null && editingId !== null) node.cursorOffset = node.plainText.length
-      }, [editingId])
-
-      // Without this a typed message fires every binding it spells: `q` quits, `?` helps.
-      useKeyCapture(current.kind === "editing")
-
-      useCommand({
-        id: "commit-flow.submit",
-        title: "Commit the message",
-        hint: "commit",
-        // `ctrl+s` first: the hint bar prints the first key, and it is the one no terminal can
-        // take away. Raw mode clears IXON, so it is not flow control here.
-        keys: ["ctrl+s", "mod+s"],
-        capture: true,
-        run: () => (current.kind === "editing" ? commit(current.draft, editor.current?.plainText ?? "") : undefined),
-      })
-      useCommand({
-        id: "commit-flow.cancel",
-        title: "Close the editor, keeping the message",
-        hint: "keep draft",
-        keys: "escape",
-        capture: true,
-        run: async () => {
-          if (await closeFlow("abandoned")) ctx.popups.notify("Draft kept — c resumes it", "info")
-        },
-      })
-
-      if (current.kind === "editing") {
-        const draft = current.draft
-        return (
-          <box flexDirection="column" flexGrow={1}>
-            <text wrapMode="none" content={editingHeader(draft, staged.length)} style={{ fg: theme.textMuted }} />
-            <textarea
-              key={draft.id}
-              ref={(node) => {
-                editor.current = node
-              }}
-              // Tabbing away releases the capture, so the editor releases the cursor with it.
-              focused={focused}
-              initialValue={draft.initial}
-              flexGrow={1}
-            />
-          </box>
-        )
-      }
 
       return (
         <box flexDirection="column">
@@ -348,7 +239,7 @@ export default defineExtension({
       )
     }
 
-    const pane = ctx.panes.register({
+    ctx.panes.register({
       id: "commit-flow",
       title: "Commit",
       component: CommitFlowPane,
@@ -444,9 +335,11 @@ export default defineExtension({
     })
 
     // A flow does not outlive its activation: a caller awaiting `begin` across a hot reload
-    // would otherwise wait on a Pane that no longer exists.
+    // would otherwise wait on a popup whose owner no longer exists.
     ctx.onDispose(() => {
-      endFlow("abandoned")
+      const current = active
+      active = null
+      current?.close("abandoned")
     })
 
     return {

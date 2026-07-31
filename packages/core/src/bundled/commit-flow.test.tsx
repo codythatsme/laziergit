@@ -70,14 +70,14 @@ async function seed(harness: Harness, ...message: readonly string[]): Promise<vo
  */
 const filesStandIn = `
   /** @jsxImportSource @opentui/react */
-  import { defineExtension, useGit } from "laziergit"
+  import { defineExtension, isStaged, useGit } from "laziergit"
 
   export default defineExtension({
     name: "files",
     needs: ["commit-flow"],
     activate(ctx) {
       function FilesPane() {
-        const staged = useGit((state) => state.status.staged.length)
+        const staged = useGit((state) => state.status.files.filter(isStaged).length)
         return <text content={"files pane " + staged} />
       }
       ctx.panes.register({ id: "files", title: "Files", component: FilesPane })
@@ -182,8 +182,8 @@ async function stageFile(harness: Harness, path: string): Promise<void> {
 }
 
 /**
- * Focuses the files Pane. At startup the focused Pane is whichever registered first — the
- * bundled commit-flow one — and `c` and `A` are live only in the files Pane.
+ * Focuses the files Pane. At startup the focused Pane is whichever registered first, and `c`
+ * and `A` are live only in the files Pane.
  */
 async function focusFiles(harness: Harness): Promise<void> {
   await act(async () => {
@@ -194,13 +194,10 @@ async function focusFiles(harness: Harness): Promise<void> {
 
 const submit = (harness: Harness) => () => harness.setup.mockInput.pressKey("s", { ctrl: true })
 
-/**
- * The idle hint, which is the honest test for "the editor is still open": a toast is drawn
- * over the bottom-right of the screen, so the editor's own footer is not always visible.
- */
-const idleMarker = "from the files pane"
+/** The popup's first field, which disappears only when the commit flow closes. */
+const popupMarker = "Commit summary"
 
-describe("commit-flow pane", () => {
+describe("commit-flow popup", () => {
   it("commits what was typed", async () => {
     const harness = await repository()
     await seed(harness)
@@ -211,9 +208,31 @@ describe("commit-flow pane", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("c"))
     await press(harness, () => void harness.setup.mockInput.typeText("quick fix"))
 
-    await press(harness, submit(harness))
+    // Like lazygit, Enter accepts the one-line summary; Ctrl+S works from either field.
+    await press(harness, () => harness.setup.mockInput.pressEnter())
     await waitFor(harness, "Committed")
     expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("quick fix\n")
+  }, 30_000)
+
+  it("commits a summary and description separated by git's conventional blank line", async () => {
+    const harness = await repository()
+    await seed(harness)
+    await start(harness)
+    await stageFile(harness, "feature.txt")
+    await focusFiles(harness)
+
+    await press(harness, () => harness.setup.mockInput.pressKey("c"))
+    await press(harness, () => void harness.setup.mockInput.typeText("explain the change"))
+    await press(harness, () => harness.setup.mockInput.pressTab())
+    await press(harness, () => void harness.setup.mockInput.typeText("The context matters."))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+    await press(harness, () => void harness.setup.mockInput.typeText("Keep both body lines."))
+    await press(harness, submit(harness))
+    await waitFor(harness, "Committed")
+
+    expect((await git(harness.directory, "log", "-1", "--format=%B")).trimEnd()).toBe(
+      "explain the change\n\nThe context matters.\nKeep both body lines.",
+    )
   }, 30_000)
 
   it("keeps a message escape backed out of, and resumes it on the next commit", async () => {
@@ -264,7 +283,7 @@ describe("commit-flow pane", () => {
     expect(frame(harness)).not.toContain("belongs to its commit")
   }, 30_000)
 
-  it("hands the cell and the keyboard back when the flow closes", async () => {
+  it("leaves the diff visible behind the popup and keeps the files pane focused", async () => {
     const harness = await repository()
     await seed(harness)
     await start(harness, { tabbed: true })
@@ -279,19 +298,18 @@ describe("commit-flow pane", () => {
     })
     await settle(harness)
 
-    // The right-hand cell shows the diff Pane; opening the editor takes the cell.
+    // The right-hand cell stays on the diff while the modal takes only keyboard focus.
     expect(frame(harness)).toContain("the diff pane")
     await press(harness, () => harness.setup.mockInput.pressKey("c"))
-    expect(frame(harness)).not.toContain("the diff pane")
+    expect(frame(harness)).toContain("the diff pane")
+    expect(frame(harness)).toContain(popupMarker)
 
     await press(harness, () => void harness.setup.mockInput.typeText("hand it back"))
     await press(harness, submit(harness))
     await waitFor(harness, "Committed")
 
-    // Otherwise the cell stays latched to the idle summary and every later cursor move in
-    // the files Pane updates a diff nobody can see.
     expect(frame(harness)).toContain("the diff pane")
-    expect(frame(harness)).not.toContain(idleMarker)
+    expect(frame(harness)).not.toContain(popupMarker)
     expect(harness.kernel.layout.focusedPaneId).toBe("files")
   }, 30_000)
 
@@ -303,7 +321,7 @@ describe("commit-flow pane", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("b"))
     await press(harness, submit(harness))
     await waitFor(harness, "Write a commit message first")
-    expect(frame(harness)).not.toContain(idleMarker)
+    expect(frame(harness)).toContain(popupMarker)
 
     await press(harness, () => void harness.setup.mockInput.typeText("nothing to commit"))
     await press(harness, submit(harness))
@@ -330,7 +348,7 @@ describe("commit-flow pane", () => {
     await waitFor(harness, "rejected by policy")
     // And the editor is untouched, because a typed message cannot be recovered.
     expect(frame(harness)).toContain("survives the hook")
-    expect(frame(harness)).not.toContain(idleMarker)
+    expect(frame(harness)).toContain(popupMarker)
 
     await press(harness, () => harness.setup.mockInput.pressEscape())
     expect(frame(harness)).toContain("1 staged file")
@@ -366,7 +384,7 @@ describe("commit-flow pane", () => {
     await press(harness, () => harness.setup.mockInput.pressKey("n"))
     await waitFor(harness, "body line")
     const rendered = frame(harness)
-    expect(rendered).toContain("amending the last commit")
+    expect(rendered).toContain("Amend the last commit")
     // The subject alone would have silently dropped the body of the commit being rewritten.
     expect(rendered).toContain("subject line")
 
@@ -408,6 +426,6 @@ describe("commit-flow pane", () => {
 
     await press(harness, () => harness.setup.mockInput.pressKey("a"))
     await waitFor(harness, "1 staged file")
-    expect(frame(harness)).not.toContain(idleMarker)
+    expect(frame(harness)).toContain(popupMarker)
   }, 30_000)
 })

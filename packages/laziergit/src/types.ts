@@ -540,6 +540,14 @@ export interface PopupToolkit {
     initial?: string
     validate?(value: string): string | null
   }): Promise<string | undefined>
+  compose(opts: {
+    title: string
+    summaryTitle?: string
+    descriptionTitle?: string
+    initial?: string
+    validate?(value: string): string | null
+    onChange?(value: string): void
+  }): Promise<string | undefined>
   select<T>(opts: { title: string; items: readonly SelectItem<T>[]; placeholder?: string }): Promise<T | undefined>
   menu(opts: { title: string; groups: readonly MenuGroup<void>[] }): Promise<void>
   notify(message: string, level?: "info" | "success" | "warning" | "error"): void

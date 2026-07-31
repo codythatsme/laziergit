@@ -26,7 +26,7 @@ laziergit          # from inside any git repository
 - **commits** — log, plus targeted squash/reword/drop on the current branch
 - **stash** — save, apply, pop, drop
 - **diff** — patch view that follows your cursor across panes
-- **commit-flow** — multiline commit editor with amend
+- **commit-flow** — summary/description commit popup with amend
 - **sync** — push/pull/fetch, force-with-lease, live activity indicator
 - **gh-workflows** — GitHub Actions runs for the current branch: drill into jobs and logs, rerun, cancel (needs the `gh` CLI)
 

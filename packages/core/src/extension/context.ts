@@ -332,6 +332,9 @@ export function createExtensionContext(
     prompt(options) {
       return supervisePopup(scope, hosts.popups.prompt(extension, options))
     },
+    compose(options) {
+      return supervisePopup(scope, hosts.popups.compose(extension, options))
+    },
     select(options) {
       const handle = hosts.popups.choose(extension, {
         title: options.title,
