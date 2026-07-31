@@ -413,7 +413,7 @@ describe("laziergit through a real terminal", () => {
       await waitForText(session, "M  tracked.txt")
 
       await session.keyboard.type("A")
-      await waitForText(session, "amending the last commit")
+      await waitForText(session, "Amend the last commit")
       await session.keyboard.type(" amended")
       await pressPrimaryModifier(session, "s")
       await waitForText(session, "Amended")
