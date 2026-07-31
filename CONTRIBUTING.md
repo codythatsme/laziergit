@@ -14,13 +14,15 @@ Reference repos (pi, opencode, OpenTUI, lazygit) are vendored at pinned SHAs for
 ## Checks
 
 ```sh
-bun run test           # unit + integration tests (packages/ and extensions/)
-bun run test:e2e       # bundled flows and the spec's worked example, through a real PTY
-bun run test:runtime   # focused hot-reload lifecycle fixture
+bun run test              # every test, one process per file (packages/ and extensions/)
+bun run test:unit         # the pure-logic slice CI runs once
+bun run test:integration  # the renderer/git/fs slice CI runs per OS
+bun run test:e2e          # bundled flows and the spec's worked example, through a real PTY
+bun run test:runtime      # focused hot-reload lifecycle fixture
 bun run typecheck
 bun run lint
 bun run format
-bun run verify         # format:check + lint + typecheck + test — run before pushing
+bun run verify            # precommit checks + every test — run before pushing
 ```
 
 ## How the codebase is shaped

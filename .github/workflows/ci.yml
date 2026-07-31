@@ -1,0 +1,108 @@
+name: ci
+
+# `push` only for main: a PR branch already gets full coverage from `pull_request`, and a
+# second identical run per push doubles the queue without adding coverage.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Format, lint, typecheck, discipline, and unit tests are platform-independent, so each runs
+# once as its own job — a red check names the task that failed. Suites that spawn git, drive
+# the renderer, or lean on filesystem semantics run per environment, where they have found
+# real platform defects.
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - name: Renderer-test discipline
+        run: bun run check:tests
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - run: bun install --frozen-lockfile
+      - run: bun run test:unit
+
+  integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - run: bun install --frozen-lockfile
+      - run: bun run test:integration
+
+  # Windows is excluded the way it always was: the PTY harness does not run there.
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - run: bun install --frozen-lockfile
+      - run: bun run test:e2e
+
+  # Deliberate async-race hunting over the integration suites: repeated runs in a randomized
+  # order, never retried. A failure here is a real flake — reproduce it with the printed
+  # seed. One process per file, because a single process spanning every suite eventually
+  # loses subprocess stdout to a Bun runtime defect, which reads as a flake but is not one.
+  stress:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - run: bun install --frozen-lockfile
+      - name: Pick a shuffle seed
+        id: seed
+        run: echo "seed=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')" >> "$GITHUB_OUTPUT"
+      - name: Stress integration suites (seed ${{ steps.seed.outputs.seed }})
+        run: >
+          bun scripts/test.ts integration --rerun-each 10
+          --randomize --seed ${{ steps.seed.outputs.seed }}

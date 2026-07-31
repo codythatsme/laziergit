@@ -34,6 +34,8 @@
     "prepare": "git config core.hooksPath .githooks",
     "check:tests": "bun scripts/check-tests.ts",
     "test": "bun scripts/test.ts",
+    "test:unit": "bun scripts/test.ts unit",
+    "test:integration": "bun scripts/test.ts integration",
     "test:e2e": "bun test ./scripts/e2e",
     "test:runtime": "bun packages/core/src/extension/reload.fixture.ts",
     "typecheck": "bun run --filter '*' typecheck",
