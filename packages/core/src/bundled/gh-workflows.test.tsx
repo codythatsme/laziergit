@@ -437,6 +437,12 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
       async () => (await gh.calls()).some((line) => line === "run cancel 3"),
       "the cancel to reach gh",
     )
+
+    // Settle the run before the test ends: the cancel's follow-up refetch and the live-run
+    // poll both update the pane on their own schedule, and an update landing after the last
+    // wait is an update outside act.
+    await gh.setRuns("main", [run(3, "slow run", "completed", "success")])
+    await waitForFrame(harness, "✓ verify — slow run")
   })
 
   it("toggles between the branch's runs and every branch's", async () => {
@@ -500,6 +506,11 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
       async () => (await gh.calls()).filter((line) => line.startsWith("run list")).length >= 3,
       "the pane to poll gh repeatedly",
     )
+
+    // A completed run is what parks the poll; waiting for it on screen absorbs the last
+    // fetch inside act before the test ends.
+    await gh.setRuns("main", [run(3, "slow run", "completed", "success")])
+    await waitForFrame(harness, "✓ verify — slow run")
   })
 })
 
