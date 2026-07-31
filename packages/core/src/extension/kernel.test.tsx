@@ -846,11 +846,18 @@ describe("Theme resources", () => {
     expect(harness.kernel.theme.getSnapshot().background).toBe(themePreset("nocturne").tokens.background)
     harness.setup.renderer.emit(CliRenderEvents.THEME_MODE, "light")
     expect(harness.kernel.theme.getSnapshot().background).toBe(themePreset("daybreak").tokens.background)
+
+    const pickerFlow = harness.kernel.openThemePicker()
+    const themes = topChoice(harness)
+    expect(themes.choices[0]?.label).toBe("daybreak")
+    themes.dismiss()
+    await pickerFlow
+
     harness.setup.renderer.emit(CliRenderEvents.THEME_MODE, "dark")
     expect(harness.kernel.theme.getSnapshot().background).toBe(themePreset("nocturne").tokens.background)
   })
 
-  it("shows names only, previews a picker choice, and persists it globally", async () => {
+  it("shows names only, previews and persists a choice, then reopens on it", async () => {
     const harness = await createHarness()
     await harness.kernel.start()
     const before = harness.kernel.theme.getSnapshot()
@@ -872,6 +879,12 @@ describe("Theme resources", () => {
     expect(await stat(harness.configFiles.repo).catch(() => undefined)).toBeUndefined()
     expect(harness.kernel.theme.getSnapshot().accent).toBe(themePreset("ember").tokens.accent)
     expect(harness.kernel.theme.getSnapshot()).not.toBe(before)
+
+    const reopenedFlow = harness.kernel.openThemePicker()
+    const reopenedThemes = topChoice(harness)
+    expect(reopenedThemes.choices[0]?.label).toBe("ember")
+    reopenedThemes.dismiss()
+    await reopenedFlow
   })
 })
 
