@@ -846,11 +846,31 @@ describe("Theme resources", () => {
     )
     expect(harness.setup.captureCharFrame()).toContain("#abcdef:mount:1")
 
-    const configSchema = JSON.parse(await readFile(join(harness.configDirectory, "config.schema.json"), "utf8")) as {
-      properties: { theme: { properties: { preset: { oneOf: [{ enum: string[] }] } } } }
-    }
-    expect(configSchema.properties.theme.properties.preset.oneOf[0].enum).toContain("custom")
-    expect(await readFile(join(harness.configDirectory, "theme.schema.json"), "utf8")).toContain('"laziergit theme"')
+    // The kernel republishes both schema files asynchronously after a theme change, so a
+    // plain read can catch them mid-write; parsed-and-complete is the condition to wait on.
+    await waitFor(
+      harness,
+      async () => {
+        const text = await readFile(join(harness.configDirectory, "config.schema.json"), "utf8").catch(() => "")
+        try {
+          const schema = JSON.parse(text) as {
+            properties: { theme: { properties: { preset: { oneOf: [{ enum: string[] }] } } } }
+          }
+          return schema.properties.theme.properties.preset.oneOf[0].enum.includes("custom")
+        } catch {
+          return false
+        }
+      },
+      "the config schema to advertise the custom theme",
+    )
+    await waitFor(
+      harness,
+      async () => {
+        const text = await readFile(join(harness.configDirectory, "theme.schema.json"), "utf8").catch(() => "")
+        return text.includes('"laziergit theme"')
+      },
+      "the theme document schema to be republished",
+    )
   })
 
   it("follows terminal appearance for a dark/light pair without reloading config", async () => {
