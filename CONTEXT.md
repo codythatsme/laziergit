@@ -29,8 +29,12 @@ The user-config-owned arrangement of Panes into the screen (columns/tabs). Exten
 _Avoid_: workspace, arrangement
 
 **Command**:
-A named action registered by an Extension, invokable via Keybinding or the palette. The unit all key-driven behavior is built from — one registration is also its Cheat Sheet row and, where it carries a `hint`, its Hint Bar entry.
+A named operation registered by an Extension, invokable via Keybinding or the palette. The unit all key-driven behavior is built from — one registration also owns its conditional availability, selected-row targeting, Cheat Sheet row and, where it carries a `hint`, Hint Bar entry.
 _Avoid_: action, binding (a binding maps a key to a Command)
+
+**Transient Chooser**:
+A modal presented during one Command's workflow to choose how that Command continues, such as a merge mode or recovery path. It is not a standing catalog and contributes no Keybinding, palette row, Cheat Sheet row or Hint Bar entry.
+_Avoid_: action menu, command menu
 
 **Hint Bar**:
 The left of the bottom row, where Core prints the keys the focused Pane can act on right now, drawn from the `hint` on each live Command. Contextual by construction: it changes with focus, and collapses to a Pane's capture keys while that Pane owns the keyboard.
@@ -41,7 +45,7 @@ The `?` overlay listing the focused Pane's keys, then its capture keys, then the
 _Avoid_: help, keymap popup
 
 **Exported API**:
-The typed surface an Extension itself exports for other Extensions to consume (e.g. the branches Extension's row decorations and menu items). Distinct from the Core's Extension Context.
+The typed surface an Extension itself exports for other Extensions to consume (e.g. the branches Extension's Row Source). Distinct from the Core's Extension Context.
 _Avoid_: plugin interface
 
 **ScopedId**:
@@ -52,10 +56,10 @@ _Avoid_: namespace, qualified name
 The files Pane's projection of `WorkingTreeStatus` into a flat-rooted folder hierarchy — one row per changed path, one row per directory above it, and single-child directory chains compressed into one row. Directory rows are not `FileChange` values, so they carry no Row Decoration and no `FilesApi` selection.
 _Avoid_: file tree view, explorer, directory listing
 
+**Row Source**:
+An Exported API from a list Extension that names its Pane, exposes the current selected row, accepts Row Decorations, and notifies contextual Commands when selection changes. It is the typed target seam for another Extension's Command.
+_Avoid_: target registry, row provider
+
 **Row Decoration**:
 Extra visual data (badge, color, suffix) an Extension attaches to rows of another Extension's list Pane, e.g. PR status on branch rows.
 _Avoid_: annotation
-
-**Splice**:
-A standing, data-keyed insertion of menu items into another Extension's menu, keyed by menu id and applied whenever the owner (re)registers. The named surface a Splice targets is its seam.
-_Avoid_: injection, hook

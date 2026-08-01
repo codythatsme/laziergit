@@ -34,7 +34,7 @@ export default defineExtension({
   needs: ["branches", "diff"],
 
   activate(ctx): RemoteBranchesApi {
-    const rows = createRowSource<RemoteBranch>({ key: remoteRef })
+    const rows = createRowSource<RemoteBranch>({ pane: "remote-branches", key: remoteRef })
     const diff = ctx.extensions.get("diff")
     const signal = ctx.signal
 
@@ -102,6 +102,53 @@ export default defineExtension({
         fail(error)
       }
     }
+
+    ctx.commands.register({
+      id: "remote-branches.checkout",
+      source: rows.api,
+      title: "Create or check out local tracking branch",
+      hint: "checkout",
+      keys: "space",
+      run: checkoutRemoteBranch,
+    })
+    ctx.commands.register({
+      id: "remote-branches.create",
+      source: rows.api,
+      title: "Create tracking branch with another name",
+      hint: "new branch",
+      keys: "n",
+      run: createTrackingBranch,
+    })
+    ctx.commands.register({
+      id: "remote-branches.delete",
+      source: rows.api,
+      title: "Delete branch from remote",
+      hint: "delete",
+      keys: "d",
+      run: deleteRemoteBranch,
+    })
+    ctx.commands.register({
+      id: "remote-branches.fetch",
+      source: rows.api,
+      title: "Fetch selected remote",
+      hint: "fetch",
+      keys: "f",
+      run: (branch) => fetchRemote(branch.remote),
+    })
+    ctx.commands.register({
+      id: "remote-branches.set-upstream",
+      source: rows.api,
+      title: "Set as upstream of current branch",
+      keys: "u",
+      run: setRemoteAsUpstream,
+    })
+    ctx.commands.register({
+      id: "remote-branches.detached",
+      source: rows.api,
+      title: "Check out remote branch as detached HEAD",
+      keys: "h",
+      run: checkoutRemoteDetached,
+    })
 
     async function fetchRemote(remote: string): Promise<void> {
       try {
@@ -262,55 +309,6 @@ export default defineExtension({
         diff.show({ kind: "branch", ref: selectedRef, path: null })
       }, [focused, selectedRef])
 
-      useCommand({
-        id: "remote-branches.checkout",
-        title: "Create or check out local tracking branch",
-        hint: "checkout",
-        keys: "space",
-        run: () => (selected === undefined ? undefined : checkoutRemoteBranch(selected)),
-      })
-      useCommand({
-        id: "remote-branches.create",
-        title: "Create tracking branch with another name",
-        hint: "new branch",
-        keys: "n",
-        run: () => (selected === undefined ? undefined : createTrackingBranch(selected)),
-      })
-      useCommand({
-        id: "remote-branches.delete",
-        title: "Delete branch from remote",
-        hint: "delete",
-        keys: "d",
-        run: () => (selected === undefined ? undefined : deleteRemoteBranch(selected)),
-      })
-      useCommand({
-        id: "remote-branches.fetch",
-        title: "Fetch selected remote",
-        hint: "fetch",
-        keys: "f",
-        run: () => fetchRemote(remote),
-      })
-      useCommand({
-        id: "remote-branches.set-upstream",
-        title: "Set as upstream of current branch",
-        keys: "u",
-        run: () => (selected === undefined ? undefined : setRemoteAsUpstream(selected)),
-      })
-      useCommand({
-        id: "remote-branches.detached",
-        title: "Check out remote branch as detached HEAD",
-        run: () => (selected === undefined ? undefined : checkoutRemoteDetached(selected)),
-      })
-      useCommand({
-        id: "remote-branches.menu",
-        title: "Remote branch actions",
-        hint: "menu",
-        keys: "x",
-        run: () => {
-          if (selected !== undefined) void ctx.menus.open("remote-branches.actions", selected).catch(fail)
-        },
-      })
-
       if (visibleBranches.length === 0) {
         const message =
           branches.length === 0 ? `no cached branches for ${remote} — f fetches` : "no matching remote branches"
@@ -392,25 +390,6 @@ export default defineExtension({
       title: "Focus remote branches",
       pane: "remote-branches",
       run: () => undefined,
-    })
-
-    ctx.menus.register({
-      id: "remote-branches.actions",
-      title: (branch) => `Remote branch: ${remoteRef(branch)}`,
-      groups: [
-        {
-          id: "branch",
-          title: "Branch",
-          items: [
-            { key: "c", label: "Create or check out tracking branch", run: checkoutRemoteBranch },
-            { key: "n", label: "Create tracking branch with another name…", run: createTrackingBranch },
-            { key: "d", label: "Delete from remote…", run: deleteRemoteBranch },
-            { key: "h", label: "Check out as detached HEAD", run: checkoutRemoteDetached },
-            { key: "u", label: "Set as upstream of current branch…", run: setRemoteAsUpstream },
-            { key: "f", label: "Fetch remote", run: (branch) => fetchRemote(branch.remote) },
-          ],
-        },
-      ],
     })
 
     return rows.api

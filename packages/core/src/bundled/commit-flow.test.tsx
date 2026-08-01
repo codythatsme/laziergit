@@ -201,14 +201,11 @@ describe("commit-flow popup", () => {
       commands: {
         register: (spec: { readonly id: string; readonly run: () => void | Promise<void> }) => {
           if (spec.id === "commit-flow.commit") runCommit = spec.run
-          return { dispose: () => undefined }
+          return { dispose: () => undefined, refresh: () => undefined }
         },
       },
       panes: {
         register: () => ({ dispose: () => undefined, focus: () => undefined, reveal: () => undefined }),
-      },
-      menus: {
-        register: () => ({ dispose: () => undefined }),
       },
       popups: {
         // `compose` did not exist before this feature. This is the live context retained by a
@@ -306,6 +303,30 @@ describe("commit-flow popup", () => {
     await stageFile(harness, "another.txt")
     await press(harness, "c")
     expect(frame(harness)).not.toContain("half a thought")
+  }, 30_000)
+
+  it("publishes and directly runs the discard-draft Command when a draft is kept", async () => {
+    const harness = await repository()
+    await seed(harness)
+    await start(harness)
+    await stageFile(harness, "feature.txt")
+    await focusFiles(harness)
+
+    await press(harness, "c")
+    await press(harness, () => void harness.setup.mockInput.typeText("throw this away"))
+    await pressEscape(harness)
+    await waitForFrame(harness, "Draft kept")
+
+    await act(async () => harness.kernel.layout.focus("commit-flow"))
+    await settle(harness)
+    expect(harness.kernel.commands.getSnapshot().map((command) => command.id)).toContain("commit-flow.discard-draft")
+
+    await press(harness, "d")
+    await waitForFrame(harness, "Draft discarded")
+    expect(frame(harness)).not.toContain("draft kept: throw this away")
+    expect(harness.kernel.commands.getSnapshot().map((command) => command.id)).not.toContain(
+      "commit-flow.discard-draft",
+    )
   }, 30_000)
 
   it("does not keep a draft escape backed out of a message-only flow", async () => {
@@ -455,20 +476,23 @@ describe("commit-flow popup", () => {
     expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("reword me now\n")
   }, 30_000)
 
-  it("offers the actions the working tree supports, and hides the rest", async () => {
+  it("publishes the actions the working tree supports, and hides the rest", async () => {
     const harness = await repository()
     await seed(harness)
     await start(harness)
     await writeFile(join(harness.directory, "loose.txt"), "loose\n")
     await refreshGit(harness)
 
-    await press(harness, () => void harness.kernel.commands.execute("commit-flow.menu"))
-    const menu = frame(harness)
-    expect(menu).toContain("Stage all and commit")
-    expect(menu).toContain("Amend the last commit")
-    // Nothing is staged, so the two entries that would commit an empty index are not offered.
-    expect(menu).not.toContain("Commit with signoff")
+    const commands = harness.kernel.commands.getSnapshot().map((command) => command.id)
+    expect(commands).toContain("commit-flow.stage-all")
+    expect(commands).toContain("commit-flow.amend-here")
+    // Nothing is staged, so the two Commands that would commit an empty index are unavailable.
+    expect(commands).not.toContain("commit-flow.commit-staged")
+    expect(commands).not.toContain("commit-flow.signoff")
+    expect(commands).not.toContain("commit-flow.menu")
 
+    await act(async () => harness.kernel.layout.focus("commit-flow"))
+    await settle(harness)
     await press(harness, "a")
     await waitForFrame(harness, "1 staged file")
     expect(frame(harness)).toContain(popupMarker)

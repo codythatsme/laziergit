@@ -6,7 +6,6 @@ import {
   GitError,
   isConflicted,
   toneColor,
-  useCommand,
   useGit,
   useGitActivity,
   useListCursor,
@@ -66,7 +65,7 @@ export default defineExtension({
   needs: ["diff"],
 
   activate(ctx): BranchesApi {
-    const rows = createRowSource<Branch>({ key: (row) => row.name })
+    const rows = createRowSource<Branch>({ pane: "branches", key: (row) => row.name })
     const diff = ctx.extensions.get("diff")
 
     const fail = (error: unknown): void => ctx.popups.notify(describeGitFailure(error), "error")
@@ -156,7 +155,6 @@ export default defineExtension({
         title: branch === null ? "Merge in progress" : `Merge in progress on ${branch}`,
         groups: [
           {
-            id: "merge",
             items: [
               { key: "c", label: "Continue merge", run: continueMerge },
               { key: "a", label: "Abort merge…", run: () => abortMerge(true) },
@@ -173,7 +171,6 @@ export default defineExtension({
         title: `Merge ${branch.name} stopped with conflicts`,
         groups: [
           {
-            id: "conflicts",
             items: [
               { key: "v", label: "View conflicted files", run: () => ctx.commands.execute("files.focus") },
               {
@@ -243,7 +240,6 @@ export default defineExtension({
           title: `Merge ${branch.name} into ${into}`,
           groups: [
             {
-              id: "merge",
               items: choices.map((choice) => ({
                 key: choice.key,
                 label: choice.label,
@@ -362,9 +358,83 @@ export default defineExtension({
       }
     }
 
-    function openMenu(branch: Branch): void {
-      void ctx.menus.open("branches.actions", branch).catch(fail)
-    }
+    ctx.commands.register({
+      id: "branches.checkout",
+      source: rows.api,
+      title: "Check out branch",
+      hint: "checkout",
+      keys: "space",
+      when: (branch) => !branch.isHead,
+      run: checkout,
+    })
+    ctx.commands.register({
+      id: "branches.create",
+      title: "Create branch here",
+      hint: "new branch",
+      keys: "n",
+      pane: "branches",
+      run: () =>
+        hasRepository(ctx.git.state.head)
+          ? createBranchAt(rows.api.selected())
+          : ctx.popups.notify("No repository here to branch from", "warning"),
+    })
+    ctx.commands.register({
+      id: "branches.delete",
+      source: rows.api,
+      title: "Delete branch",
+      hint: "delete",
+      keys: "d",
+      when: (branch) => !branch.isHead,
+      run: deleteBranch,
+    })
+    ctx.commands.register({
+      id: "branches.force-delete",
+      source: rows.api,
+      title: "Force delete branch",
+      keys: "shift+d",
+      when: (branch) => !branch.isHead,
+      run: (branch) => forceDelete(branch, `${branch.name} may have commits no other branch has.`),
+    })
+    ctx.commands.register({
+      id: "branches.merge",
+      source: rows.api,
+      title: "Merge branch into the current branch",
+      hint: "merge",
+      keys: "shift+m",
+      when: (branch) => !branch.isHead,
+      run: openMergeMenu,
+    })
+    ctx.commands.register({
+      id: "branches.set-upstream",
+      source: rows.api,
+      title: "Set branch upstream",
+      keys: "u",
+      run: setUpstream,
+    })
+    ctx.commands.register({
+      id: "branches.push-upstream",
+      source: rows.api,
+      title: "Push branch and set upstream",
+      keys: "shift+p",
+      when: (branch) => branch.upstream === null,
+      run: pushSettingUpstream,
+    })
+    ctx.commands.register({
+      id: "branches.fast-forward",
+      source: rows.api,
+      title: "Fast-forward branch to its upstream",
+      keys: "f",
+      when: canFastForward,
+      run: fastForward,
+    })
+    ctx.commands.register({
+      id: "branches.pull-request",
+      source: rows.api,
+      title: "Open a pull request for this branch",
+      keys: "o",
+      when: (branch) => pullRequestUrl(ctx.git.state.remotes, branch.name) !== null,
+      run: openPullRequest,
+    })
 
     /**
      * Repository writes are shown beside the checked-out branch instead of in the app-wide
@@ -458,49 +528,6 @@ export default defineExtension({
         diff.show({ kind: "branch", ref: selectedName, path: null })
       }, [focused, selectedName])
 
-      useCommand({
-        id: "branches.checkout",
-        title: "Check out branch",
-        hint: "checkout",
-        keys: "space",
-        run: () => (selected === undefined ? undefined : checkout(selected)),
-      })
-      useCommand({
-        id: "branches.create",
-        title: "Create branch here",
-        hint: "new branch",
-        keys: "n",
-        run: () =>
-          repository ? createBranchAt(selected) : ctx.popups.notify("No repository here to branch from", "warning"),
-      })
-      useCommand({
-        id: "branches.delete",
-        title: "Delete branch",
-        hint: "delete",
-        keys: "d",
-        run: () => (selected === undefined ? undefined : deleteBranch(selected)),
-      })
-      useCommand({
-        id: "branches.merge",
-        title: "Merge branch into the current branch",
-        hint: "merge",
-        keys: "shift+m",
-        run: () => (selected === undefined ? undefined : openMergeMenu(selected)),
-      })
-      useCommand({
-        id: "branches.pull-request",
-        title: "Open a pull request for this branch",
-        keys: "o",
-        run: () => (selected === undefined ? undefined : openPullRequest(selected)),
-      })
-      useCommand({
-        id: "branches.menu",
-        title: "Branch actions",
-        hint: "menu",
-        keys: "x",
-        run: () => (selected === undefined ? undefined : openMenu(selected)),
-      })
-
       if (branches.length === 0) {
         const message = repository ? "no branches yet — n creates one" : "no repository here"
         return <text fg={theme.textMuted} content={message} />
@@ -537,56 +564,6 @@ export default defineExtension({
       id: "branches.focus",
       title: "Focus branches",
       run: () => pane.focus(),
-    })
-
-    ctx.menus.register({
-      id: "branches.actions",
-      title: (branch) => `Branch: ${branch.name}`,
-      groups: [
-        {
-          // Explicit ids: splices address these, so they must not move when a title changes.
-          id: "branch",
-          title: "Branch",
-          items: [
-            { key: "c", label: "Check out", when: (branch) => !branch.isHead, run: checkout },
-            { key: "n", label: "Create branch here", run: createBranchAt },
-            {
-              key: "m",
-              label: "Merge into current branch…",
-              when: (branch) => !branch.isHead,
-              run: openMergeMenu,
-            },
-            { key: "d", label: "Delete", when: (branch) => !branch.isHead, run: deleteBranch },
-            {
-              // `shift+d`, not `D`: the parser lowercases a bare letter, colliding with `d`.
-              key: "shift+d",
-              label: "Force delete",
-              when: (branch) => !branch.isHead,
-              run: (branch) => forceDelete(branch, `${branch.name} may have commits no other branch has.`),
-            },
-          ],
-        },
-        {
-          id: "upstream",
-          title: "Upstream",
-          items: [
-            { key: "u", label: "Set upstream…", run: setUpstream },
-            {
-              key: "p",
-              label: "Push, setting upstream",
-              when: (branch) => branch.upstream === null,
-              run: pushSettingUpstream,
-            },
-            { key: "f", label: "Fast-forward", when: canFastForward, run: fastForward },
-            {
-              key: "o",
-              label: "Open a pull request",
-              when: (branch) => pullRequestUrl(ctx.git.state.remotes, branch.name) !== null,
-              run: openPullRequest,
-            },
-          ],
-        },
-      ],
     })
 
     return rows.api

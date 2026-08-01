@@ -132,15 +132,14 @@ async function commit(repo: Repo, subject: string): Promise<void> {
   await repo.run("commit", "--quiet", "--message", subject)
 }
 
-/**
- * Opens the action menu for the selected commit and waits for it to be on screen. The oid is
- * read before the press: a git spawn between press and wait is an await no `act` covers, and
- * the menu render would land in it.
- */
-async function openMenu(repo: Repo, revision: string): Promise<void> {
+/** Waits until the highlighted commit has reached the shared RowSource and diff Pane. */
+async function waitForSelection(repo: Repo, revision: string): Promise<void> {
   const short = await repo.shortOid(revision)
-  await press(repo.harness, "x")
-  await waitForFrame(repo.harness, `Commit ${short}`)
+  await waitForFrame(repo.harness, `diff: commit ${short}`)
+}
+
+function commandIds(repo: Repo): readonly string[] {
+  return repo.harness.kernel.commands.getSnapshot().map((command) => command.id)
 }
 
 /**
@@ -290,7 +289,7 @@ describe("creating a branch from a commit", () => {
   })
 })
 
-describe("the commits action menu", () => {
+describe("contextual commit Commands", () => {
   it("checks a commit out after saying that HEAD will be detached", async () => {
     const repo = await openRepo()
     await commit(repo, "first commit")
@@ -301,8 +300,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
-    expect(frame(repo.harness)).toContain("Check out this commit")
+    await waitForSelection(repo, "HEAD~1")
 
     await press(repo.harness, "c")
     // The word that matters: a checkout from a log is a detach, and saying so before the
@@ -324,7 +322,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "c")
     await waitForFrame(repo.harness, "HEAD will be detached at")
 
@@ -347,7 +345,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "h")
 
     await waitForFrame(repo.harness, "1 uncommitted change destroyed for good")
@@ -373,7 +371,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "m")
 
     // A mixed reset moves the branch as far as the hard one, so it asks first — and says what
@@ -398,7 +396,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "s")
 
     // Soft touches neither the index nor the files, and still takes a commit off the branch
@@ -421,7 +419,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "s")
     await waitForFrame(repo.harness, "1 commit off this branch, left only in the reflog")
 
@@ -442,7 +440,7 @@ describe("the commits action menu", () => {
 
     await renderApp(repo.harness)
     await press(repo.harness, "2")
-    await openMenu(repo, "HEAD")
+    await waitForSelection(repo, "HEAD")
     await press(repo.harness, "v")
 
     await waitForFrame(repo.harness, "will undo")
@@ -466,23 +464,22 @@ describe("the commits action menu", () => {
 
     await renderApp(repo.harness)
     await press(repo.harness, "2")
-    // The merge is the newest commit and so the selected row. Offering the item here would
-    // promise an undo `git revert` rejects for want of `-m`.
-    await openMenu(repo, "HEAD")
+    // The merge is the newest commit and so the selected row. Offering these Commands here
+    // would promise rewrites git refuses or whose mainline the Pane cannot choose.
+    await waitForSelection(repo, "HEAD")
 
-    const merge = frame(repo.harness)
-    expect(merge).toContain("Check out this commit")
-    expect(merge).not.toContain("Revert this commit")
-    expect(merge).not.toContain("Squash into the parent commit")
-    expect(merge).not.toContain("Reword this commit")
-    expect(merge).not.toContain("Drop this commit")
+    const merge = commandIds(repo)
+    expect(merge).toContain("commits.checkout")
+    expect(merge).not.toContain("commits.revert")
+    expect(merge).not.toContain("commits.squash")
+    expect(merge).not.toContain("commits.reword")
+    expect(merge).not.toContain("commits.drop")
 
-    await pressEscape(repo.harness)
     await press(repo.harness, "j")
-    await press(repo.harness, "x")
+    await waitForSelection(repo, "HEAD~1")
 
-    // Back on the very next row, so this is a gate on merges and not a missing feature.
-    await waitForFrame(repo.harness, "Revert this commit")
+    // Back on the very next row, so this is a gate on merges and not a missing Command.
+    expect(commandIds(repo)).toContain("commits.revert")
   })
 
   it("hides the remote item when the remote is a directory nobody can browse", async () => {
@@ -492,10 +489,10 @@ describe("the commits action menu", () => {
 
     await renderApp(repo.harness)
     await press(repo.harness, "2")
-    await openMenu(repo, "HEAD")
+    await waitForSelection(repo, "HEAD")
 
-    expect(frame(repo.harness)).toContain("Check out this commit")
-    expect(frame(repo.harness)).not.toContain("Open this commit on the remote")
+    expect(commandIds(repo)).toContain("commits.checkout")
+    expect(commandIds(repo)).not.toContain("commits.open-remote")
   })
 
   it("offers the remote item when the remote has a web address", async () => {
@@ -505,9 +502,9 @@ describe("the commits action menu", () => {
 
     await renderApp(repo.harness)
     await press(repo.harness, "2")
-    await press(repo.harness, "x")
+    await waitForSelection(repo, "HEAD")
 
-    await waitForFrame(repo.harness, "Open this commit on the remote")
+    expect(commandIds(repo)).toContain("commits.open-remote")
   })
 
   it("squashes the selected commit into its parent and replays newer history", async () => {
@@ -520,7 +517,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "q")
 
     await waitForFrame(repo.harness, "will be folded into")
@@ -544,7 +541,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "d")
 
     await waitForFrame(repo.harness, "will be removed and every newer")
@@ -569,7 +566,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "r")
     await waitForFrame(repo.harness, "Amend the last commit")
 
@@ -592,7 +589,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "r")
     await waitForFrame(repo.harness, "Amend the last commit")
     await pressEscape(repo.harness)
@@ -612,7 +609,7 @@ describe("the commits action menu", () => {
 
     await renderApp(repo.harness)
     await press(repo.harness, "2")
-    await openMenu(repo, "HEAD")
+    await waitForSelection(repo, "HEAD")
     await press(repo.harness, "q")
     await waitForFrame(repo.harness, "Commit rewrites need a clean working tree")
 
@@ -635,7 +632,7 @@ describe("the commits action menu", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await press(repo.harness, "j")
-    await openMenu(repo, "HEAD~1")
+    await waitForSelection(repo, "HEAD~1")
     await press(repo.harness, "d")
     await waitForFrame(repo.harness, "will be removed and every newer")
     await press(repo.harness, "y")

@@ -10,7 +10,6 @@ import type {
   ExecOutput,
   ExtensionContext,
   Git,
-  MenuRegistry,
   PaneHandle,
   PaneRegistry,
   PopupToolkit,
@@ -19,12 +18,11 @@ import type {
 
 import type { GitService } from "../git/service"
 import type { LayoutHost } from "../ui/layout"
-import type { MenuHost } from "../ui/menu-host"
-import type { PopupHandle, PopupHost } from "../ui/popup-host"
+import type { PopupActionGroup, PopupHandle, PopupHost } from "../ui/popup-host"
 import type { StatuslineHost } from "../ui/statusline-host"
 import type { ActivationScope } from "./activation-scope"
 import type { CommandHost } from "./command-host"
-import type { Diagnostics } from "./diagnostics"
+import { normalizeError, type Diagnostics } from "./diagnostics"
 import type { EventHost } from "./event-host"
 import { assertScopedId } from "./id"
 import type { PaneHost } from "./pane-host"
@@ -39,13 +37,79 @@ export interface ContextHosts {
   readonly commands: CommandHost
   readonly panes: PaneHost
   readonly layout: LayoutHost
-  readonly menus: MenuHost
   readonly popups: PopupHost
   readonly statusline: StatuslineHost
   readonly git: GitService
   readonly notifier: Notifier
   readonly clipboardWriters?: readonly ClipboardWriterSpec[]
   getExtensionApi(name: string): ExtensionApiLookup
+}
+
+function popupMenuGroups(
+  extension: string,
+  title: string,
+  groups: Parameters<PopupToolkit["menu"]>[0]["groups"],
+  hosts: ContextHosts,
+): readonly PopupActionGroup[] {
+  const visible = groups.map((group, groupIndex) => ({
+    group,
+    items: group.items.flatMap((item, itemIndex) => {
+      try {
+        return item.when?.() === false ? [] : [{ item, groupIndex, itemIndex }]
+      } catch (error) {
+        const normalized = normalizeError(error)
+        hosts.diagnostics.report({
+          extension,
+          phase: "menu",
+          message: `${title} item "${item.label}" when(): ${normalized.message}`,
+          error: normalized,
+        })
+        return []
+      }
+    }),
+  }))
+  const winnerByKey = new Map<string, (typeof visible)[number]["items"][number]>()
+  for (const { items } of visible) {
+    for (const owned of items) {
+      const previous = winnerByKey.get(owned.item.key)
+      if (previous !== undefined) {
+        hosts.diagnostics.report({
+          extension,
+          phase: "menu",
+          message: `${title} key "${owned.item.key}" moved from "${previous.item.label}" to "${owned.item.label}"`,
+        })
+      }
+      winnerByKey.set(owned.item.key, owned)
+    }
+  }
+
+  return visible.flatMap(({ group, items }) => {
+    const rendered = items.flatMap((owned) => {
+      const item = owned.item
+      if (winnerByKey.get(item.key) !== owned) return []
+      return [
+        {
+          key: item.key,
+          label: item.label,
+          run: async () => {
+            try {
+              await item.run()
+            } catch (error) {
+              const normalized = normalizeError(error)
+              hosts.diagnostics.report({
+                extension,
+                phase: "menu",
+                message: `${title} item "${item.label}": ${normalized.message}`,
+                error: normalized,
+              })
+              hosts.notifier({ extension, message: `${item.label}: ${normalized.message}`, level: "error" })
+            }
+          },
+        },
+      ]
+    })
+    return rendered.length === 0 ? [] : [{ title: group.title, items: rendered }]
+  })
 }
 
 function attachDisposable<T extends Disposable>(scope: ActivationScope, disposable: T, staleNoops = ["dispose"]): T {
@@ -277,10 +341,22 @@ export function createExtensionContext(
     },
   })
 
+  function registerCommand<Row>(
+    spec: import("laziergit").RowCommandSpec<string, Row>,
+  ): import("laziergit").CommandHandle
+  function registerCommand(spec: import("laziergit").CommandSpec): import("laziergit").CommandHandle
+  function registerCommand<Row>(
+    spec: import("laziergit").CommandSpec | import("laziergit").RowCommandSpec<string, Row>,
+  ): import("laziergit").CommandHandle {
+    return attachDisposable(
+      scope,
+      hosts.commands.register(extension, spec, () => scope.active),
+      ["dispose", "refresh"],
+    )
+  }
+
   const commands = scope.guard<CommandRegistry>({
-    register(spec) {
-      return attachDisposable(scope, hosts.commands.register(extension, spec))
-    },
+    register: registerCommand,
     execute(id) {
       return scope.supervise(hosts.commands.execute(id))
     },
@@ -296,32 +372,6 @@ export function createExtensionContext(
         reveal: () => hosts.layout.reveal(spec.id),
       }
       return scope.guard(handle, ["dispose"])
-    },
-  })
-
-  const menus = scope.guard<MenuRegistry>({
-    register(spec) {
-      const title = spec.title
-      return attachDisposable(
-        scope,
-        hosts.menus.register(extension, {
-          id: spec.id,
-          title: typeof title === "string" ? () => title : title,
-          groups: spec.groups,
-        }),
-      )
-    },
-    extend(id, splice) {
-      return attachDisposable(scope, hosts.menus.extend(extension, id, splice))
-    },
-    open(id, target) {
-      // An unregistered id rejects rather than throwing synchronously past an `await` the
-      // caller wrote in good faith.
-      try {
-        return supervisePopup(scope, hosts.menus.open(extension, id, target))
-      } catch (error) {
-        return Promise.reject(error instanceof Error ? error : new Error(String(error)))
-      }
     },
   })
 
@@ -347,7 +397,13 @@ export function createExtensionContext(
       )
     },
     menu(options) {
-      return supervisePopup(scope, hosts.menus.adhoc(extension, options.title, options.groups))
+      return supervisePopup(
+        scope,
+        hosts.popups.actions(extension, {
+          title: options.title,
+          groups: popupMenuGroups(extension, options.title, options.groups, hosts),
+        }),
+      )
     },
     notify: bindNotifier(hosts.notifier, extension),
   })
@@ -403,7 +459,6 @@ export function createExtensionContext(
     events,
     commands,
     panes,
-    menus,
     popups,
     statusline,
     extensions: scope.guard({

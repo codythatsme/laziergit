@@ -33,7 +33,7 @@ const rowsSource = `
   export default defineExtension({
     name: "rows",
     activate(ctx) {
-      const host = createRowSource<Row>({ key: (row) => row.name })
+      const host = createRowSource<Row>({ pane: "rows", key: (row) => row.name })
 
       function RowLine({
         id,

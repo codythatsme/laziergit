@@ -175,16 +175,15 @@ describe("operation activity", () => {
 })
 
 describe("checking out", () => {
-  it("switches to the selected branch, and says so rather than doing nothing on HEAD", async () => {
+  it("is unavailable on HEAD and switches to another selected branch", async () => {
     const harness = await createHarness({ git: true })
     await seed(harness)
     await git(harness, "branch", "other")
 
     await start(harness)
 
-    // The cursor starts on HEAD, where a checkout would succeed and change nothing.
+    // The cursor starts on HEAD, where the contextual Command is unavailable.
     await press(harness, " ")
-    await waitForFrame(harness, "Already on main")
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main")
 
     await press(harness, "j")
@@ -214,7 +213,7 @@ describe("creating a branch", () => {
 
     await waitForFrame(harness, "* feature/x")
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("feature/x")
-    // Created *at* the selected branch, which is what "here" in the menu label means.
+    // Created *at* the selected branch, which is what "here" in the Command title means.
     expect(await git(harness, "rev-parse", "feature/x")).toBe(await git(harness, "rev-parse", "main"))
   }, 30_000)
 
@@ -262,15 +261,14 @@ describe("merging a branch into the checked-out branch", () => {
     await commit(harness, "main\n", "main work")
   }
 
-  it("opens with M, refuses HEAD, and fast-forwards without switching branches", async () => {
+  it("is unavailable on HEAD and fast-forwards another branch without switching", async () => {
     const harness = await createHarness({ git: true })
     await withFastForwardTopic(harness)
     const target = await git(harness, "rev-parse", "topic")
 
     await start(harness)
 
-    await press(harness, "M")
-    await waitForFrame(harness, "Cannot merge main into itself")
+    expect(harness.kernel.commands.getSnapshot().map((command) => command.id)).not.toContain("branches.merge")
 
     await openMergeMenuForSecondBranch(harness, "topic")
     expect(frame(harness)).toContain("Regular merge (fast-forward)")
@@ -441,19 +439,19 @@ describe("deleting a branch", () => {
     expect(await git(harness, "branch", "--list", "wip", "--format=%(refname:short)")).toBe("wip")
   }, 30_000)
 
-  it("refuses to delete the branch you are on, without asking git", async () => {
+  it("does not publish delete for the branch you are on", async () => {
     const harness = await createHarness({ git: true })
     await seed(harness)
 
     await start(harness)
     await press(harness, "d")
 
-    await waitForFrame(harness, "you are on it")
+    expect(harness.kernel.commands.getSnapshot().map((command) => command.id)).not.toContain("branches.delete")
     expect(frame(harness)).not.toContain("Delete main?")
   }, 30_000)
 })
 
-describe("the branch menu", () => {
+describe("contextual branch Commands", () => {
   /**
    * `stale` sits one commit behind `origin/main` with nothing of its own — the only shape a
    * fast-forward is legal for. `main` is in sync, and is HEAD.
@@ -467,55 +465,51 @@ describe("the branch menu", () => {
     await git(harness, "branch", "--set-upstream-to", "origin/main", "--", "stale")
   }
 
-  it("hides what does not apply to the branch it was opened for", async () => {
+  function commandIds(harness: Harness): readonly string[] {
+    return harness.kernel.commands.getSnapshot().map((command) => command.id)
+  }
+
+  it("publishes only what applies to the selected branch", async () => {
     const harness = await createHarness({ git: true })
     await withBehindBranch(harness)
 
     await start(harness)
-    await press(harness, "x")
-    await waitForFrame(harness, "Branch: main")
+    await waitForFrame(harness, "diff branch main")
 
-    const onHead = frame(harness)
-    expect(onHead).toContain("Create branch here")
+    const onHead = commandIds(harness)
+    expect(onHead).toContain("branches.create")
     // Nothing that would act on the branch you are standing on.
-    expect(onHead).not.toContain("Check out")
-    expect(onHead).not.toContain("Delete")
-    expect(onHead).not.toContain("Merge into current branch")
+    expect(onHead).not.toContain("branches.checkout")
+    expect(onHead).not.toContain("branches.delete")
+    expect(onHead).not.toContain("branches.merge")
     // In sync is not behind, so there is nothing to fast-forward.
-    expect(onHead).not.toContain("Fast-forward")
+    expect(onHead).not.toContain("branches.fast-forward")
 
-    await pressEscape(harness)
     await press(harness, "j")
-    await press(harness, "x")
-    await waitForFrame(harness, "Branch: stale")
+    await waitForFrame(harness, "diff branch stale")
 
-    const onStale = frame(harness)
-    expect(onStale).toContain("Check out")
-    expect(onStale).toContain("Merge into current branch")
-    expect(onStale).toContain("Force delete")
-    expect(onStale).toContain("Fast-forward")
+    const onStale = commandIds(harness)
+    expect(onStale).toContain("branches.checkout")
+    expect(onStale).toContain("branches.merge")
+    expect(onStale).toContain("branches.force-delete")
+    expect(onStale).toContain("branches.fast-forward")
     // It has an upstream already, so there is nothing to set one up for.
-    expect(onStale).not.toContain("Push, setting upstream")
-
-    await pressEscape(harness)
+    expect(onStale).not.toContain("branches.push-upstream")
   }, 30_000)
 
   /**
    * The URL itself is `pull-request.test.ts`'s subject; what this pins is the offer. `addOrigin`
    * points `origin` at a bare directory, which is a remote with no web page at all.
    */
-  it("hides the pull-request item when the remote is a directory nobody can browse", async () => {
+  it("hides the pull-request Command when the remote is a directory nobody can browse", async () => {
     const harness = await createHarness({ git: true })
     await seed(harness)
     await addOrigin(harness)
 
     await start(harness)
-    await press(harness, "x")
-    await waitForFrame(harness, "Branch: main")
+    await waitForFrame(harness, "diff branch main")
 
-    expect(frame(harness)).not.toContain("Open a pull request")
-
-    await pressEscape(harness)
+    expect(commandIds(harness)).not.toContain("branches.pull-request")
   }, 30_000)
 
   it("offers a pull request when the remote is a hosting service", async () => {
@@ -524,10 +518,9 @@ describe("the branch menu", () => {
     await git(harness, "remote", "add", "origin", "git@github.com:acme/tools.git")
 
     await start(harness)
-    await press(harness, "x")
-    await waitForFrame(harness, "Open a pull request")
+    await waitForFrame(harness, "diff branch main")
 
-    await pressEscape(harness)
+    expect(commandIds(harness)).toContain("branches.pull-request")
   }, 30_000)
 
   it("fast-forwards a branch that is not checked out", async () => {
@@ -540,8 +533,7 @@ describe("the branch menu", () => {
     // The behind marker is what the fast-forward erases, so its presence is the baseline.
     await waitForFrame(harness, "↓1")
     await press(harness, "j")
-    await press(harness, "x")
-    await waitForFrame(harness, "Branch: stale")
+    await waitForFrame(harness, "diff branch stale")
     await press(harness, "f")
 
     await waitForFrame(harness, (screen) => !screen.includes("↓1"))
@@ -556,10 +548,10 @@ describe("the branch menu", () => {
     await addOrigin(harness)
 
     await start(harness)
-    await press(harness, "x")
-    await waitForFrame(harness, "Push, setting upstream")
+    await waitForFrame(harness, "diff branch main")
+    expect(commandIds(harness)).toContain("branches.push-upstream")
 
-    await press(harness, "p")
+    await press(harness, "P")
     // A row says nothing about an upstream that is in sync, so the outcome is read from the
     // store rather than from the frame. Waiting for the store also waits for the write's
     // follow-up refresh, not merely for git's first on-disk side effect.
@@ -594,8 +586,6 @@ describe("the branch menu", () => {
     await press(harness, "j")
     await waitForFrame(harness, "diff branch topic")
 
-    await press(harness, "x")
-    await waitForFrame(harness, "Branch: topic")
     await press(harness, "u")
     await waitForFrame(harness, "Upstream for topic")
     expect(frame(harness)).toContain("origin/topic")

@@ -28,7 +28,6 @@ import { buildConfigSchema, buildThemeDocumentSchema } from "../config/schema"
 import { LayoutHost } from "../ui/layout"
 import { installKeymap, KeybindingHost } from "../ui/keybindings"
 import { ListQueryHost } from "../ui/list-query-host"
-import { MenuHost } from "../ui/menu-host"
 import { NotificationHost } from "../ui/notification-host"
 import { PopupHost, type CheatSheetEntry, type CheatSheetSection } from "../ui/popup-host"
 import { SlotOwners, type UiSlotRegistry, type UiSlots } from "../ui/slots"
@@ -177,7 +176,6 @@ export class ExtensionKernel {
   readonly notifications: NotificationHost
   readonly listQuery = new ListQueryHost()
   readonly statusline: StatuslineHost
-  readonly menus: MenuHost
   readonly events: EventHost
   readonly commands: CommandHost
   readonly keymap: Keymap<Renderable, KeyEvent>
@@ -263,7 +261,6 @@ export class ExtensionKernel {
     this.#disposeSlotErrors = this.#slotOwners.watch(this.registry, this.diagnostics)
     this.panes = new PaneHost(this.registry, this.#slotOwners)
     this.statusline = new StatuslineHost(this.registry, this.#slotOwners)
-    this.menus = new MenuHost(this.diagnostics, this.popups, this.#notifier)
     this.events = new EventHost(this.diagnostics)
     this.commands = new CommandHost(
       this.diagnostics,
@@ -327,7 +324,10 @@ export class ExtensionKernel {
     this.#syncRendererBackground()
     this.panes.subscribe(() => this.layout.setPanes(this.panes.getSnapshot()))
     this.layout.subscribe(() => this.#syncJumpKeys())
-    this.git.store.onPublish((publication) => this.#emitGitEvents(publication))
+    this.git.store.onPublish((publication) => {
+      this.commands.refresh()
+      this.#emitGitEvents(publication)
+    })
     this.layout.setFocusListener((paneId, previous) => {
       this.keybindings.setFocusedPane(paneId)
       this.listQuery.setFocusedPane(paneId)
@@ -1064,7 +1064,6 @@ export class ExtensionKernel {
       commands: this.commands,
       panes: this.panes,
       layout: this.layout,
-      menus: this.menus,
       popups: this.popups,
       statusline: this.statusline,
       git: this.git,
@@ -1158,8 +1157,7 @@ export class ExtensionKernel {
         })
       }
 
-      // The other direction from scope closure: menus opened by someone else that are showing
-      // this Extension's spliced items.
+      // Modal flows belong to their Extension and cannot survive its deactivation.
       try {
         this.popups.closeForExtension(name)
       } catch (error) {

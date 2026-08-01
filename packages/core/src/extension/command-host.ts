@@ -1,4 +1,4 @@
-import type { CommandSpec, Disposable } from "laziergit"
+import type { CommandHandle, CommandSpec, RowCommandSpec } from "laziergit"
 
 import { normalizeError, type Diagnostics } from "./diagnostics"
 import { assertScopedId } from "./id"
@@ -29,9 +29,21 @@ export interface CommandPaneAccess {
   isLive(paneId: string): boolean
 }
 
-interface RegisteredCommand {
+interface CommandShape {
+  readonly id: string
+  readonly title: string
+  readonly keys: CommandSpec["keys"]
+  readonly pane: string | undefined
+  readonly hidden: boolean | undefined
+  readonly hint: string | undefined
+  readonly capture: boolean | undefined
+}
+
+interface RegisteredCommand extends CommandShape {
   readonly owner: string
-  readonly spec: CommandSpec
+  /** Samples availability and, for a contextual Command, its selected row exactly once. */
+  readonly prepare: () => (() => void | Promise<void>) | undefined
+  readonly disposeSource: (() => void) | undefined
 }
 
 /**
@@ -61,13 +73,13 @@ function dedupByStroke(keys: readonly string[]): string[] {
   return [...byStroke.values()]
 }
 
-function declaredKeys(spec: CommandSpec): readonly string[] {
+function declaredKeys(spec: CommandShape): readonly string[] {
   if (spec.keys === undefined) return []
   return dedupByStroke(typeof spec.keys === "string" ? [spec.keys] : spec.keys)
 }
 
 /** A Pane's capture Commands only exist because that Pane has one; a global one cannot capture. */
-function capturesOf(spec: CommandSpec): boolean {
+function capturesOf(spec: CommandShape): boolean {
   return spec.capture === true && spec.pane !== undefined
 }
 
@@ -76,7 +88,7 @@ function capturesOf(spec: CommandSpec): boolean {
  * never enabled at the same time, so the same key may be claimed once in each — `escape`
  * cancelling an edit does not take `escape` away from the Pane's normal mode.
  */
-function claimScope(spec: CommandSpec): string {
+function claimScope(spec: CommandShape): string {
   return `${spec.pane ?? ""}\0${capturesOf(spec) ? "capture" : "normal"}`
 }
 
@@ -89,11 +101,13 @@ export class CommandHost {
   readonly #commands = new Map<string, RegisteredCommand>()
   readonly #listeners = new Set<() => void>()
   readonly #reportedConflicts = new Set<string>()
+  readonly #reportedConditions = new Set<string>()
   readonly #diagnostics: Diagnostics
   readonly #panes: CommandPaneAccess
   readonly #notify: Notifier
   #overrides: ReadonlyMap<string, readonly string[]> = new Map()
   #snapshot: readonly CommandEntry[] = []
+  #refreshScheduled = false
 
   constructor(diagnostics: Diagnostics, panes: CommandPaneAccess, notify: Notifier = createNotifier()) {
     this.#diagnostics = diagnostics
@@ -115,28 +129,74 @@ export class CommandHost {
     this.#publish()
   }
 
-  register(owner: string, spec: CommandSpec): Disposable {
+  register<Row>(owner: string, spec: RowCommandSpec<string, Row>, active?: () => boolean): CommandHandle
+  register(owner: string, spec: CommandSpec, active?: () => boolean): CommandHandle
+  register<Row>(owner: string, spec: CommandSpec | RowCommandSpec<string, Row>, active?: () => boolean): CommandHandle
+  register<Row>(
+    owner: string,
+    spec: CommandSpec | RowCommandSpec<string, Row>,
+    active: () => boolean = () => true,
+  ): CommandHandle {
     assertScopedId(owner, spec.id)
     if (this.#commands.has(spec.id)) throw new Error(`Command "${spec.id}" is already registered`)
-    if (spec.capture === true && spec.pane === undefined) {
+    const targeted = "source" in spec
+    const pane = targeted ? spec.source.pane : spec.pane
+    if (spec.capture === true && pane === undefined) {
       this.#report("command", owner, `${spec.id}: capture needs a pane and was ignored`)
     }
 
-    const registered = { owner, spec }
+    const prepare = targeted
+      ? (): (() => void | Promise<void>) | undefined => {
+          if (!active()) return undefined
+          const row = spec.source.selected()
+          if (row === undefined || spec.when?.(row) === false) return undefined
+          return () => spec.run(row)
+        }
+      : (): (() => void | Promise<void>) | undefined => {
+          if (!active()) return undefined
+          if (spec.when?.() === false) return undefined
+          return () => spec.run()
+        }
+    const sourceSubscription = targeted ? spec.source.subscribeSelection(() => this.#scheduleRefresh()) : undefined
+    const registered: RegisteredCommand = {
+      owner,
+      id: spec.id,
+      title: spec.title,
+      keys: spec.keys,
+      pane,
+      hidden: spec.hidden,
+      hint: spec.hint,
+      capture: spec.capture,
+      prepare,
+      disposeSource: sourceSubscription === undefined ? undefined : () => sourceSubscription.dispose(),
+    }
     this.#commands.set(spec.id, registered)
     this.#publish()
 
-    return {
+    let disposed = false
+    const handle: CommandHandle = {
+      refresh: () => {
+        if (!disposed) this.#publish()
+      },
       dispose: () => {
+        if (disposed) return
+        disposed = true
+        registered.disposeSource?.()
         if (this.#commands.get(spec.id) !== registered) return
         this.#commands.delete(spec.id)
         this.#publish()
       },
     }
+    return handle
   }
 
-  registerComponent(owner: string, paneId: string, spec: Omit<CommandSpec, "pane">): Disposable {
+  registerComponent(owner: string, paneId: string, spec: Omit<CommandSpec, "pane">): CommandHandle {
     return this.register(owner, { ...spec, pane: paneId })
+  }
+
+  /** Re-evaluates every conditional Command without changing catalog order. */
+  refresh(): void {
+    this.#publish()
   }
 
   /** Commands a palette should offer right now: visible, and live if Pane-scoped. */
@@ -147,27 +207,35 @@ export class CommandHost {
   async execute(id: string): Promise<void> {
     const command = this.#commands.get(id)
     if (!command) throw new Error(`Unknown command "${id}"`)
-    if (command.spec.pane) this.#panes.focus(command.spec.pane)
+    if (command.pane) this.#panes.focus(command.pane)
+
+    const run = this.#availableRun(command)
+    if (run === undefined) throw new Error(`Command "${id}" is unavailable`)
 
     try {
-      await command.spec.run()
+      await run()
     } catch (error) {
       const normalized = normalizeError(error)
       this.#report("command", command.owner, `${id}: ${normalized.message}`, normalized)
       try {
         this.#notify({
           extension: command.owner,
-          message: `${command.spec.title}: ${normalized.message}`,
+          message: `${command.title}: ${normalized.message}`,
           level: "error",
         })
       } catch {
         // Custom notification adapters are isolated from Command execution.
       }
+    } finally {
+      this.#publish()
     }
   }
 
   #publish(): void {
-    this.#snapshot = this.#resolve()
+    this.#snapshot = this.#resolve().filter((entry) => {
+      const command = this.#commands.get(entry.id)
+      return command !== undefined && this.#availableRun(command) !== undefined
+    })
     for (const listener of Array.from(this.#listeners)) {
       try {
         listener()
@@ -191,7 +259,7 @@ export class CommandHost {
       const accepted: string[] = []
       for (const key of keys) {
         // Scoped by the stroke, not the spelling, so `"D"` and `"d"` contend for one binding.
-        const scope = `${claimScope(command.spec)}\0${keyStroke(key)}`
+        const scope = `${claimScope(command)}\0${keyStroke(key)}`
         const previous = claimed.get(scope)
         if (previous !== undefined && !fromConfig && configured.has(scope)) {
           this.#reportConflict(command.owner, key, id, previous)
@@ -218,19 +286,42 @@ export class CommandHost {
       if (override !== undefined) claim(id, command, dedupByStroke(override), true)
     }
     for (const [id, command] of this.#commands) {
-      if (!this.#overrides.has(id)) claim(id, command, declaredKeys(command.spec), false)
+      if (!this.#overrides.has(id)) claim(id, command, declaredKeys(command), false)
     }
 
     return [...this.#commands].map(([id, command]) => ({
       id,
       owner: command.owner,
-      title: command.spec.title,
-      hint: command.spec.hint,
-      pane: command.spec.pane,
-      hidden: command.spec.hidden === true,
-      capture: capturesOf(command.spec),
+      title: command.title,
+      hint: command.hint,
+      pane: command.pane,
+      hidden: command.hidden === true,
+      capture: capturesOf(command),
       keys: Object.freeze(keysById.get(id) ?? []),
     }))
+  }
+
+  #availableRun(command: RegisteredCommand): (() => void | Promise<void>) | undefined {
+    try {
+      return command.prepare()
+    } catch (error) {
+      const normalized = normalizeError(error)
+      const signature = `${command.id}\0${normalized.message}`
+      if (!this.#reportedConditions.has(signature)) {
+        this.#reportedConditions.add(signature)
+        this.#report("command", command.owner, `${command.id} when(): ${normalized.message}`, normalized)
+      }
+      return undefined
+    }
+  }
+
+  #scheduleRefresh(): void {
+    if (this.#refreshScheduled) return
+    this.#refreshScheduled = true
+    queueMicrotask(() => {
+      this.#refreshScheduled = false
+      this.#publish()
+    })
   }
 
   #reportConflict(owner: string, key: string, previous: string, winner: string): void {

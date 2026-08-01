@@ -195,8 +195,6 @@ function discardConfirmation(plan: DiscardPlan, change: FileChange): Confirmatio
   }
 }
 
-const isNotConflicted = (change: FileChange): boolean => !isConflicted(change)
-
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`
 }
@@ -220,7 +218,7 @@ export default defineExtension({
   },
 
   activate(ctx): FilesApi {
-    const host = createRowSource<FileChange>({ key: changeKey })
+    const host = createRowSource<FileChange>({ pane: "files", key: changeKey })
     const diff = ctx.extensions.get("diff")
 
     // Cells in `activate`, not `useState`: the Layout unmounts a Pane it has tabbed away, and
@@ -283,6 +281,15 @@ export default defineExtension({
       }
     }
 
+    async function unstageDirectory(node: DirectoryNode): Promise<void> {
+      const previous = filesUnder(node).flatMap((change) => (change.previousPath === null ? [] : [change.previousPath]))
+      try {
+        await ctx.git.unstage([node.path, ...previous])
+      } catch (error) {
+        fail("Unstage", error)
+      }
+    }
+
     async function unstageAll(): Promise<void> {
       try {
         await ctx.git.unstage("all")
@@ -316,18 +323,19 @@ export default defineExtension({
         await stage([node.path])
         return
       }
-      const previous = filesUnder(node).flatMap((change) => (change.previousPath === null ? [] : [change.previousPath]))
-      try {
-        await ctx.git.unstage([node.path, ...previous])
-      } catch (error) {
-        fail("Unstage", error)
-      }
+      await unstageDirectory(node)
     }
 
     async function toggleRow(node: TreeNode | undefined): Promise<void> {
       if (node === undefined) return
       if (node.kind === "file") await toggleFile(node.change)
       else await toggleDirectory(node)
+    }
+
+    async function unstageRow(node: TreeNode | undefined): Promise<void> {
+      if (node === undefined) return
+      if (node.kind === "file") await unstage(node.change)
+      else await unstageDirectory(node)
     }
 
     async function discard(change: FileChange): Promise<void> {
@@ -432,85 +440,6 @@ export default defineExtension({
         fail("Open", error)
       }
     }
-
-    const openFile = (change: FileChange): Promise<void> => openPath(change.path)
-
-    /**
-     * `x` opens the registered `files.actions` menu on a file, and an ad-hoc one on a folder:
-     * a directory row is not a `FileChange`, so nothing can splice into the folder menu.
-     */
-    async function openMenu(node: TreeNode | undefined): Promise<void> {
-      if (node === undefined) return
-      if (node.kind === "file") {
-        await ctx.menus.open("files.actions", node.change)
-        return
-      }
-      await ctx.popups.menu({
-        title: `Folder: ${node.path}`,
-        groups: [
-          {
-            id: "folder",
-            title: "This folder",
-            items: [
-              { key: "s", label: "Stage everything here", run: () => stage([node.path]) },
-              {
-                key: "u",
-                label: "Unstage everything here",
-                run: () => toggleDirectory({ ...node, unstaged: false, untracked: false }),
-              },
-              { key: "shift+d", label: "Discard everything here", run: () => discardDirectory(node) },
-              { key: "o", label: "Open folder", run: () => openPath(node.path) },
-            ],
-          },
-        ],
-      })
-    }
-
-    ctx.menus.register({
-      id: "files.actions",
-      title: (change) => `File: ${change.path}`,
-      groups: [
-        {
-          id: "file",
-          title: "This file",
-          items: [
-            { key: "s", label: "Stage", when: isNotConflicted, run: (change) => stage([change.path]) },
-            {
-              key: "u",
-              label: "Unstage",
-              when: isStaged,
-              run: unstage,
-            },
-            { key: "d", label: "Discard changes", when: isNotConflicted, run: discard },
-            // Shares `o` with the conflict group below: visibility is settled before key
-            // conflicts, and these two `when`s are exact opposites.
-            { key: "o", label: "Open in default application", when: isNotConflicted, run: openFile },
-          ],
-        },
-        {
-          id: "conflict",
-          title: "Conflict",
-          items: [
-            { key: "o", label: "Open in default application", when: isConflicted, run: openFile },
-            { key: "m", label: "Stage resolved", when: isConflicted, run: (change) => stage([change.path]) },
-          ],
-        },
-        {
-          id: "all",
-          title: "All files",
-          items: [
-            { key: "a", label: "Stage all files", run: () => stage("all") },
-            { key: "r", label: "Unstage all files", run: unstageAll },
-            {
-              // `shift+d`, not `D`: the parser lowercases a bare letter, colliding with `d`.
-              key: "shift+d",
-              label: "Discard all working-tree changes",
-              run: discardAll,
-            },
-          ],
-        },
-      ],
-    })
 
     /**
      * The shared shape of every row. Split from the two wrappers below because `useDecoration`
@@ -657,10 +586,21 @@ export default defineExtension({
 
       useCommand({
         id: "files.toggle-stage",
-        title: "Stage / unstage file",
+        title: "Stage / unstage selected path",
         hint: "stage",
         keys: "space",
         run: () => toggleRow(selected?.node),
+      })
+      useCommand({
+        id: "files.unstage-selected",
+        title: "Unstage selected path",
+        hint: "unstage",
+        keys: "u",
+        when: () => {
+          const node = selected?.node
+          return node?.kind === "directory" ? node.staged : node !== undefined && isStaged(node.change)
+        },
+        run: () => unstageRow(selected?.node),
       })
       useCommand({
         id: "files.stage-all",
@@ -674,6 +614,10 @@ export default defineExtension({
         title: "Discard changes to file",
         hint: "discard",
         keys: "d",
+        when: () => {
+          const node = selected?.node
+          return node?.kind === "directory" || (node !== undefined && !isConflicted(node.change))
+        },
         run: () => {
           const node = selected?.node
           if (node === undefined) return undefined
@@ -682,16 +626,21 @@ export default defineExtension({
       })
       useCommand({
         id: "files.open",
-        title: "Open file in default application",
+        title: "Open selected path in default application",
         keys: "o",
         run: () => (selected === undefined ? undefined : openPath(selected.node.path)),
       })
       useCommand({
-        id: "files.menu",
-        title: "File actions",
-        hint: "menu",
-        keys: "x",
-        run: () => openMenu(selected?.node),
+        id: "files.unstage-all",
+        title: "Unstage all files",
+        keys: "r",
+        run: unstageAll,
+      })
+      useCommand({
+        id: "files.discard-all",
+        title: "Discard all working-tree changes",
+        keys: "shift+d",
+        run: discardAll,
       })
 
       // `return`, not `"enter"`: OpenTUI's name for the key, and core installs no aliases, so

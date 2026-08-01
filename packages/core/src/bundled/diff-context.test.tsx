@@ -1,14 +1,18 @@
 import { describe, expect, it } from "bun:test"
 import { symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
 import {
   createHarness,
   frame,
   installHarnessLifecycle,
+  press,
   renderApp,
   runCommand,
+  settle,
+  waitFor,
   waitForFrame,
   type Harness,
 } from "../test-harness"
@@ -102,6 +106,15 @@ async function show(harness: Harness, target: unknown): Promise<void> {
   await runCommand(harness, "driver.show")
 }
 
+/** Runs a diff mutation and its event-driven reload in one React act scope. */
+async function runDiffCommand(harness: Harness, id: string): Promise<void> {
+  await act(async () => {
+    await harness.kernel.commands.execute(id)
+    await harness.kernel.events.drain()
+  })
+  await settle(harness)
+}
+
 async function seed(harness: Harness): Promise<void> {
   await writeFile(join(harness.directory, ".gitignore"), ignored)
   await writeFile(join(harness.directory, "one.txt"), "first\n")
@@ -189,6 +202,43 @@ describe("the diff Pane's context header", () => {
     // and lifting it as a header would swallow the patch.
     expect(frame(harness)).not.toContain("Author:")
     expect(frame(harness)).not.toContain("Ada Lovelace")
+  }, 30_000)
+
+  it("stages and unstages the shown path with direct diff Commands", async () => {
+    const harness = await createHarness({ git: true, width: 150 })
+    await seed(harness)
+    await writeFile(join(harness.directory, "one.txt"), "edited\n")
+
+    await start(harness)
+    await show(harness, { kind: "workingTree", path: "one.txt" })
+    await waitForFrame(harness, "edited")
+    await press(harness, "\t")
+    expect(harness.kernel.commands.getSnapshot().find((command) => command.id === "diff.stage")?.keys).toContain("s")
+    await runDiffCommand(harness, "diff.stage")
+    await waitFor(
+      harness,
+      () =>
+        harness.kernel.git
+          .getSnapshot()
+          .status.files.some((file) => file.kind === "changed" && file.path === "one.txt" && file.index !== null),
+      "the direct diff Command to stage the path",
+    )
+    expect(harness.kernel.popups.top).toBeUndefined()
+
+    await show(harness, { kind: "staged", path: "one.txt" })
+    await waitForFrame(harness, "edited")
+    expect(harness.kernel.commands.getSnapshot().find((command) => command.id === "diff.unstage")?.keys).toContain("u")
+    await runDiffCommand(harness, "diff.unstage")
+    await waitFor(
+      harness,
+      () =>
+        harness.kernel.git
+          .getSnapshot()
+          .status.files.some((file) => file.kind === "changed" && file.path === "one.txt" && file.index === null),
+      "the direct diff Command to unstage the path",
+    )
+    await waitForFrame(harness, "no changes")
+    expect(harness.kernel.popups.top).toBeUndefined()
   }, 30_000)
 
   it("still says a commit changed nothing, with its message above the answer", async () => {

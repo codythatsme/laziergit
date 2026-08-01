@@ -15,7 +15,7 @@ const httpRemote = /^(https?:\/\/\S+?)(?:\.git)?\/?$/
 /**
  * The web page a repository's remote corresponds to, or `null` when it has none — a `file://`
  * remote, a `git://` daemon or a sibling clone, where `null` is what lets an "open on remote"
- * menu item hide itself with `when`. Prefers `origin` over whatever git listed first.
+ * contextual Command hide itself with `when`. Prefers `origin` over whatever git listed first.
  *
  * ```ts
  * const url = remoteWebUrl(ctx.git.state.remotes);

@@ -182,6 +182,25 @@ describe("staging from the files pane", () => {
     }
   })
 
+  it("unstages a partially staged file with u without losing its working-tree edit", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "tracked.txt", "one\n")
+    await commitTracked(harness, "tracked.txt")
+    await write(harness, "tracked.txt", "two\n")
+    await git(harness, "add", "tracked.txt")
+    await write(harness, "tracked.txt", "three\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    await waitForFrame(harness, "MM tracked.txt")
+
+    await press(harness, "u")
+    await waitFor(harness, () => stagedInStore(harness).length === 0, "the selected file to leave the index")
+    expect(await staged(harness)).toEqual([])
+    expect(await Bun.file(join(harness.directory, "tracked.txt")).text()).toBe("three\n")
+    expect(frame(harness)).toContain(" M tracked.txt")
+  })
+
   it("draws one row per path under its directory, indented", async () => {
     const harness = await createFilesHarness()
     await write(harness, "src/a.txt", "a\n")
@@ -265,6 +284,25 @@ describe("staging from the files pane", () => {
     await press(harness, " ")
     await waitFor(harness, () => stagedInStore(harness).length === 0, "the directory to leave the index")
     expect(await staged(harness)).toEqual([])
+  })
+
+  it("unstages the staged part of a mixed directory with u", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "src/staged.txt", "one\n")
+    await write(harness, "src/unstaged.txt", "one\n")
+    await commitTracked(harness, "src/staged.txt", "src/unstaged.txt")
+    await write(harness, "src/staged.txt", "two\n")
+    await git(harness, "add", "src/staged.txt")
+    await write(harness, "src/unstaged.txt", "two\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    await waitForFrame(harness, "▼~ src")
+
+    await press(harness, "u")
+    await waitFor(harness, () => stagedInStore(harness).length === 0, "the selected directory to leave the index")
+    expect(await staged(harness)).toEqual([])
+    expect(await Bun.file(join(harness.directory, "src/unstaged.txt")).text()).toBe("two\n")
   })
 
   it("toggles between the tree and a flat list of full paths", async () => {
@@ -377,42 +415,45 @@ describe("discarding from the files pane", () => {
   })
 })
 
-describe("the files action menu", () => {
-  it("offers the file and all-files actions on an ordinary row", async () => {
+describe("the files Command catalog", () => {
+  it("publishes the file and all-files actions without an x menu", async () => {
     const harness = await createFilesHarness()
     await write(harness, "loose.txt", "untracked\n")
 
     await renderApp(harness)
     await focusFiles(harness)
-    await press(harness, "x")
-    await waitForFrame(harness, "File: loose.txt")
+    await waitForFrame(harness, "loose.txt")
 
-    const rendered = frame(harness)
-    expect(rendered).toMatch(/ {2}s {2,}Stage/)
-    expect(rendered).toMatch(/ {2}d {2,}Discard changes/)
-    expect(rendered).toMatch(/ {2}o {2,}Open in default application/)
-    expect(rendered).toMatch(/ {2}a {2,}Stage all files/)
-    // An untracked file is not in the index, and conflict items belong to conflicted rows.
-    expect(rendered).not.toContain("  u  Unstage")
-    expect(rendered).not.toContain("Stage resolved")
+    const commands = harness.kernel.commands.getSnapshot().map((command) => command.id)
+    expect(commands).toContain("files.toggle-stage")
+    expect(commands).not.toContain("files.unstage-selected")
+    expect(commands).toContain("files.discard")
+    expect(commands).toContain("files.open")
+    expect(commands).toContain("files.stage-all")
+    expect(commands).toContain("files.unstage-all")
+    expect(commands).toContain("files.discard-all")
+    expect(commands).not.toContain("files.menu")
+
+    await press(harness, "x")
+    expect(harness.kernel.popups.top).toBeUndefined()
   })
 
   /** `o` is what a lazygit user reaches for; `e` stays reserved for editing in `$EDITOR`. */
-  it("binds opening to o, in the pane as well as the menu", async () => {
+  it("binds opening to o in the pane", async () => {
     const harness = await createFilesHarness()
     await write(harness, "loose.txt", "untracked\n")
 
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "?")
-    await waitForFrame(harness, "Open file in default application")
+    await waitForFrame(harness, "Open selected path in default application")
 
     const sheet = frame(harness)
-    expect(sheet).toMatch(/ {2}o {2,}Open file in default application/)
+    expect(sheet).toMatch(/ {2}o {2,}Open selected path in default application/)
     expect(sheet).not.toMatch(/ {2}e {2,}Open file/)
   })
 
-  it("runs a menu item against the row it was opened for", async () => {
+  it("runs the direct stage Command against the selected row", async () => {
     const harness = await createFilesHarness()
     await write(harness, "loose.txt", "untracked\n")
     await write(harness, "other.txt", "also untracked\n")
@@ -420,12 +461,31 @@ describe("the files action menu", () => {
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "j")
-    await press(harness, "x")
-    await waitForFrame(harness, "File: other.txt")
+    await waitForFrame(harness, "showing workingTree other.txt")
 
-    await press(harness, "s")
+    await press(harness, " ")
     await waitFor(harness, () => stagedInStore(harness).length === 1, "the staging to reach the index")
     expect(await staged(harness)).toEqual(["other.txt"])
+  })
+
+  it("runs the former all-files actions directly with r and shift+d", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "tracked.txt", "one\n")
+    await commitTracked(harness, "tracked.txt")
+    await write(harness, "tracked.txt", "two\n")
+    await git(harness, "add", "tracked.txt")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    await press(harness, "r")
+    await waitFor(harness, () => stagedInStore(harness).length === 0, "unstage-all to reach the index")
+    expect(harness.kernel.popups.top).toBeUndefined()
+
+    await press(harness, "D")
+    await waitForFrame(harness, "Discard all working-tree changes?")
+    await press(harness, "y")
+    await waitFor(harness, () => harness.kernel.git.getSnapshot().status.files.length === 0, "discard-all to finish")
+    expect(await Bun.file(join(harness.directory, "tracked.txt")).text()).toBe("one\n")
   })
 })
 
@@ -454,25 +514,22 @@ describe("conflicts, shown and delegated", () => {
     expect(frame(harness)).toContain("UU shared.txt")
   })
 
-  it("hides staging and discarding on a conflicted row, and offers the two delegating items", async () => {
+  it("keeps conflict handling in direct Commands, without opening an x menu", async () => {
     const harness = await createFilesHarness()
     await conflict(harness)
 
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "x")
-    await waitForFrame(harness, "File: shared.txt")
-
-    const rendered = frame(harness)
-    expect(rendered).toContain("Conflict")
-    expect(rendered).toMatch(/ {2}o {2,}Open in default application/)
-    expect(rendered).toMatch(/ {2}m {2,}Stage resolved/)
-    // Hidden, not greyed: half-resolving a conflict is not on offer here at all.
-    expect(rendered).not.toMatch(/ {2}s {2,}Stage/)
-    expect(rendered).not.toMatch(/ {2}d {2,}Discard changes/)
+    expect(harness.kernel.popups.top).toBeUndefined()
+    const commands = harness.kernel.commands.getSnapshot().map((command) => command.id)
+    expect(commands).toContain("files.toggle-stage")
+    expect(commands).toContain("files.open")
+    expect(commands).not.toContain("files.discard")
+    expect(commands).not.toContain("files.menu")
   })
 
-  it("records a resolution when the menu's stage-resolved runs", async () => {
+  it("records a resolution when the direct stage Command runs", async () => {
     const harness = await createFilesHarness()
     await conflict(harness)
     // What resolving in the editor looks like from laziergit's side.
@@ -480,9 +537,7 @@ describe("conflicts, shown and delegated", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    await press(harness, "x")
-    await waitForFrame(harness, "File: shared.txt")
-    await press(harness, "m")
+    await press(harness, " ")
 
     // Waited on through the store rather than the frame: the popup can cover the row, so the
     // conflict pair leaving the screen would not prove the write landed.
@@ -495,19 +550,16 @@ describe("conflicts, shown and delegated", () => {
     expect(await staged(harness)).toEqual(["shared.txt"])
   })
 
-  it("makes the key of an item whose when() is false inert rather than destructive", async () => {
+  it("leaves the retired x key inert on a conflicted row", async () => {
     const harness = await createFilesHarness()
     await conflict(harness)
 
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "x")
-    await waitForFrame(harness, "File: shared.txt")
-    // `d` is "Discard changes", hidden on this row — so it does nothing at all.
-    await press(harness, "d")
 
-    expect(frame(harness)).toMatch(/ {2}m {2,}Stage resolved/)
-    expect(frame(harness)).not.toContain("Discard changes?")
+    expect(harness.kernel.popups.top).toBeUndefined()
+    expect(frame(harness)).toContain("UU shared.txt")
   })
 })
 

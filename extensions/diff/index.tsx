@@ -138,7 +138,7 @@ function contextOf(target: DiffTarget, state: GitState): string | null {
 
 /**
  * The path a file-level stage/unstage would act on, or `null` when there is none. Shared so a
- * menu item's `when` and its `run` cannot disagree — `when` cannot narrow the type for `run`.
+ * Command availability and execution share this test, so they cannot disagree.
  */
 function stageablePath(target: DiffTarget): string | null {
   if (target.kind !== "workingTree" && target.kind !== "staged") return null
@@ -170,7 +170,7 @@ export default defineExtension({
   },
 
   activate(ctx): DiffApi {
-    // Cells, not Pane state: `show` and the menu items run while this Pane is unmounted.
+    // Cells, not Pane state: `show` can run while this Pane is unmounted.
     const target = createCell<DiffTarget | null>(null)
     // Seeded from config and never written back: `ctx.config` is an activation snapshot, so
     // the toggle is a session layer over the configured default.
@@ -249,9 +249,7 @@ export default defineExtension({
       }, [shownKey, scroll])
 
       // Staging, committing and checking out change what an unchanged target diffs to.
-      useEvent("git.refreshed", () => {
-        void load()
-      })
+      useEvent("git.refreshed", () => load())
 
       useCommand({
         id: "diff.toggle-view",
@@ -259,6 +257,60 @@ export default defineExtension({
         hint: "layout",
         keys: "v",
         run: toggleView,
+      })
+      useCommand({
+        id: "diff.copy-path",
+        title: "Copy diff path",
+        keys: "y",
+        when: () => current?.path !== null && current?.path !== undefined,
+        run: async () => {
+          const open = target.get()
+          if (open?.path === null || open?.path === undefined) return
+          try {
+            await ctx.copy(open.path)
+            ctx.popups.notify(`Copied ${open.path}`, "success")
+          } catch (error) {
+            ctx.popups.notify(messageOf(error), "error")
+          }
+        },
+      })
+      useCommand({
+        id: "diff.stage",
+        title: "Stage the diffed file",
+        keys: "s",
+        when: () => current?.kind === "workingTree" && stageablePath(current) !== null,
+        run: async () => {
+          const open = target.get()
+          const path = open === null ? null : stageablePath(open)
+          if (path === null) return
+          try {
+            await ctx.git.stage([path])
+          } catch (error) {
+            ctx.popups.notify(messageOf(error), "error")
+          }
+        },
+      })
+      useCommand({
+        id: "diff.unstage",
+        title: "Unstage the diffed file",
+        keys: "u",
+        when: () => current?.kind === "staged" && stageablePath(current) !== null,
+        run: async () => {
+          const open = target.get()
+          const path = open === null ? null : stageablePath(open)
+          if (path === null) return
+          try {
+            await ctx.git.unstage([path])
+          } catch (error) {
+            ctx.popups.notify(messageOf(error), "error")
+          }
+        },
+      })
+      useCommand({
+        id: "diff.refresh",
+        title: "Refresh repository state",
+        keys: "r",
+        run: () => ctx.git.refresh(),
       })
 
       // Hidden like `useListCursor`'s own motion keys: every Pane has them, and repeating them
@@ -301,18 +353,6 @@ export default defineExtension({
         // `shift+g`, not `G`: the parser lowercases a bare letter, colliding with `g` above.
         keys: ["shift+g", "end"],
         run: () => scroll.scrollTo("end"),
-      })
-
-      useCommand({
-        id: "diff.menu",
-        title: "Diff actions",
-        hint: "menu",
-        keys: "x",
-        run: async () => {
-          const open = target.get()
-          if (open === null) return ctx.popups.notify("Nothing selected", "warning")
-          await ctx.menus.open("diff.actions", open)
-        },
       })
 
       if (current === null) return <text fg={theme.textMuted}>nothing selected</text>
@@ -388,80 +428,6 @@ export default defineExtension({
       title: "Diff",
       component: DiffPane,
       placement: { column: 1, order: 10 },
-    })
-
-    ctx.menus.register({
-      id: "diff.actions",
-      title: (open) => `Diff: ${scopeOf(open)}`,
-      groups: [
-        {
-          id: "view",
-          items: [
-            { key: "v", label: "Toggle unified/split", run: toggleView },
-            {
-              key: "y",
-              label: "Copy path",
-              when: (open) => open.path !== null,
-              run: async (open) => {
-                if (open.path === null) return
-                try {
-                  await ctx.copy(open.path)
-                  ctx.popups.notify(`Copied ${open.path}`, "success")
-                } catch (error) {
-                  ctx.popups.notify(messageOf(error), "error")
-                }
-              },
-            },
-          ],
-        },
-        {
-          id: "index",
-          title: "Index",
-          items: [
-            {
-              key: "s",
-              label: "Stage this file",
-              when: (open) => open.kind === "workingTree" && stageablePath(open) !== null,
-              run: async (open) => {
-                const path = stageablePath(open)
-                if (path === null) return
-                try {
-                  await ctx.git.stage([path])
-                } catch (error) {
-                  ctx.popups.notify(messageOf(error), "error")
-                }
-              },
-            },
-            {
-              key: "u",
-              label: "Unstage this file",
-              when: (open) => open.kind === "staged" && stageablePath(open) !== null,
-              run: async (open) => {
-                const path = stageablePath(open)
-                if (path === null) return
-                try {
-                  await ctx.git.unstage([path])
-                } catch (error) {
-                  ctx.popups.notify(messageOf(error), "error")
-                }
-              },
-            },
-          ],
-        },
-        {
-          id: "refresh",
-          items: [
-            {
-              key: "r",
-              label: "Refresh",
-              // The store, not just this Pane: `git.refreshed` re-runs the fetch anyway.
-              run: async () => {
-                await ctx.git.refresh()
-              },
-            },
-          ],
-        },
-      ],
     })
 
     return {

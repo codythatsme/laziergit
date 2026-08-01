@@ -447,11 +447,13 @@ describe("laziergit through a real terminal", () => {
       const keys = await waitForScreen(
         session,
         "the focused branches pane's live keybindings",
-        (screen) => screen.includes("Keybindings — branches") && screen.includes("Check out branch"),
+        (screen) => screen.includes("Keybindings — branches") && screen.includes("Create branch here"),
       )
       // Scoped to the Pane holding the keyboard: the files Pane is on screen, in the same
-      // tab group, and its keys are not on this sheet.
-      expect(keys).not.toContain("Stage / unstage file")
+      // tab group, and its keys are not on this sheet. Checkout is conditional and the
+      // selected row is HEAD; moving to topic below makes its direct space binding live.
+      expect(keys).not.toContain("Stage / unstage selected path")
+      expect(keys).not.toContain("Check out branch")
       expect(keys).toContain("Global")
       await pressEscape(session)
       await waitForScreen(session, "the keybindings popup to close", (screen) => !screen.includes("Keybindings"))

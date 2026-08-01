@@ -11,12 +11,6 @@ import {
   type UpstreamInfo,
 } from "laziergit"
 
-/** The last segment of the repository root — an Extension has no `node:path`. */
-function directoryName(root: string): string {
-  const segments = root.split(/[/\\]/).filter((segment) => segment !== "")
-  return segments.at(-1) ?? root
-}
-
 type WithoutBranch = Exclude<Head, { kind: "onBranch" }>
 
 function onBranch(head: Head): boolean {
@@ -122,7 +116,6 @@ export default defineExtension({
   activate(ctx) {
     // The repository root is constant for the session.
     const root = ctx.git.root
-    const repoName = directoryName(root)
 
     /**
      * The operation in flight: a mutual-exclusion latch. A reload landing mid-push never
@@ -242,8 +235,8 @@ export default defineExtension({
       const head = ctx.git.state.head
       if (head.kind !== "onBranch") return refuse(head, "push")
 
-      // The menu's `when: tracking` already hid this, but a checkout can land between the menu
-      // opening and the key, and the lease is a claim about a ref this branch tracks.
+      // The Command's `when: tracking` hides this, but a checkout can land between catalog
+      // publication and the key, and the lease is a claim about a ref this branch tracks.
       const upstream = head.upstream
       if (upstream === null) {
         return ctx.popups.notify(`Cannot force-push: ${head.branch} has no upstream`, "warning")
@@ -318,12 +311,13 @@ export default defineExtension({
     ctx.statusline.register({ id: "sync", component: SyncSegment, align: "right" })
 
     // No `hint` on any of these: a global's hint would sit on every Pane's bar permanently,
-    // and these are all one `shift+s` away in the menu.
+    // and the less-common operations remain individually discoverable in the Command catalog.
     ctx.commands.register({
       id: "sync.push",
       title: "Push",
       // `shift+p`, not `"P"`: the parser lowercases a bare letter, colliding with `sync.pull`.
       keys: "shift+p",
+      when: () => tracking(ctx.git.state.head),
       run: push,
     })
     ctx.commands.register({
@@ -331,6 +325,7 @@ export default defineExtension({
       title: "Pull",
       // Global, so the stash Pane's own `p` shadows it while that Pane is focused.
       keys: "p",
+      when: () => onBranch(ctx.git.state.head),
       run: () => pull(false),
     })
     ctx.commands.register({ id: "sync.fetch", title: "Fetch all remotes", keys: "f", run: () => fetch(false) })
@@ -347,89 +342,54 @@ export default defineExtension({
       },
     })
     ctx.commands.register({
-      id: "sync.menu",
-      title: "Repository actions",
-      keys: "shift+s",
-      // The whole state, not just HEAD: the repository group below needs the remotes.
-      run: () => ctx.menus.open("sync.actions", ctx.git.state),
+      id: "sync.push-upstream",
+      title: "Push and set upstream",
+      keys: "u",
+      when: () => untracked(ctx.git.state.head),
+      run: push,
     })
-
-    /**
-     * The target is a snapshot taken when the menu opened, so it decides what is *offered*;
-     * every `run` re-reads HEAD, because what an action applies to is the repository as it
-     * stands when the key lands.
-     */
-    ctx.menus.register({
-      id: "sync.actions",
-      title: ({ head }) => {
-        if (head.kind === "detached") return `${repoName} (detached at ${head.oid.slice(0, 7)})`
-        if (head.kind === "onBranch") return `${repoName} — ${head.branch}`
-        if (head.kind === "noRepository") return `${repoName} (no repository)`
-        return `${repoName} (${head.branch}, no commits yet)`
+    ctx.commands.register({
+      id: "sync.force-push",
+      title: "Force push with lease",
+      keys: "o",
+      when: () => tracking(ctx.git.state.head),
+      run: forcePush,
+    })
+    ctx.commands.register({
+      id: "sync.pull-rebase",
+      title: "Pull with rebase",
+      keys: "r",
+      when: () => onBranch(ctx.git.state.head),
+      run: () => pull(true),
+    })
+    ctx.commands.register({
+      id: "sync.fetch-prune",
+      title: "Fetch and prune remotes",
+      keys: "n",
+      run: () => fetch(true),
+    })
+    ctx.commands.register({
+      id: "sync.open",
+      title: "Open repository in browser",
+      keys: "b",
+      when: () => remoteWebUrl(ctx.git.state.remotes) !== null,
+      run: async () => {
+        const url = remoteWebUrl(ctx.git.state.remotes)
+        if (url !== null) await ctx.open(url)
       },
-      groups: [
-        {
-          id: "push",
-          title: "Push",
-          items: [
-            // One handler behind two entries: `push` already branches on the upstream, and
-            // `when` keeps exactly one of them on screen.
-            { key: "p", label: "Push", when: ({ head }) => tracking(head), run: push },
-            { key: "u", label: "Push and set upstream", when: ({ head }) => untracked(head), run: push },
-            {
-              key: "o",
-              label: "Force push (with lease)",
-              when: ({ head }) => tracking(head),
-              run: forcePush,
-            },
-          ],
-        },
-        {
-          id: "pull",
-          title: "Pull",
-          items: [
-            { key: "l", label: "Pull", when: ({ head }) => onBranch(head), run: () => pull(false) },
-            { key: "r", label: "Pull (rebase)", when: ({ head }) => onBranch(head), run: () => pull(true) },
-          ],
-        },
-        {
-          id: "fetch",
-          title: "Fetch",
-          // Never hidden, so the menu always has something in it whatever HEAD is.
-          items: [
-            { key: "f", label: "Fetch all remotes", run: () => fetch(false) },
-            { key: "n", label: "Fetch and prune", run: () => fetch(true) },
-          ],
-        },
-        {
-          id: "repository",
-          title: "Repository",
-          items: [
-            {
-              // `b`, not `o`: that is force-push above, and one menu is one keyspace.
-              key: "b",
-              label: "Open repository in browser",
-              when: (state) => remoteWebUrl(state.remotes) !== null,
-              run: async (state) => {
-                const url = remoteWebUrl(state.remotes)
-                if (url !== null) await ctx.open(url)
-              },
-            },
-            {
-              key: "y",
-              label: "Copy repository root path",
-              run: async () => {
-                try {
-                  await ctx.copy(root)
-                  ctx.popups.notify(root, "success")
-                } catch (error) {
-                  ctx.popups.notify(describeGitFailure(error), "error")
-                }
-              },
-            },
-          ],
-        },
-      ],
+    })
+    ctx.commands.register({
+      id: "sync.copy-root",
+      title: "Copy repository root path",
+      keys: "y",
+      run: async () => {
+        try {
+          await ctx.copy(root)
+          ctx.popups.notify(root, "success")
+        } catch (error) {
+          ctx.popups.notify(describeGitFailure(error), "error")
+        }
+      },
     })
   },
 })

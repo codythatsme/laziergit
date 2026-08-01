@@ -27,7 +27,7 @@ const cases: readonly (readonly [label: string, url: string, expected: string | 
     "git@gitlab.com:group/sub/repo.git",
     "https://gitlab.com/group/sub/repo",
   ],
-  // Everything below has no web page, and `null` is what hides the menu item.
+  // Everything below has no web page, and `null` is what hides the contextual Command.
   ["a git daemon", "git://example.com/owner/repo.git", null],
   ["a file URL", "file:///srv/git/repo.git", null],
   ["an absolute local path", "/srv/git/repo.git", null],

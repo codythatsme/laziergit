@@ -43,6 +43,8 @@ interface CachedDecoration<Row> {
 
 /** Options for {@link createRowSource}. */
 export interface RowSourceOptions<Row> {
+  /** Pane whose current selection this source exposes to contextual Commands. */
+  pane: string
   /**
    * Stable identity for a row, independent of the object carrying it — a path, an oid, a stash
    * index. Must be unique across the row type: two rows sharing a key evict each other on
@@ -71,6 +73,7 @@ export interface RowSourceHost<Row> {
 export function createRowSource<Row>(options: RowSourceOptions<Row>): RowSourceHost<Row> {
   const providers = new Set<DecorationProvider<Row>>()
   const listeners = new Set<() => void>()
+  const selectionListeners = new Set<() => void>()
   const cache = new Map<string, CachedDecoration<Row>>()
   /** Providers that threw during the current generation, skipped until the next bump. */
   const failed = new Set<DecorationProvider<Row>>()
@@ -123,6 +126,7 @@ export function createRowSource<Row>(options: RowSourceOptions<Row>): RowSourceH
   }
 
   const api: RowSource<Row> = {
+    pane: options.pane,
     decorateRows(provider) {
       const registered: DecorationProvider<Row> = { decorate: provider }
       providers.add(registered)
@@ -145,12 +149,31 @@ export function createRowSource<Row>(options: RowSourceOptions<Row>): RowSourceH
       return handle
     },
     selected: () => selected,
+    subscribeSelection(listener) {
+      selectionListeners.add(listener)
+      let disposed = false
+      return {
+        dispose: () => {
+          if (disposed) return
+          disposed = true
+          selectionListeners.delete(listener)
+        },
+      }
+    },
   }
 
   return {
     api,
     setSelected(row) {
+      if (Object.is(selected, row)) return
       selected = row
+      for (const listener of Array.from(selectionListeners)) {
+        try {
+          listener()
+        } catch (error) {
+          console.warn("Row selection subscriber failed", error)
+        }
+      }
     },
     useDecoration(row) {
       // Keyed on the row so a Pane rendering many rows gets one snapshot reader per row.

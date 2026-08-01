@@ -70,7 +70,6 @@ export interface ExtensionContext<
   readonly events: EventBus<TName>
   readonly commands: CommandRegistry<TName>
   readonly panes: PaneRegistry<TName>
-  readonly menus: MenuRegistry<TName>
   readonly popups: PopupToolkit
   readonly statusline: Statusline<TName>
   readonly extensions: ExtensionHub<Needs>
@@ -431,11 +430,26 @@ export interface CommandSpec<TName extends string = string> {
    * logged diagnostic, on a Command with no `pane`.
    */
   capture?: boolean
+  /** Omit this Command from every surface while it cannot run. Must be synchronous and side-effect-free. */
+  when?(): boolean
   run(): void | Promise<void>
 }
 
+export type RowCommandSpec<TName extends string, Row> = Omit<CommandSpec<TName>, "pane" | "when" | "run"> & {
+  /** Supplies both the Pane scope and the selected row sampled at dispatch. */
+  source: RowSource<Row>
+  when?(row: Row): boolean
+  run(row: Row): void | Promise<void>
+}
+
+export interface CommandHandle extends Disposable {
+  /** Re-evaluate this Command's conditional availability. A no-op after disposal. */
+  refresh(): void
+}
+
 export interface CommandRegistry<TName extends string = string> {
-  register(spec: CommandSpec<TName>): Disposable
+  register<Row>(spec: RowCommandSpec<TName, Row>): CommandHandle
+  register(spec: CommandSpec<TName>): CommandHandle
   execute(id: string): Promise<void>
 }
 
@@ -494,43 +508,16 @@ export interface Theme {
   readonly diffRemoved: string
 }
 
-export interface MenuMap {
-  "branches.actions": Branch
-  "remote-branches.actions": RemoteBranch
-  "files.actions": FileChange
-  "commits.actions": Commit
-  "stash.actions": StashEntry
-  "commit-flow.actions": WorkingTreeStatus
-  "sync.actions": GitState
-  "diff.actions": DiffTarget
-}
-
-export interface MenuItem<Target> {
+export interface PopupMenuItem {
   key: string
   label: string
-  when?(target: Target): boolean
-  run(target: Target): void | Promise<void>
+  when?(): boolean
+  run(): void | Promise<void>
 }
 
-export interface MenuGroup<Target> {
-  id?: string
+export interface PopupMenuGroup {
   title?: string
-  items: readonly MenuItem<Target>[]
-}
-
-export interface MenuSpec<Id extends keyof MenuMap & string> {
-  id: Id
-  title: string | ((target: MenuMap[Id]) => string)
-  groups: readonly MenuGroup<MenuMap[Id]>[]
-}
-
-export interface MenuRegistry<TName extends string = string> {
-  register<Id extends keyof MenuMap & ScopedId<TName>>(spec: MenuSpec<Id>): Disposable
-  extend<Id extends keyof MenuMap & string>(
-    id: Id,
-    splice: { group?: string; items: readonly MenuItem<MenuMap[Id]>[] },
-  ): Disposable
-  open<Id extends keyof MenuMap & string>(id: Id, target: MenuMap[Id]): Promise<void>
+  items: readonly PopupMenuItem[]
 }
 
 export interface PopupToolkit {
@@ -550,7 +537,7 @@ export interface PopupToolkit {
     onChange?(value: string): void
   }): Promise<string | undefined>
   select<T>(opts: { title: string; items: readonly SelectItem<T>[]; placeholder?: string }): Promise<T | undefined>
-  menu(opts: { title: string; groups: readonly MenuGroup<void>[] }): Promise<void>
+  menu(opts: { title: string; groups: readonly PopupMenuGroup[] }): Promise<void>
   notify(message: string, level?: "info" | "success" | "warning" | "error"): void
 }
 
@@ -596,8 +583,12 @@ export interface RowDecorationHandle extends Disposable {
 }
 
 export interface RowSource<Row> {
+  /** The Pane whose current selection this source describes. */
+  readonly pane: string
   decorateRows(provider: (row: Row) => RowDecoration | undefined): RowDecorationHandle
   selected(): Row | undefined
+  /** Subscribe to committed selection changes. The handle is idempotent. */
+  subscribeSelection(listener: () => void): Disposable
 }
 
 export type BranchesApi = RowSource<Branch>

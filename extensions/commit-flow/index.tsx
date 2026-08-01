@@ -74,7 +74,13 @@ export default defineExtension({
   activate(ctx): CommitFlowApi {
     /** The message the user typed and did not commit, so `escape` never destroys one. */
     const kept = createCell("")
+    let refreshDraftAvailability = (): void => undefined
     let active: ActiveFlow | null = null
+
+    function setKept(value: string): void {
+      kept.set(value)
+      refreshDraftAvailability()
+    }
 
     /**
      * Remembers a message worth resuming. An untouched prefill is not one, and neither is a
@@ -82,7 +88,7 @@ export default defineExtension({
      */
     function keep(draft: CommitDraft, text: string): boolean {
       if (draft.messageOnly || text.trim().length === 0 || text === draft.initial) return false
-      kept.set(text)
+      setKept(text)
       return true
     }
 
@@ -159,7 +165,7 @@ export default defineExtension({
         // must not dismiss its popup or consume the newer flow's draft.
         if (active === flow) {
           active = null
-          kept.set("")
+          setKept("")
           flow.close("committed")
           ctx.popups.notify(flow.draft.amend ? "Amended" : "Committed", "success")
         }
@@ -213,7 +219,7 @@ export default defineExtension({
       return settled.promise
     }
 
-    /** `open` as a Command or menu `run` sees it: the flow's lifetime is the Command's. */
+    /** `open` as a Command sees it: the flow's lifetime is the Command's. */
     function start(options: OpenOptions): Promise<void> {
       return open(options).then(() => undefined)
     }
@@ -277,74 +283,60 @@ export default defineExtension({
       run: () => start({ amend: true }),
     })
     ctx.commands.register({
-      id: "commit-flow.menu",
-      title: "Commit actions",
-      hint: "menu",
-      keys: "x",
+      id: "commit-flow.commit-staged",
+      title: "Commit staged changes",
+      keys: "c",
       pane: "commit-flow",
-      run: () => ctx.menus.open("commit-flow.actions", ctx.git.state.status),
+      when: () => ctx.git.state.status.files.some(isStaged),
+      run: () => start({}),
     })
-
-    ctx.menus.register({
-      id: "commit-flow.actions",
-      title: (status) => {
-        const staged = status.files.filter(isStaged).length
-        return staged === 0 ? "Commit" : `Commit — ${countLabel(staged)}`
+    ctx.commands.register({
+      id: "commit-flow.signoff",
+      title: "Commit staged changes with signoff",
+      keys: "s",
+      pane: "commit-flow",
+      when: () => ctx.git.state.status.files.some(isStaged),
+      run: () => start({ signoff: true }),
+    })
+    ctx.commands.register({
+      id: "commit-flow.stage-all",
+      title: "Stage all changes and commit",
+      keys: "a",
+      pane: "commit-flow",
+      when: () => {
+        const status = ctx.git.state.status
+        return !status.files.some(isConflicted) && status.files.some((file) => isUnstaged(file) || isUntracked(file))
       },
-      groups: [
-        {
-          // Explicit id: splices address this, so it must not move when a title changes.
-          id: "commit",
-          // Keys must differ in more than case — the menu lowercases the stroke it matches.
-          items: [
-            {
-              key: "c",
-              label: "Commit",
-              when: (status) => status.files.some(isStaged),
-              run: () => start({}),
-            },
-            {
-              key: "s",
-              label: "Commit with signoff",
-              when: (status) => status.files.some(isStaged),
-              run: () => start({ signoff: true }),
-            },
-            {
-              key: "a",
-              label: "Stage all and commit",
-              // Withdrawn while anything is conflicted: `git add --all` would mark it resolved.
-              when: (status) =>
-                !status.files.some(isConflicted) && status.files.some((file) => isUnstaged(file) || isUntracked(file)),
-              run: async () => {
-                try {
-                  await ctx.git.stage("all")
-                } catch (error) {
-                  ctx.popups.notify(describeGitFailure(error), "error")
-                  return
-                }
-                await start({})
-              },
-            },
-            {
-              key: "m",
-              label: "Amend the last commit",
-              // From the store, not the target: the menu's target is the working tree.
-              when: () => hasCommit(ctx.git.state.head),
-              run: () => start({ amend: true }),
-            },
-            {
-              key: "d",
-              label: "Discard the kept draft",
-              when: () => kept.get().length > 0,
-              run: () => {
-                kept.set("")
-                ctx.popups.notify("Draft discarded")
-              },
-            },
-          ],
-        },
-      ],
+      run: async () => {
+        try {
+          await ctx.git.stage("all")
+        } catch (error) {
+          ctx.popups.notify(describeGitFailure(error), "error")
+          return
+        }
+        await start({})
+      },
     })
+    ctx.commands.register({
+      id: "commit-flow.amend-here",
+      title: "Amend the last commit",
+      keys: "m",
+      pane: "commit-flow",
+      when: () => hasCommit(ctx.git.state.head),
+      run: () => start({ amend: true }),
+    })
+    const discardDraft = ctx.commands.register({
+      id: "commit-flow.discard-draft",
+      title: "Discard the kept commit draft",
+      keys: "d",
+      pane: "commit-flow",
+      when: () => kept.get().length > 0,
+      run: () => {
+        setKept("")
+        ctx.popups.notify("Draft discarded")
+      },
+    })
+    refreshDraftAvailability = () => discardDraft.refresh()
 
     // A flow does not outlive its activation: a caller awaiting `begin` across a hot reload
     // would otherwise wait on a popup whose owner no longer exists.
