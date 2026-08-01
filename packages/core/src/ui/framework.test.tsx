@@ -12,7 +12,6 @@ import {
   press,
   pressEscape,
   renderApp,
-  runCommand,
   settle,
   waitFor,
   waitForFrame,
@@ -23,13 +22,11 @@ installHarnessLifecycle()
 
 const alphaSource = `
   /** @jsxImportSource @opentui/react */
-  import { defineExtension, useCommand, type PaneProps } from "laziergit"
-  import { useState } from "react"
+  import { createRowSource, defineExtension, useCommand, type PaneProps, type RowSource } from "laziergit"
+  import { useEffect, useState } from "react"
 
   declare module "laziergit" {
-    interface MenuMap {
-      "alpha.actions": { readonly name: string }
-    }
+    interface ExtensionApis { alpha: RowSource<{ readonly name: string }> }
   }
 
   export default defineExtension({
@@ -37,24 +34,35 @@ const alphaSource = `
     activate(ctx) {
       const globals = globalThis as any
       globals.__laziergitActivations = (globals.__laziergitActivations ?? 0) + 1
+      const rows = createRowSource<{ readonly name: string }>({ pane: "alpha", key: (row) => row.name })
 
       function AlphaPane({ focused }: PaneProps) {
         const [count, setCount] = useState(0)
+        useEffect(() => {
+          rows.setSelected({ name: "row" })
+          return () => rows.setSelected(undefined)
+        }, [])
         useCommand({ id: "alpha.bump", title: "Bump alpha", keys: "j", run: () => setCount((value) => value + 1) })
         return <text id="alpha-pane" content={"alpha=" + count + (focused ? " focused" : "")} />
       }
 
       ctx.panes.register({ id: "alpha", title: "Alpha", component: AlphaPane })
-      ctx.menus.register({
-        id: "alpha.actions",
-        title: (target) => "Alpha: " + target.name,
-        groups: [{ id: "core", items: [{ key: "a", label: "Own action", run: () => ctx.popups.notify("own ran") }] }],
+      ctx.commands.register({
+        id: "alpha.own",
+        source: rows.api,
+        title: "Own contextual Command",
+        keys: "a",
+        run: (row) => ctx.popups.notify("own ran on " + row.name),
       })
       ctx.commands.register({
-        id: "alpha.menu",
-        title: "Alpha actions",
+        id: "alpha.choose",
+        title: "Choose how alpha continues",
         keys: "m",
-        run: () => ctx.menus.open("alpha.actions", { name: "row" }),
+        pane: "alpha",
+        run: () => ctx.popups.menu({
+          title: "Alpha choice",
+          groups: [{ items: [{ key: "a", label: "Own choice", run: () => ctx.popups.notify("choice ran") }] }],
+        }),
       })
       ctx.commands.register({
         id: "alpha.ask",
@@ -67,19 +75,6 @@ const alphaSource = `
           })
           ctx.popups.notify(value === undefined ? "cancelled" : "named " + value)
         },
-      })
-      ctx.commands.register({
-        id: "alpha.missing-menu",
-        title: "Alpha missing menu",
-        // Deliberately not \`async\`: a Promise-returning member must reject rather than
-        // throw past the \`.catch\` the caller attached.
-        run: () =>
-          ctx.menus
-            .open("nope.actions" as never, undefined as never)
-            .then(
-              () => ctx.popups.notify("opened nothing"),
-              (error: Error) => ctx.popups.notify("rejected: " + error.message),
-            ),
       })
       ctx.commands.register({
         id: "alpha.pick",
@@ -107,24 +102,25 @@ const alphaSource = `
           ctx.popups.notify(confirmed ? "confirmed" : "declined")
         },
       })
+      return rows.api
     },
   })
 `
 
 const betaSource = `
   /** @jsxImportSource @opentui/react */
-  import { defineExtension, useCommand, type PaneProps } from "laziergit"
+  import { defineExtension, useCommand, type PaneProps, type RowSource } from "laziergit"
   import { useState } from "react"
 
   declare module "laziergit" {
-    interface MenuMap {
-      "alpha.actions": { readonly name: string }
-    }
+    interface ExtensionApis { alpha: RowSource<{ readonly name: string }> }
   }
 
   export default defineExtension({
     name: "beta",
+    needs: ["alpha"],
     activate(ctx) {
+      const alpha = ctx.extensions.get("alpha")
       function BetaPane({ focused }: PaneProps) {
         const [count, setCount] = useState(0)
         useCommand({ id: "beta.bump", title: "Bump beta", keys: "j", run: () => setCount((value) => value + 1) })
@@ -133,9 +129,12 @@ const betaSource = `
 
       ctx.panes.register({ id: "beta", title: "Beta", component: BetaPane })
       ctx.statusline.register({ id: "beta", component: () => <text content="beta-segment" />, align: "right" })
-      ctx.menus.extend("alpha.actions", {
-        group: "core",
-        items: [{ key: "b", label: "Spliced action", run: () => ctx.popups.notify("splice ran") }],
+      ctx.commands.register({
+        id: "beta.alpha",
+        source: alpha,
+        title: "Contributed contextual Command",
+        keys: "b",
+        run: (row) => ctx.popups.notify("contribution ran on " + row.name),
       })
     },
   })
@@ -475,32 +474,28 @@ describe("popups", () => {
   })
 })
 
-describe("menus and status line", () => {
-  it("merges another Extension's spliced items into the menu it opens", async () => {
+describe("contextual Commands, transient menus and status line", () => {
+  it("runs another Extension's Command directly against the selected row", async () => {
     const harness = await createHarness()
     await twoPanes(harness)
-
-    await press(harness, "m")
-    await waitForFrame(harness, "Alpha: row")
-    expect(frame(harness)).toContain("Own action")
-    expect(frame(harness)).toContain("Spliced action")
 
     await press(harness, "b")
-    await waitForFrame(harness, (screen) => screen.includes("splice ran") && !screen.includes("Spliced action"))
+    await waitForFrame(harness, "contribution ran on row")
+    expect(harness.kernel.popups.getSnapshot()).toEqual([])
   })
 
-  it("closes an open menu when a reload takes its Extensions down", async () => {
+  it("closes a transient chooser when a reload takes its Extension down", async () => {
     const harness = await createHarness()
     await twoPanes(harness)
 
     await press(harness, "m")
-    await waitForFrame(harness, "Spliced action")
+    await waitForFrame(harness, "Alpha choice")
 
     await act(async () => harness.kernel.reload())
     await settle(harness)
 
     expect(harness.kernel.popups.getSnapshot()).toEqual([])
-    expect(frame(harness)).not.toContain("Spliced action")
+    expect(frame(harness)).not.toContain("Alpha choice")
   })
 
   it("abandons a prompt its Extension was awaiting when the Extension reloads", async () => {
@@ -518,15 +513,6 @@ describe("menus and status line", () => {
     // The awaited flow is parked, never resumed: no outcome toast is ever published.
     expect(frame(harness)).not.toContain("cancelled")
     expect(frame(harness)).not.toContain("named ")
-  })
-
-  it("rejects rather than throws when a Command opens a menu id nothing registered", async () => {
-    const harness = await createHarness()
-    await twoPanes(harness)
-
-    await runCommand(harness, "alpha.missing-menu")
-
-    await waitForFrame(harness, "rejected: No menu registered")
   })
 
   it("renders a registered status line segment", async () => {

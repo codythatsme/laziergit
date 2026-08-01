@@ -21,13 +21,13 @@ same shape, shipped inside the distribution rather than these directories.)
 | Area | Surface |
 |---|---|
 | Entry point | `defineExtension()` — one function, six fields |
-| `ctx` | eleven members — `config` · `git` · `events` · `commands` · `panes` · `menus` · `popups` · `statusline` · `extensions` · `effect` · `signal` — plus four methods: `exec()`, `open()`, `copy()`, `onDispose()` |
+| `ctx` | ten members — `config` · `git` · `events` · `commands` · `panes` · `popups` · `statusline` · `extensions` · `effect` · `signal` — plus four methods: `exec()`, `open()`, `copy()`, `onDispose()` |
 | React hooks | `useGit`, `useGitActivity`, `useEvent`, `useCommand`, `useTheme`, and the pane-building `useListCursor`, `useScrollView`, `useKeyCapture` — 8 hooks (plus `createCell` for activate → component data) |
-| Pure helpers | `option` (config), `toneColor` + `createRowSource` (row decorations), `literalPathspec` (pathspec safety), `describeGitFailure` (what to show when git says no), `remoteWebUrl` (a remote's browsable page) — plain functions, no runtime |
-| Augmentable registries | `ExtensionApis`, `EventMap`, `MenuMap` — 3 interfaces, one pattern |
+| Pure helpers | `option` (config), `toneColor` + `createRowSource` (row decorations and contextual Commands), `literalPathspec` (pathspec safety), `describeGitFailure` (what to show when git says no), `remoteWebUrl` (a remote's browsable page) — plain functions, no runtime |
+| Augmentable registries | `ExtensionApis`, `EventMap` — 2 interfaces, one pattern |
 | Everything else | plain data types |
 
-**One naming rule instead of many:** every id an extension registers — panes, commands, menus,
+**One naming rule instead of many:** every id an extension registers — panes, Commands,
 status segments, custom events — must be its own name or its name followed by a dot
 (`"gh-workflows"`, `"gh-workflows.refresh"`). This single rule replaces per-feature namespacing,
 collision handling, and "who owns what" questions — and it is a **compile-time guarantee**, not
@@ -141,8 +141,8 @@ declare module "laziergit" {
    * because every promise a ctx member returns simply never settles after
    * deactivation (§5.3, "the async tail"). Probe
    * {@link ExtensionContext.signal} (exempt from poisoning) before touching
-   * ctx from such code. The stale no-op set — {@link Disposable.dispose} and
-   * {@link RowDecorationHandle.refresh} — never throws: both mean "do
+   * ctx from such code. The stale no-op set — {@link Disposable.dispose},
+   * {@link CommandHandle.refresh}, and {@link RowDecorationHandle.refresh} — never throws: all mean "do
    * something to my registration", and the correct answer for a dead
    * registration is "nothing". Re-entering through `activate()` always
    * yields a fresh, live ctx.
@@ -245,7 +245,7 @@ declare module "laziergit" {
      * Unique id, lowercase kebab-case matching /^[a-z][a-z0-9-]*$/
      * ("git" and "app" are reserved for core event namespaces). Used as:
      * the config section key in config.jsonc, the required prefix of every id
-     * you register (commands, panes, menus, segments, custom events), and the
+     * you register (Commands, panes, segments, custom events), and the
      * key in {@link ExtensionApis}. Scopes shadow by precedence
      * (bundled < global < repo); a same-scope collision is a load error (§5.3).
      */
@@ -267,9 +267,9 @@ declare module "laziergit" {
      * makes `ctx.extensions.get(<id>)` legal (and typed) for exactly these ids.
      * Activation fails with a clear error if a need is missing or failed, and
      * `needs` must be acyclic: a cycle fails activation of every extension in
-     * it with an error naming the cycle (never a hang). Needed only for API
-     * access — menu splices, pane-scoped bindings, and event subscriptions
-     * are name-keyed and need no declaration (§5.3).
+     * it with an error naming the cycle (never a hang). Needed for API access,
+     * including another Pane's RowSource; pane-scoped bindings and event
+     * subscriptions are name-keyed and need no declaration (§5.3).
      */
     needs?: Needs;
 
@@ -355,9 +355,6 @@ declare module "laziergit" {
 
     /** Register panes (React components placed by the user's Layout). */
     readonly panes: PaneRegistry<TName>;
-
-    /** Data-driven, keyboard-first menus that other extensions can splice into. */
-    readonly menus: MenuRegistry<TName>;
 
     /** Modal toolkit: confirm / prompt / compose / select / menu / notify. */
     readonly popups: PopupToolkit;
@@ -1004,7 +1001,7 @@ tagged with the extension name, and routed to the log file / debug pane.
    *
    * Returning `null` is the point: a `file://` remote, a `git://` daemon, a bare
    * directory or a sibling clone has no page, and `null` is what lets an "open on
-   * remote" menu item hide itself with `when` rather than hand {@link
+   * remote" Command hide itself with `when` rather than hand {@link
    * ExtensionContext.open} a directory to open in a file manager.
    *
    * ```ts
@@ -1013,7 +1010,7 @@ tagged with the extension name, and routed to the log file / debug pane.
    * ```
    *
    * Public API rather than a snippet each Extension copies: two Bundled
-   * Extensions carried this transform, one menu apart, and had already diverged
+   * Extensions carried this transform one action apart, and had already diverged
    * on the port case by the time anyone compared them (§5.11).
    */
   export function remoteWebUrl(remotes: readonly Remote[]): string | null;
@@ -1155,20 +1152,38 @@ tagged with the extension name, and routed to the log file / debug pane.
      * whatever it did before the edit began.
      */
     capture?: boolean;
+    /** Omit this Command from every surface while it cannot run. Synchronous and side-effect-free. */
+    when?(): boolean;
     /** The action. Errors are caught, logged, and surfaced as a notification. */
     run(): void | Promise<void>;
   }
 
+  /** A Command targeting the current selection of another Extension's list Pane. */
+  export type RowCommandSpec<TName extends string, Row> =
+    Omit<CommandSpec<TName>, "pane" | "when" | "run"> & {
+      /** Supplies both the Pane scope and the selected row sampled at dispatch. */
+      source: RowSource<Row>;
+      when?(row: Row): boolean;
+      run(row: Row): void | Promise<void>;
+    };
+
+  export interface CommandHandle extends Disposable {
+    /** Re-evaluate conditional availability. A no-op after disposal. */
+    refresh(): void;
+  }
+
   export interface CommandRegistry<TName extends string = string> {
     /** Register a command (keybinding + palette entry + cheat-sheet row + hint in one). */
-    register(spec: CommandSpec<TName>): Disposable;
+    register<Row>(spec: RowCommandSpec<TName, Row>): CommandHandle;
+    register(spec: CommandSpec<TName>): CommandHandle;
 
     /**
      * Invoke any registered Command by id — yours or another Extension's.
      * Pane-scoped Commands focus their Pane first (focus-then-run). Rejects if
-     * the id is unknown, or if a pane-scoped Command's Pane has no live
-     * instance right now. Once `run` starts, its failures are diagnosed and
-     * notified but contained, so this Promise resolves.
+     * the id is unknown, unavailable, has no selected target, or if a
+     * pane-scoped Command's Pane has no live instance right now. Once `run`
+     * starts, its failures are diagnosed and notified but contained, so this
+     * Promise resolves.
      */
     execute(id: string): Promise<void>;
   }
@@ -1668,101 +1683,29 @@ the **right**: order a row most-important-first and it degrades by losing the pa
 can most afford. What a clipped row cannot say belongs in the detail view, which is what
 `DiffApi.show` and its `branch` target are for (§1.11).
 
-### 1.9 Menus — data, so anyone can splice
+### 1.9 Transient chooser data
 
 ```ts
-  /**
-   * Menu id → the target value a menu is opened *for* (the selected row).
-   * Menu owners declare their id here (module augmentation) BEFORE registering;
-   * that single declaration types `register`, `extend`, and `open` for everyone.
-   * Bundled menu ids are pre-declared below (§1.11). For a private one-off menu
-   * nobody needs to splice, use {@link PopupToolkit.menu} — no augmentation needed.
-   */
-  export interface MenuMap {}
-
-  /** One keyboard-activated entry in a menu. */
-  export interface MenuItem<Target> {
-    /** Activation key inside the open menu ({@link KeySpec}, single stroke). */
+  /** One keyboard-activated choice inside a transient popup. */
+  export interface PopupMenuItem {
     key: string;
     label: string;
-    /**
-     * Return false to omit the item for this target entirely — hidden and its
-     * key inert, never grayed-out-but-activatable (e.g. no PR for this branch).
-     */
-    when?(target: Target): boolean;
-    /** The action. Errors are caught and surfaced; the menu closes first. */
-    run(target: Target): void | Promise<void>;
+    /** Return false to omit this choice. Synchronous and side-effect-free. */
+    when?(): boolean;
+    /** The popup closes before this runs; errors are diagnosed and notified. */
+    run(): void | Promise<void>;
   }
 
-  /** A titled group of items, rendered as a column/section (Magit-transient style). */
-  export interface MenuGroup<Target> {
-    /**
-     * Stable identity that {@link MenuRegistry.extend} splices address.
-     * Defaults to `title` — give any group you expect others to splice into
-     * an explicit id, so retitling it never silently reroutes their splices.
-     */
-    id?: string;
+  /** An optional titled group inside a transient popup. */
+  export interface PopupMenuGroup {
     title?: string;
-    items: readonly MenuItem<Target>[];
-  }
-
-  export interface MenuSpec<Id extends keyof MenuMap & string> {
-    id: Id;
-    /** Static title, or derived from the target ("Branch: feature/x"). */
-    title: string | ((target: MenuMap[Id]) => string);
-    groups: readonly MenuGroup<MenuMap[Id]>[];
-  }
-
-  export interface MenuRegistry<TName extends string = string> {
-    /**
-     * Register a menu you own (its id must carry your prefix — compile-checked).
-     * The spec is inert data: other extensions splice into it with `extend`,
-     * and the whole thing renders as a keyboard popup.
-     */
-    register<Id extends keyof MenuMap & ScopedId<TName>>(spec: MenuSpec<Id>): Disposable;
-
-    /**
-     * Splice items into ANY menu id (the Magit/Forge move) — no `needs`
-     * required. A splice is standing data keyed by the menu ID, not the menu
-     * instance: extending an id that isn't registered (yet, or right now) is
-     * legal, and the splice applies whenever the owner (re)registers — it
-     * survives the owner's reloads and is disposed with YOUR extension.
-     * `group` names a group id to append to ({@link MenuGroup.id}); no match —
-     * or no `group` at all — creates a new trailing group, titled with the id
-     * when there is one.
-     *
-     * Item key conflicts resolve by **position in the merged menu** — groups in
-     * order, items in order within a group, the last one standing takes the key
-     * — and not by recency. The owner's groups are laid out first and splices
-     * appended after them, so a splice takes a contested key from the owner
-     * however early it registered, and a splice landing in a trailing group
-     * beats one appended into an earlier group whichever registered first.
-     * Deliberately not the keymap's last-registration rule: the owner
-     * re-registers its whole spec on each of its own hot reloads, so recency
-     * would hand every contested key back to it the moment it reloaded, and a
-     * splice is meant to be standing. The loser is dropped from the menu
-     * entirely, where a Command that loses a key keeps its palette row — a menu
-     * item is reachable by its key and nothing else, so keyless and absent are
-     * the same thing. Either way the conflict is a logged diagnostic.
-     */
-    extend<Id extends keyof MenuMap & string>(
-      id: Id,
-      splice: { group?: string; items: readonly MenuItem<MenuMap[Id]>[] },
-    ): Disposable;
-
-    /**
-     * Open a menu for a target. Resolves when the menu closes; rejects if the
-     * id has no registered menu right now. The open menu is a snapshot of the
-     * merged spec and the target at open() time; if the owner, the opener, or
-     * any extension whose spliced items are showing deactivates, the menu
-     * closes as if dismissed (§5.3) — a reload can never route a keypress
-     * into a disposed item's closure or hand a pre-reload target to
-     * post-reload code.
-     */
-    open<Id extends keyof MenuMap & string>(id: Id, target: MenuMap[Id]): Promise<void>;
+    items: readonly PopupMenuItem[];
   }
 ```
 
+These types belong only to `ctx.popups.menu`: a short-lived choice inside a larger Command
+workflow, such as choosing merge mode after invoking “Merge branch”. Persistent operations
+are Commands (§1.7), including operations contributed to another Extension's RowSource.
 ### 1.10 Popups and status line
 
 ```ts
@@ -1816,11 +1759,10 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
     }): Promise<T | undefined>;
 
     /**
-     * One-off keyed menu: same look and item shape as registered menus, but
-     * ad hoc — not in {@link MenuMap}, not spliceable, no augmentation needed.
-     * Resolves when the menu closes.
+     * One-off keyed chooser inside a Command workflow. It is transient UI,
+     * not a persistent action catalog. Resolves when the chooser closes.
      */
-    menu(opts: { title: string; groups: readonly MenuGroup<void>[] }): Promise<void>;
+    menu(opts: { title: string; groups: readonly PopupMenuGroup[] }): Promise<void>;
 
     /** Transient toast notification. Never steals focus. */
     notify(message: string, level?: "info" | "success" | "warning" | "error"): void;
@@ -1922,16 +1864,18 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
   }
 
   /**
-   * The contract every bundled LIST extension exports (a project rule recorded
-   * in ADR-0001: Bundled Extensions must expose their extension points — row
-   * decorations wherever rows exist, action-menu items everywhere; the menu
-   * side is {@link MenuRegistry.extend} on the ids below).
+   * The contract every bundled list Extension exports: row decorations and
+   * the selected-row target for contextual Commands.
    */
   export interface RowSource<Row> {
+    /** Pane that owns the rows; contextual Commands inherit this scope. */
+    readonly pane: string;
     /** Contribute a decoration per row; return undefined to leave a row alone. */
     decorateRows(provider: (row: Row) => RowDecoration | undefined): RowDecorationHandle;
     /** The currently selected row in that pane, if any. */
     selected(): Row | undefined;
+    /** Observe selection identity changes. */
+    subscribeSelection(listener: () => void): Disposable;
   }
 
   /**
@@ -1956,6 +1900,7 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
    *
    * ```ts
    * const host = createRowSource<FileChange>({
+   *   pane: "files",
    *   key: (row) => `${row.kind}\0${row.previousPath ?? ""}\0${row.path}`,
    * });
    * // in activate:  return host.api;
@@ -1965,6 +1910,8 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
   export function createRowSource<Row>(options: RowSourceOptions<Row>): RowSourceHost<Row>;
 
   export interface RowSourceOptions<Row> {
+    /** Pane that owns these rows and receives contributed contextual Commands. */
+    pane: string;
     /**
      * Stable identity for a row, independent of the object carrying it.
      *
@@ -2007,15 +1954,10 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
     useDecoration(row: Row): RowDecoration | undefined;
   }
 
-  // The eight Bundled Extensions are `files`, `branches`, `remote-branches`,
-  // `commits`, `stash`, `diff`, `commit-flow`, and `sync` (push/pull/fetch,
-  // and the repository itself). Every one of the eight declares an `.actions`
-  // menu id below — the universal splice seam. The five list extensions
-  // additionally export RowSource APIs; `diff` and `commit-flow` export the
-  // small APIs beneath.
-  // `sync` exports no API: it has no rows and nothing to consume — its seam IS
-  // its menu, and an ExtensionApis entry exists only where there is an API
-  // worth calling.
+  // The five bundled list Extensions export RowSource APIs; `diff` and
+  // `commit-flow` export the small APIs beneath. A consumer declares the list
+  // Extension in `needs`, gets its RowSource, and registers its own contextual
+  // Command with `source`.
 
   export type BranchesApi = RowSource<Branch>;
   export type RemoteBranchesApi = RowSource<RemoteBranch>;
@@ -2067,7 +2009,7 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
      * composed message (conventional-commit, changelog tooling) to the
      * standard commit UX instead of committing blind. Resolves when the flow
      * closes, and says which way it closed, so a composer knows whether to
-     * keep its draft. `signoff` is here because the bundled commit menu
+     * keep its draft. `signoff` is here because the bundled commit flow
      * offers it and a bundled extension holds no privilege an author does
      * not (ADR-0001).
      */
@@ -2080,26 +2022,6 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
     }): Promise<CommitFlowResult>;
   }
 
-  // Bundled menu ids and their target types — `ctx.menus.extend("branches.actions", ...)`
-  // is fully typed out of the box:
-  export interface MenuMap {
-    "branches.actions": Branch;
-    "remote-branches.actions": RemoteBranch;
-    "files.actions": FileChange;
-    "commits.actions": Commit;
-    "stash.actions": StashEntry;
-    /** The commit transient — the premier Magit-precedent splice target. */
-    "commit-flow.actions": WorkingTreeStatus;
-    /**
-     * Push/pull/fetch, plus the repository-level actions (open in browser,
-     * copy root). The whole state rather than just `Head`, because "open *this
-     * repository*" needs the remotes and a narrower target is what kept those
-     * actions in a pane of their own for as long as there was one.
-     */
-    "sync.actions": GitState;
-    /** Actions on whatever the diff pane is showing. */
-    "diff.actions": DiffTarget;
-  }
 ```
 
 ### 1.12 Effect escape hatch
@@ -2145,38 +2067,36 @@ can most afford. What a clipped row cannot say belongs in the detail view, which
 } // declare module "laziergit"
 ```
 
-**Implementation status.** The whole core surface is live as of M3 — Commands and keybindings,
-Panes and the Layout, menus and splices, popups, the status line, the palette, the cheat sheet,
+**Implementation status.** The whole core surface is live — Commands and keybindings,
+Panes and the Layout, popups, the status line, the palette, the cheat sheet,
 `ctx.config`, `ctx.events`, `ctx.git`, and `ctx.effect`. `ctx.git` reads a real repository and
 its writes are the argv-built porcelain below; `ctx.effect` hands out the core's own git
 effects rather than a wrapper around the Promise surface, so both faces drive the same code.
 Outside a git repository laziergit still starts: the store serves an empty {@link GitState},
 the poll does nothing, and every write fails with a {@link GitError} saying so.
 
-§1.11 is live too, as of M4: the seven Bundled Extensions are real features, not placeholders.
+§1.11 is live too: the Bundled Extensions are real features, not placeholders.
 The bundled *scope* is a directory discovered, imported, and shadowed exactly like a user one,
-and the seven inside it register six Panes, one status line segment, thirty-eight Commands and
-seven menus — every one of them through this document and nothing else, and not one of them
-losing a key to another (§1.7's last-wins resolution reports no conflict on a real boot). The `*.actions` ids are
-menus with items behind them, so `ctx.menus.extend("commits.actions", …)` splices into something
-that exists; the four list extensions export `RowSource` APIs whose decoration providers are
-called for every row on screen; `DiffApi.show` moves the diff pane and `CommitFlowApi.begin`
+and the features inside it register Panes, status line segments, and Commands through this
+document and nothing else. Every persistent action is a Command. The five list Extensions
+export `RowSource` APIs whose decoration providers are called for every row on screen and whose
+selection targets contextual Commands; `DiffApi.show` moves the diff pane and `CommitFlowApi.begin`
 opens the editor and resolves with what the user did. Nothing in `extensions/` imports anything
 but `"laziergit"`, `"react"` and `"@opentui/react"` — ADR-0001 holds by construction, which is
-what makes the seven a fair test of this API rather than a demonstration of a private one.
+what makes them a fair test of this API rather than a demonstration of a private one.
 
-Building them changed the API in five places, all of them above. `ctx.copy` (§1.3) arrived
+Building them changed the API in the places documented above. `ctx.copy` (§1.3) arrived
 because three of them wanted to copy an oid, a path, and a repository root and the only
 alternative was per-platform shelling in every extension that wants it. `DiffTarget` became a
 union and `DiffApi.show` began accepting `null`, because the flat record let a `commit` target
 carry no ref and the diff pane could not be told its list had gone empty. `CommitFlowApi.begin`
-gained `signoff` and a result, because the bundled commit menu offered a signed-off commit that
+gained `signoff` and a result, because the bundled commit flow offered a signed-off commit that
 no other extension could ask for — a privilege ADR-0001 does not allow — and §4.3's composer
 had no way to learn whether its message landed. `GitError` is documented as carrying git's own
 words in the C locale, because classifying a rejected push means reading them and an extension
-needs licence to. The one thing that did *not* change is the list-pane surface: `useListCursor`
-and `createRowSource` carried all four list panes unaltered, which is the outcome §5.11
-predicted when it promoted them.
+needs licence to. The list-pane surface now has one coherent extension seam: `RowSource`
+carries decorations, its owning Pane, and selection notifications, so contributed contextual
+Commands and decorations agree on the row without a second action registry (ADR-0007).
 
 The two encodings §5.12 used to name as gaps are also gone, and the git model is the better for
 it: `Head` is a discriminated union, so an unborn repository has no oid to misread and a
@@ -2186,9 +2106,9 @@ where the Bundled Extensions put the first real weight on these types — the
 branches Pane has to draw the very distinctions the old shapes flattened.
 
 M4 also added the surfaces the Bundled Extensions needed and could not build for
-themselves, all of them live: `toneColor` and `createRowSource` (§1.11), because a decoration
-is contributed by one extension and drawn by another and neither can own the merge or the
-palette; `useListCursor` (§1.8), because four list panes want one clamping cursor and
+themselves, all of them live: `toneColor` and `createRowSource` (§1.11), because decorations
+and contextual Commands are contributed by one Extension and rendered or dispatched in
+another; `useListCursor` (§1.8), because five list panes want one clamping cursor and
 ADR-0001 leaves them no sibling package to share it from; and `useKeyCapture` plus
 `CommandSpec.capture` (§1.7, §5.8), because a pane rendering a `<textarea>` has to silence
 every other binding without introducing a raw key handler beside the Command unit. Each is
@@ -2380,9 +2300,9 @@ User config for it, in `~/.config/laziergit/config.jsonc` (schema-validated, aut
 
 ## 3. Worked example B — `github-prs`
 
-No pane. Decorates branch rows with PR status and splices "Open pull request" into the
-branches extension's action menu. Exercises `needs` → typed `ctx.extensions.get`, typed menu
-splicing, `ctx.onDispose` for a hand-made timer, and exporting an API of its own.
+No pane. Decorates branch rows with PR status and contributes an “Open pull request” Command
+to the branches Pane. Exercises `needs` → typed `ctx.extensions.get`, a contextual Command,
+`ctx.onDispose` for a hand-made timer, and exporting an API of its own.
 
 ```ts
 // <repo>/.laziergit/extensions/github-prs.ts
@@ -2406,7 +2326,7 @@ function badge(pr: Pr): { text: string; tone: Tone } {
 
 const extension = defineExtension({
   name: "github-prs",
-  description: "PR status on branch rows + Open PR in the branch menu (requires `gh`)",
+  description: "PR status on branch rows + Open PR Command (requires `gh`)",
   needs: ["branches"], // ← makes ctx.extensions.get("branches") legal and typed
 
   activate(ctx) {
@@ -2421,24 +2341,17 @@ const extension = defineExtension({
       return pr ? { badge: badge(pr).text, tone: badge(pr).tone } : undefined;
     });
 
-    // Splice into the branches extension's action menu. `branch` is typed via
-    // MenuMap["branches.actions"] — declared by the branches extension.
-    ctx.menus.extend("branches.actions", {
-      group: "GitHub",
-      items: [
-        {
-          // Deliberately the branches menu's own `o`, which opens the *compare* page for
-          // the branch. A splice outranks the owner's item (§5.7), so on a branch that has
-          // a pull request this replaces it with a link to that pull request — and on one
-          // that does not, `when` stands the splice down and the owner's item is back.
-          key: "o",
-          label: "Open pull request in browser",
-          when: (branch) => byBranch.has(branch.name),
-          run: async (branch) => {
-            await ctx.open(byBranch.get(branch.name)!.url);
-          },
-        },
-      ],
+    // `branch` is inferred from the RowSource. The Command joins every normal surface:
+    // direct key, palette, cheat sheet, and user keybinding configuration.
+    const openPr = ctx.commands.register({
+      id: "github-prs.open",
+      source: branches,
+      title: "Open pull request in browser",
+      keys: "shift+o",
+      when: (branch) => byBranch.has(branch.name),
+      run: async (branch) => {
+        await ctx.open(byBranch.get(branch.name)!.url);
+      },
     });
 
     async function refresh(): Promise<void> {
@@ -2457,6 +2370,7 @@ const extension = defineExtension({
         if (!byBranch.has(pr.headRefName)) byBranch.set(pr.headRefName, pr);
       }
       decoration.refresh();
+      openPr.refresh();
     }
 
     ctx.events.on("git.branches.changed", refresh); // auto-disposed
@@ -2694,7 +2608,7 @@ export default defineExtension({
 
 ### 5.1 One naming rule, compile-checked
 
-Every registered id — pane, command, menu, status segment, custom event — starts with the
+Every registered id — pane, Command, status segment, custom event — starts with the
 extension's name, with `.` as the only separator everywhere (events included; there is no
 second `:` convention). `defineExtension` infers `TName` from the `name` literal and threads it
 into `ctx`, where every registration id is typed `ScopedId<TName>` — so a wrong prefix is a
@@ -2718,7 +2632,7 @@ realized as data flow rather than a slot.
 ### 5.3 Disposal and hot reload
 
 `ctx` **is** a per-activation scope: one internal Effect `Scope` owns a removable JavaScript
-finalizer/supervision registry. Every registration — Commands, Panes, menus, events, statusline
+finalizer/supervision registry. Every registration — Commands, Panes, events, statusline
 segments, subscriptions — attaches to it on creation; the returned `Disposable` is only for
 *early* teardown. Hot reload = file save → deactivate ripple (below) → `deactivate?()` with ctx
 still live → synchronously mark stale and close the scope (registrations unwind sequentially in
@@ -2732,8 +2646,8 @@ it is then **poisoned**: every member *access* (properties included, so `ctx.con
 `StaleContextError` carrying `{ extension, reason: "reload" | "deactivated" | "quit" }` (a
 trick borrowed from pi, the coding agent whose in-process extension host pioneered it —
 applied wholesale). Three deliberate exceptions: `ctx.signal` stays readable (it is the
-liveness probe), and the stale no-op set — `dispose()` and `RowDecorationHandle.refresh()` —
-does nothing rather than throwing, because both mean "do something to my registration" and the
+liveness probe), and the stale no-op set — `dispose()`, `CommandHandle.refresh()`, and `RowDecorationHandle.refresh()` —
+does nothing rather than throwing, because all mean "do something to my registration" and the
 correct answer for a dead registration is "nothing". Plain data extracted earlier (a `GitState`
 snapshot, destructured config values) is inert and stays readable; only live API surfaces are
 poisoned. While an extension is down mid-reload, its pane slots render a "reloading"
@@ -2742,7 +2656,7 @@ placeholder instead of collapsing the layout cell.
 **The async tail.** Poisoning alone would turn routine reloads into unhandled rejections: a
 `refresh()` mid-`await ctx.exec("gh", ...)` when the reload lands would resume against a stale
 ctx and throw into a floating promise. So deactivation *interrupts* rather than poison-and-pray:
-every promise returned by a ctx member (`exec`, `open`, `git.*`, `popups.*`, `menus.open`,
+every promise returned by a ctx member (`exec`, `open`, `git.*`, `popups.*`,
 `commands.execute`) is scope-supervised, and if the extension deactivates before it settles it
 **never settles** — the continuation after the `await` simply never runs, exactly like the
 interrupted fiber it internally is. No unhandled rejection, no error toast; the abandoned
@@ -2755,16 +2669,13 @@ check (or pass the signal along). This is what makes the corpus's fire-and-forge
 (`void refresh()`, `setInterval(refresh, ...)` + `onDispose(clearInterval)`) safe exactly as
 written.
 
-**Modal UI across reload.** Popups and menus are modal state, and modal state belongs to
-scopes. A popup (`confirm` / `prompt` / `compose` / `select` / `popups.menu`) belongs to its caller: if the
+**Modal UI across reload.** Popups are modal state, and modal state belongs to scopes. A popup
+(`confirm` / `prompt` / `compose` / `select` / the transient `popups.menu`) belongs to its caller: if the
 caller deactivates mid-await, the popup closes and the pending promise is parked by the
 async-tail rule — the flow is abandoned, never resumed against a stale ctx; the user re-invokes
-after the reload. An open registered menu is a **snapshot** of the merged spec and target taken
-at `open()` (menus are data), but core records every scope that contributed to it — the owner,
-each splicer with items showing, the opener — and closes the menu, as if dismissed, the moment
-any of them deactivates. Ripple ordering makes this deterministic: dependents close before
-their provider goes down. Net effect: no keypress can reach a disposed item's closure, and no
-pre-reload target object is ever handed to post-reload code.
+after the reload. A transient chooser snapshots its groups when opened and closes with its
+owner's scope. Contextual Commands are standing catalog entries instead of modal state; ripple
+ordering removes a consumer before its RowSource provider goes down.
 
 Two rules make cross-extension registrations safe with zero author effort:
 
@@ -2784,13 +2695,11 @@ Two rules make cross-extension registrations safe with zero author effort:
    activation is cheap by design, reloads are development-loop events, and pane-state
    persistence across reloads is a post-v1 concern.
 
-**Name-keyed seams need no `needs`.** Ripple restart protects the one channel that hands you
-live objects (`ctx.extensions.get`). The other cross-extension channels key on *names*, and
-names never go stale: menu splices key on the menu id (standing data, applied whenever the
-owner (re)registers — extending before, during, or after the owner's lifetime all behave the
-same), pane-scoped bindings key on the pane id (inert while the pane is unmounted, reattached
-on remount), and event subscriptions key on the event name (quiet while the emitter is down).
-Declare `needs` when you call an API; never for splices, bindings, or subscriptions.
+**Name-keyed seams need no `needs`.** Ripple restart protects the channel that hands you live
+objects (`ctx.extensions.get`), including a `RowSource` used by a contextual Command. Other
+cross-extension channels key only on names: pane-scoped bindings are inert while the Pane is
+unmounted and reattach on remount, and event subscriptions are quiet while the emitter is
+down. Declare `needs` when you consume an API; not for name-only bindings or subscriptions.
 
 **Identity edge cases.** Extension names are the unit of identity everywhere (`ScopedId`,
 `ExtensionApis`, config sections), so collisions are resolved, never merged: an extension from a
@@ -2851,39 +2760,34 @@ defaults with a logged diagnostic, so bad config degrades an extension, never bl
 Config is an activation-constant snapshot: editing config hot-reloads the affected extensions,
 which removes any need for a reactive config API — reload IS the change event.
 
-### 5.7 Menus as data
+### 5.7 Commands are the action catalog
 
-`MenuSpec` is inert data keyed by an augmentable `MenuMap` (id → target type). Declaring the
-id's target type once — by the menu owner — types `register`, `extend`, and `open` for every
-party, which is what makes Forge-style splicing (`github-prs` adding "Open PR" to the branches
-menu) both possible and fully typed; spliceable-by-default is the point of menus-as-data.
-`register` additionally constrains the id to your own prefix, so you can only *own* menus under
-your name while extending anyone's. For a private one-off menu, `ctx.popups.menu` renders the
-same `MenuGroup` data ad hoc with no registry entry — the popup toolkit's `menu` without the
-global-augmentation friction. `when(target)` keeps spliced items honest per-row (false =
-hidden, never grayed-out-but-activatable); key conflicts resolve by position in the merged
-menu — owner groups first, splices appended after — with a logged diagnostic, so a splice
-outranks the owner's own item whatever order the two registered in. Deliberately *not* the
-keymap's last-registration rule: the owner re-registers its spec on every hot reload, which
-under recency would hand it back every key a splice had taken. The loser is dropped rather than
-left keyless, because a menu item has no palette row to survive in the way a Command that loses
-a key does. Groups carry a stable `id` for splice addressing
-(defaulting to `title`) so a menu owner can retitle presentation text without silently
-rerouting other extensions' splices, and splices themselves are standing data keyed by menu id
-— they survive the owner's reloads and apply on (re)registration (§5.3). Transient-style
-toggleable arguments (Magit infixes) are deliberately out of v1; groups and items were
-sufficient for every example written.
+A persistent operation has one identity: its Command id. That one registration supplies direct
+key dispatch, the palette, cheat sheet, hint bar, user overrides, diagnostics, and lifecycle.
+`when` removes a Command from every surface while it cannot run. Key conflict resolution happens
+before availability filtering, so a predicate changing can make a key inert but can never make
+the same stroke silently invoke another operation.
 
+For actions on list rows, the list owner exports a `RowSource<Row>` and a consumer names that
+Extension in `needs`. Passing the source to `ctx.commands.register` infers the row type, scopes
+the binding to the source's Pane, observes selection changes, and samples the selected row at
+dispatch. This is the typed contribution seam used by `github-prs` (§3); it needs no second
+registry or target map.
+
+`ctx.popups.menu` remains intentionally smaller. It renders a transient chooser inside a
+Command workflow—merge mode, recovery strategy, conflict continuation—then disappears. It is
+not registered, augmentable, palette-visible, or user-rebindable, which is why it must not hold
+persistent operations (ADR-0007).
 ### 5.8 `useCommand` and the pane scope
 
-The most common TUI pattern — "a key that acts on the selected row" — needs component state.
+The most common TUI pattern inside a Pane — "a key that acts on the selected row" — needs component state.
 `useCommand` registers a command through the *pane's* React lifetime (mounted → registered,
 unmounted → disposed) and scopes its binding to the enclosing pane automatically, so selection
 handlers stay next to the `useState` they read. Commands still land in the catalog, so the
 cheat sheet, palette, and user rebinding stay complete without any extra registration — there
 is deliberately no second "raw key handler" API that would bypass the Command unit. Global
-commands belong in `activate`; the `pane` field on `CommandSpec` covers binding into *another*
-extension's pane (conventional-commit binding `shift+c` in the files pane).
+commands belong in `activate`; the `pane` field on `CommandSpec` covers a name-scoped binding
+into another Pane, while `RowCommandSpec.source` adds its live selected-row target.
 
 Pane-scoped commands stay palette-complete because palette execution is **focus-then-run**
 (§1.7): the pane is focused, then the latest render's handler runs — so "open the selected
@@ -2930,7 +2834,8 @@ Full trust, no sandbox — containment is structural, per surface:
 | `activate` throw/reject | loader try/catch | extension marked failed; its dependents (via `needs`) blocked with a naming error; app unaffected |
 | Pane / segment render | per-slot React error boundary | error card in that pane / collapsed segment only |
 | Event handler | per-handler try/catch in dispatcher | logged; other handlers still run |
-| Command / menu-item `run`, `when` | try/catch at dispatch | error toast + log |
+| Command or transient-chooser `run` | try/catch at dispatch | error toast + log |
+| Command or transient-chooser `when` | try/catch while resolving availability | unavailable; logged |
 | Decoration provider | try/catch per row pass | provider skipped for the pass; logged |
 | `deactivate` / `onDispose` finalizers | try/catch per finalizer | logged; disposal continues |
 | Effect fibers | runtime scoped to activation | interrupted at deactivation |
@@ -2955,7 +2860,7 @@ renderer still handles ctrl+C independently of the kernel, so the process itself
 | `ctx.panes.register` / statusline segments | `@opentui/react` slot registry plugin per pane/segment; the Layout renders one slot per configured id; the registry's built-in error boundary + failure placeholder provide containment for free |
 | Commands + `keys` / `useCommand` | `@opentui/keymap` command catalog + `registerLayer({ enabled, bindings })`, one layer per scope; pane scoping → a reactive matcher over laziergit's own focus model rather than renderer focus, so which pane owns the keyboard never depends on which Renderable holds the cursor; `useCommand` re-points handlers via a latest-ref; palette + cheat sheet read the resolved command catalog; `mod+` via a laziergit binding expander (cmd only where the keyboard protocol can report it), `<leader>` via the leader addon |
 | `useKeyCapture` / `capture: true` | priority bands, not a separate input path: global 0 < pane 100 < capture 500 < popup 1000. A capture disables the global and pane matchers and enables the capturing pane's capture layer; claims stack in the kernel so nested editors unwind in any order, and a capture is only honored while its pane is focused |
-| Menus | plain data + one generic popup component; an open menu pushes a modal high-priority keymap layer |
+| `ctx.popups.menu` | transient group data + the generic popup component; an open chooser pushes a modal high-priority keymap layer |
 | Registrations / `onDispose` | Effect `Scope` per activation owning a removable LIFO finalizer/supervision registry; `dispose()` = early finalizer run; consumed-API proxy attaches foreign Disposables to the caller's scope |
 | Hot reload | linked-target-aware extension fingerprint poll → reverse-topo deactivate → synchronous stale mark → lease-backed generation copy import → topo activate; serialized reload tails heal after failures |
 | `ctx.git` / `useGit` | git plumbing service (argv shell-out, Effect-internal: `Effect.callback` per child, lock retry on a `Schedule`, one concurrent fan-out per refresh) + snapshot store reconciled so unchanged slices and rows keep identity; React via `useSyncExternalStore`; ~2s fingerprint poll (`status --porcelain=v2`, `show-ref --head`, `stash list`, `config --get-regexp` — §5.12), post-write refresh, and a refresh on the renderer's terminal-focus event |
@@ -3033,7 +2938,7 @@ renderer still handles ctrl+C independently of the kernel, so the process itself
   *surface* — no `ctx.progress.start()` handle, no spinning toast, no imperative
   `statusline.setBusy`. Who draws, and what it looks like, stays with the extension; the sync
   segment's loader is its own component and its own frame table.
-- **A `disabled` state on menu items** — `when` hides; a visible-but-inert item is presentation
+- **A `disabled` state on Commands or chooser items** — `when` hides; a visible-but-inert item is presentation
   subtlety v1 skips (hiding unsuitable entries is Magit's default too).
 - **A `signal` on `ExecOptions`** — scope supervision already kills the child and parks the
   promise at deactivation (§5.3); a per-call AbortSignal would duplicate the one lifetime that
@@ -3138,18 +3043,17 @@ One remains, deliberately:
 - **A directory row is not a `FileChange`.** The files Pane draws folder rows, and
   {@link FilesApi} is a `RowSource<FileChange>` — so `FilesApi.selected()` answers
   `undefined` while the cursor is on a folder, a `decorateRows` provider is never handed one,
-  and the folder action menu is built ad-hoc rather than registered, so nothing can splice
-  into it. That is deliberate for v1: a decoration ("PR #42", "90d") is a property of a file,
-  and the alternative — widening `files.actions`' payload to a union — would make every
-  third-party splice handle a case it never asked for. The fix, when something needs it, is a
-  row-type union in the public API, and it belongs with its first consumer.
+  and a contextual Command targeting `FilesApi` is unavailable there. That is deliberate for
+  v1: a decoration ("PR #42", "90d") is a property of a file, and the alternative—widening
+  the public row type to a file-or-directory union—would make every third-party provider and
+  Command handle a case it never asked for. The wider row type belongs with its first consumer.
 
 **Conflicts in v1: show and delegate.** The bundled `files` extension draws conflicted paths
 with git's own `UU` / `AA` / `DU` pair wherever they sit in the tree, marks every directory
-above them `!`, offers "open in editor" and "stage resolved" from `files.actions`,
+above them `!`, and exposes direct Commands for opening and staging the resolved path,
 and otherwise stays out of the way — resolution happens in the user's editor or `git
 mergetool`. It is deliberately less than lazygit, which renders a pick-ours / pick-theirs /
 pick-both hunk picker; that is post-v1 (see the roadmap in architecture.md) and is the work that will want the
 patch-level staging surface §5.11 leaves out. Nothing here
-is privileged: a third-party extension can register a conflicts Pane and splice into
-`files.actions` today, on exactly the API the bundled one uses.
+is privileged: a third-party Extension can register a conflicts Pane or contribute contextual
+Commands against the exported Files RowSource on exactly the API the bundled features use.

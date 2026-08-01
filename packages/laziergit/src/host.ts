@@ -1,4 +1,4 @@
-import type { CommandSpec, Disposable, EventMap, GitActivity, GitState, Theme } from "./types"
+import type { CommandHandle, CommandSpec, Disposable, EventMap, GitActivity, GitState, Theme } from "./types"
 
 export type HostListQueryMode = "filter" | "search"
 
@@ -44,7 +44,7 @@ export interface HostRuntime {
     ): Disposable
   }
   readonly commands: {
-    registerComponent(extension: string, paneId: string, spec: Omit<CommandSpec, "pane">): Disposable
+    registerComponent(extension: string, paneId: string, spec: Omit<CommandSpec, "pane">): CommandHandle
   }
   readonly keys: {
     /** Claim raw keyboard input for a Pane; dispose to hand it back. Claims nest. */

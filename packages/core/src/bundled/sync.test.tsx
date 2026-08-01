@@ -130,7 +130,10 @@ describe("sync.push", () => {
     await commitIn(harness.directory, "feature.txt", "work\n")
     await renderApp(harness)
 
-    await press(harness, "P")
+    const commands = harness.kernel.commands.getSnapshot().map((command) => command.id)
+    expect(commands).toContain("sync.push-upstream")
+    expect(commands).not.toContain("sync.push")
+    await press(harness, "u")
     await waitForFrame(harness, "Push feature to origin?")
     expect(frame(harness)).toContain("no upstream")
 
@@ -150,7 +153,7 @@ describe("sync.push", () => {
     await commitIn(harness.directory, "feature.txt", "work\n")
     await renderApp(harness)
 
-    await press(harness, "P")
+    await press(harness, "u")
     await waitForFrame(harness, "Push feature to origin?")
     await press(harness, "n")
     await waitForFrame(harness, (screen) => !screen.includes("Push feature to origin?"))
@@ -266,9 +269,7 @@ describe("sync.push", () => {
     await commitIn(harness.directory, "ours.txt", "ours\n")
     await renderApp(harness)
 
-    // Reached from the menu, because the rejection path above refuses to suggest it.
-    await press(harness, "S")
-    await waitForFrame(harness, "Fetch all remotes")
+    // Force-with-lease remains a direct Command even when the safer push rejected first.
     await press(harness, "o")
     await waitForFrame(harness, "Force-push main to origin/main?")
     await press(harness, "y")
@@ -277,24 +278,31 @@ describe("sync.push", () => {
     expect(await git(origin, "rev-parse", "main")).toEqual(await git(theirs, "rev-parse", "HEAD"))
   })
 
-  it("refuses on a detached HEAD, naming the commit it is sitting on", async () => {
+  it("does not publish push or pull on a detached HEAD", async () => {
     const harness = await startRepo()
     await addOrigin(harness)
     await git(harness.directory, "checkout", "--quiet", "--detach")
     await renderApp(harness)
 
+    const commands = harness.kernel.commands.getSnapshot().map((command) => command.id)
+    expect(commands).not.toContain("sync.push")
+    expect(commands).not.toContain("sync.push-upstream")
+    expect(commands).not.toContain("sync.pull")
     await press(harness, "P")
-    await waitForToast(harness, "Cannot push: HEAD is detached")
-
+    expect(toasts(harness)).toEqual([])
     expect(harness.kernel.popups.top).toBeUndefined()
   })
 
-  it("refuses on an unborn HEAD, which has no commit to push", async () => {
+  it("does not publish push or pull on an unborn HEAD", async () => {
     const harness = await startRepo({ unborn: true })
     await renderApp(harness)
 
+    const commands = harness.kernel.commands.getSnapshot().map((command) => command.id)
+    expect(commands).not.toContain("sync.push")
+    expect(commands).not.toContain("sync.push-upstream")
+    expect(commands).not.toContain("sync.pull")
     await press(harness, "P")
-    await waitForToast(harness, "Cannot push: main has no commits yet")
+    expect(toasts(harness)).toEqual([])
   })
 })
 
@@ -340,8 +348,8 @@ describe("sync.pull and sync.fetch", () => {
   })
 })
 
-describe("the sync.actions menu", () => {
-  it("runs a fetch straight from the menu", async () => {
+describe("the additional sync Commands", () => {
+  it("fetches and prunes without a persistent action menu", async () => {
     const harness = await startRepo()
     const origin = await addOrigin(harness)
     const theirs = await cloneOf(origin)
@@ -349,9 +357,10 @@ describe("the sync.actions menu", () => {
     await git(theirs, "push", "--quiet", "origin", "main")
     await renderApp(harness)
 
-    await press(harness, "S")
-    await waitForFrame(harness, "Fetch all remotes")
-    await press(harness, "f")
+    const commands = harness.kernel.commands.getSnapshot().map((command) => command.id)
+    expect(commands).toContain("sync.fetch-prune")
+    expect(commands).not.toContain("sync.actions")
+    await press(harness, "n")
 
     await waitForToast(harness, "Fetched — ↑0 ↓1")
   })

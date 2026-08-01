@@ -315,7 +315,7 @@ it("collapses the live set to the capturing Pane's capture Commands", () => {
   const test = harness()
   test.bindings.sync([
     entry("app.quit", ["q"]),
-    entry("commit-flow.menu", ["x"], "commit-flow"),
+    entry("commit-flow.amend-here", ["m"], "commit-flow"),
     entry("commit-flow.submit", ["ctrl+s"], "commit-flow", true),
   ])
   test.bindings.setFocusedPane("commit-flow")

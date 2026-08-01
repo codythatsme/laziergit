@@ -269,15 +269,14 @@ it("supports the single-remote branch workflow", async () => {
 
   await pressEscape(harness)
   await filterCurrentList(harness, "remote-only")
-  await press(harness, "x")
-  await waitForFrame(harness, "Remote branch: origin/remote-only")
-  expect(frame(harness)).toContain("Check out as detached HEAD")
+  expect(harness.kernel.popups.top).toBeUndefined()
   await press(harness, "h")
   await waitFor(
     harness,
     () => harness.kernel.git.getSnapshot().head.kind === "detached",
     "HEAD to detach at the remote branch",
   )
+  expect(harness.kernel.popups.top).toBeUndefined()
   expect(await git(harness, "rev-parse", "HEAD")).toBe(oid)
 }, 30_000)
 

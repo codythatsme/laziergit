@@ -264,20 +264,14 @@ it("closes only the top of the stack, leaving the popup underneath open", async 
   expect(host.top).toBeUndefined()
 })
 
-it("closes a popup when any of its contributing Extensions goes down, sparing the others", async () => {
+it("closes a popup when its owning Extension goes down, sparing the others", async () => {
   const host = new PopupHost()
   const unrelated = host.confirm("other", { title: "Unrelated" })
-  const spliced = host.actions("a", { title: "Menu", groups: [], contributors: ["b"] })
+  const owned = host.actions("a", { title: "Menu", groups: [] })
 
-  host.closeForExtension("b")
-
-  expect(await spliced.promise).toBeUndefined()
-  expect(titles(host)).toEqual(["Unrelated"])
-
-  const reopened = host.actions("a", { title: "Menu", groups: [], contributors: ["b"] })
   host.closeForExtension("a")
 
-  expect(await reopened.promise).toBeUndefined()
+  expect(await owned.promise).toBeUndefined()
   expect(titles(host)).toEqual(["Unrelated"])
 
   host.closeForExtension("other")

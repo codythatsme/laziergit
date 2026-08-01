@@ -8,7 +8,6 @@ import {
   isUnstaged,
   isUntracked,
   toneColor,
-  useCommand,
   useGit,
   useListCursor,
   useTheme,
@@ -41,7 +40,7 @@ export default defineExtension({
   needs: ["diff"],
 
   activate(ctx): StashApi {
-    const rows = createRowSource<StashEntry>({ key: (row) => String(row.index) })
+    const rows = createRowSource<StashEntry>({ pane: "stash", key: (row) => String(row.index) })
     const diff = ctx.extensions.get("diff")
 
     async function attempt(action: () => Promise<unknown>): Promise<void> {
@@ -134,6 +133,38 @@ export default defineExtension({
       await attempt(() => ctx.git.stash.save({ message: trimmed === "" ? undefined : trimmed, includeUntracked }))
     }
 
+    ctx.commands.register({
+      id: "stash.apply",
+      source: rows.api,
+      title: "Apply stash",
+      hint: "apply",
+      keys: "space",
+      run: apply,
+    })
+    ctx.commands.register({
+      id: "stash.pop",
+      source: rows.api,
+      title: "Pop stash",
+      hint: "pop",
+      keys: "p",
+      run: pop,
+    })
+    ctx.commands.register({
+      id: "stash.drop",
+      source: rows.api,
+      title: "Drop stash",
+      hint: "drop",
+      keys: "d",
+      run: drop,
+    })
+    ctx.commands.register({
+      id: "stash.branch",
+      source: rows.api,
+      title: "Create branch from this stash",
+      keys: "b",
+      run: branchFrom,
+    })
+
     function StashRow({
       entry,
       id,
@@ -191,44 +222,6 @@ export default defineExtension({
         diff.show(selected === undefined ? null : { kind: "stash", ref: stashRef(selected), path: null })
       }, [focused, selected])
 
-      useCommand({
-        id: "stash.apply",
-        title: "Apply stash",
-        hint: "apply",
-        keys: "space",
-        run: async () => {
-          if (selected !== undefined) await apply(selected)
-        },
-      })
-      useCommand({
-        id: "stash.pop",
-        title: "Pop stash",
-        hint: "pop",
-        // Shadows `sync`'s global `p` while this Pane is focused: the Pane layer outranks it.
-        keys: "p",
-        run: async () => {
-          if (selected !== undefined) await pop(selected)
-        },
-      })
-      useCommand({
-        id: "stash.drop",
-        title: "Drop stash",
-        hint: "drop",
-        keys: "d",
-        run: async () => {
-          if (selected !== undefined) await drop(selected)
-        },
-      })
-      useCommand({
-        id: "stash.menu",
-        title: "Stash actions",
-        hint: "menu",
-        keys: "x",
-        run: async () => {
-          if (selected !== undefined) await ctx.menus.open("stash.actions", selected)
-        },
-      })
-
       if (!repository) return <text fg={theme.textMuted}>no repository here</text>
       if (entries.length === 0) return <text fg={theme.textMuted}>no stashes yet — s in the files Pane saves one</text>
       if (visibleEntries.length === 0) return <text fg={theme.textMuted}>no matching stashes</text>
@@ -275,22 +268,6 @@ export default defineExtension({
       // the files Pane loaded.
       pane: "files",
       run: save,
-    })
-
-    ctx.menus.register({
-      id: "stash.actions",
-      title: stashLabel,
-      groups: [
-        {
-          id: "stash",
-          items: [
-            { key: "a", label: "Apply", run: apply },
-            { key: "p", label: "Pop", run: pop },
-            { key: "d", label: "Drop", run: drop },
-            { key: "b", label: "Create branch from this stash", run: branchFrom },
-          ],
-        },
-      ],
     })
 
     return rows.api

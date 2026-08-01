@@ -3,7 +3,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncE
 
 import type { HostListQueryRegistration, HostListQueryState, HostRuntime, PaneRuntime } from "./host"
 import { filterMatchIndices, searchMatchIndices } from "./list-query"
-import type { Cell, CommandSpec, EventMap, GitActivity, GitState, Theme } from "./types"
+import type { Cell, CommandHandle, CommandSpec, EventMap, GitActivity, GitState, Theme } from "./types"
 
 // The bridge's contexts carry `unknown`, so this file is where they become typed — parsed
 // rather than asserted. The guards check only what these hooks reach for.
@@ -126,7 +126,7 @@ export function useEvent<K extends keyof EventMap & string>(
 /**
  * Registers a Pane-scoped Command for as long as the component is mounted.
  *
- * Only `run` is live, read through a ref so it never acts on stale state. The rest of the spec
+ * `run` and `when` are live, read through a ref so they never act on stale state. The rest of the spec
  * is read once at registration: re-registering would reorder {@link CommandSpec.keys} conflict
  * resolution, which is insertion-ordered, letting a recomputed title take a key from another
  * Pane mid-session. A Command whose identity changes should change its `id`.
@@ -135,16 +135,25 @@ function useOptionalCommand(spec: Omit<CommandSpec, "pane"> | null): void {
   const runtime = useRuntime()
   const pane = useEnclosingPane("useCommand")
   const latest = useRef(spec)
+  const registration = useRef<CommandHandle | null>(null)
   latest.current = spec
 
   useEffect(() => {
     if (latest.current === null) return
     const registered = runtime.commands.registerComponent(pane.extension, pane.paneId, {
       ...latest.current,
+      when: () => latest.current !== null && (latest.current.when?.() ?? true),
       run: () => latest.current?.run(),
     })
-    return () => registered.dispose()
+    registration.current = registered
+    return () => {
+      if (registration.current === registered) registration.current = null
+      registered.dispose()
+    }
   }, [pane.extension, pane.paneId, runtime, spec?.id])
+
+  // Re-evaluate a live `when` after every committed render without reordering the Command.
+  useEffect(() => registration.current?.refresh())
 }
 
 export function useCommand(spec: Omit<CommandSpec, "pane">): void {

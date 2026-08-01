@@ -4,7 +4,7 @@ export interface PopupChoice {
   readonly hint?: string
 }
 
-/** A keyed action inside a menu popup, already bound to its target by the menu layer. */
+/** A keyed choice inside a transient menu popup. */
 export interface PopupAction {
   readonly key: string
   readonly label: string
@@ -28,10 +28,7 @@ export interface CheatSheetSection {
 
 interface PopupBase {
   readonly id: number
-  /**
-   * Extensions whose deactivation must close this popup: the caller, plus every
-   * Extension whose spliced menu items are on screen.
-   */
+  /** The Extension whose deactivation must close this popup. */
   readonly contributors: ReadonlySet<string>
   readonly title: string
   /** Resolves the caller's promise with the dismissed outcome. Idempotent. */
@@ -123,8 +120,6 @@ export interface ChooseOptions {
 export interface ActionsOptions {
   readonly title: string
   readonly groups: readonly PopupActionGroup[]
-  /** Extensions besides the opener whose items appear, so their reload closes the menu. */
-  readonly contributors?: Iterable<string>
 }
 
 /**
@@ -257,7 +252,6 @@ export class PopupHost {
     return this.#open<void>(owner, options.title, undefined, (base) => ({
       ...base,
       kind: "actions",
-      contributors: new Set([owner, ...(options.contributors ?? [])]),
       groups: options.groups,
     }))
   }
@@ -271,7 +265,7 @@ export class PopupHost {
     this.top?.dismiss()
   }
 
-  /** A contributing Extension went down — the popup can no longer be trusted to act. */
+  /** The owning Extension went down — the popup can no longer be trusted to act. */
   closeForExtension(name: string): void {
     // `dismiss` replaces the stack rather than mutating it, so this walks a stable list.
     for (const popup of this.#stack) {

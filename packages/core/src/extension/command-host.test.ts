@@ -1,4 +1,5 @@
 import { expect, it, spyOn } from "bun:test"
+import { createRowSource } from "laziergit"
 
 import { CommandHost, type CommandPaneAccess } from "./command-host"
 import { Diagnostics } from "./diagnostics"
@@ -72,6 +73,90 @@ it("focuses an available Pane before running its Command", async () => {
 
   await host.execute("owner.command")
   expect(order).toEqual(["focus:owner.pane", "run"])
+})
+
+it("runs a contextual Command against the RowSource selection at dispatch", async () => {
+  const order: string[] = []
+  const rows = createRowSource<{ readonly name: string; readonly enabled: boolean }>({
+    pane: "provider.rows",
+    key: (row) => row.name,
+  })
+  const host = new CommandHost(
+    new Diagnostics(),
+    panes({
+      focus: (id) => order.push(`focus:${id}`),
+    }),
+  )
+  host.register("consumer", {
+    id: "consumer.act",
+    source: rows.api,
+    title: "Act on row",
+    keys: "a",
+    when: (row) => row.enabled,
+    run: (row) => {
+      order.push(`run:${row.name}`)
+    },
+  })
+
+  expect(host.getSnapshot()).toEqual([])
+  rows.setSelected({ name: "one", enabled: false })
+  await Promise.resolve()
+  expect(host.getSnapshot()).toEqual([])
+
+  rows.setSelected({ name: "two", enabled: true })
+  await Promise.resolve()
+  expect(host.getSnapshot().map((command) => command.id)).toEqual(["consumer.act"])
+
+  await host.execute("consumer.act")
+  expect(order).toEqual(["focus:provider.rows", "run:two"])
+})
+
+it("rechecks conditional availability when a Command handle refreshes", async () => {
+  let available = false
+  let ran = false
+  const host = new CommandHost(new Diagnostics(), panes())
+  const handle = host.register("owner", {
+    id: "owner.conditional",
+    title: "Conditional",
+    when: () => available,
+    run: () => {
+      ran = true
+    },
+  })
+
+  expect(host.getSnapshot()).toEqual([])
+  expect(await rejectionOf(host.execute("owner.conditional"))).toEqual(
+    expect.objectContaining({ message: 'Command "owner.conditional" is unavailable' }),
+  )
+
+  available = true
+  handle.refresh()
+  expect(host.getSnapshot().map((command) => command.id)).toEqual(["owner.conditional"])
+  await host.execute("owner.conditional")
+  expect(ran).toBe(true)
+})
+
+it("resolves key ownership before availability so a condition never changes a key's meaning", () => {
+  let laterAvailable = false
+  const errorSpy = spyOn(console, "error").mockImplementation(() => undefined)
+  const host = new CommandHost(new Diagnostics(), panes())
+  host.register("first", { id: "first.act", title: "First", keys: "a", run: () => {} })
+  const later = host.register("later", {
+    id: "later.act",
+    title: "Later",
+    keys: "a",
+    when: () => laterAvailable,
+    run: () => {},
+  })
+
+  expect(host.getSnapshot().map((command) => [command.id, command.keys])).toEqual([["first.act", []]])
+  laterAvailable = true
+  later.refresh()
+  expect(host.getSnapshot().map((command) => [command.id, command.keys])).toEqual([
+    ["first.act", []],
+    ["later.act", ["a"]],
+  ])
+  errorSpy.mockRestore()
 })
 
 it("diagnoses and notifies Command run errors while resolving execution", async () => {

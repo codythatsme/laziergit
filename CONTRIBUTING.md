@@ -35,7 +35,7 @@ Rules that are load-bearing, not stylistic:
 - **Effect stays internal** ([ADR-0002](./docs/adr/0002-promise-first-public-api-effect-internal.md)): Effect v4 runs in `packages/core` only; the public API is plain async TypeScript. The single exception is `ctx.effect`, whose signatures are types-only imports.
 - **Git via argv arrays**, never string shell; no fs-watching of `.git` — refresh-after-mutation plus a ~2s fingerprint poll.
 - **Every `ctx` registration is auto-disposed** on deactivate; hot-reload correctness (scope disposal, stale-ctx poisoning) is a core invariant, not a feature.
-- **Menus are data**, so other extensions can splice into them.
+- **Commands are the action catalog** ([ADR-0007](./docs/adr/0007-commands-are-the-action-catalog.md)): persistent operations are Commands; `ctx.popups.menu` is only a transient chooser inside a Command workflow.
 - **Renderer tests wait on conditions, never on time.** Key-dispatched commands are fire-and-forget, so a fixed sleep is a race. Use the harness in `packages/core/src/test-harness.tsx` — `press`, `pressEscape`, `waitFor`, `waitForFrame`, `runCommand`, `refreshGit` — and wait for an action's *last* observable effect (its toast, or the store/frame after the refresh), not its first side effect. Do not define local copies of those helpers, poll raw `git status` while a write may be running (its index lock can fail the write), or let a pane's own async work land after the test's last wait — the harness fails any test whose React updates escape `act`. Enforced at commit time: oxlint rejects `Bun.sleep`/`setTimeout` in `*.test.tsx` (a disable comment there carries its reason and is a review decision), and `scripts/check-tests.ts` rejects helper copies.
 
 ## Docs and decisions

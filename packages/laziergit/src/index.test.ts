@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test"
+import { describe, expect, it, spyOn } from "bun:test"
 import type * as Effect from "effect/Effect"
 
 import { createCell, createRowSource, defineExtension, option, toneColor, type Theme, type Tone } from "./index"
@@ -209,7 +209,7 @@ describe("toneColor", () => {
 
 describe("createRowSource", () => {
   it("reports the row the Pane last selected", () => {
-    const host = createRowSource<{ name: string }>({ key: (row) => row.name })
+    const host = createRowSource<{ name: string }>({ pane: "rows", key: (row) => row.name })
 
     expect(host.api.selected()).toBeUndefined()
     host.setSelected({ name: "one" })
@@ -218,8 +218,44 @@ describe("createRowSource", () => {
     expect(host.api.selected()).toBeUndefined()
   })
 
+  it("publishes selection changes once and stops after disposal", () => {
+    const host = createRowSource<{ name: string }>({ pane: "rows", key: (row) => row.name })
+    const selected: Array<string | undefined> = []
+    const subscription = host.api.subscribeSelection(() => selected.push(host.api.selected()?.name))
+
+    const one = { name: "one" }
+    host.setSelected(one)
+    host.setSelected(one)
+    host.setSelected({ name: "two" })
+    subscription.dispose()
+    host.setSelected(undefined)
+
+    expect(host.api.pane).toBe("rows")
+    expect(selected).toEqual(["one", "two"])
+  })
+
+  it("contains a failing selection subscriber and still notifies the rest", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => undefined)
+    try {
+      const host = createRowSource<{ name: string }>({ pane: "rows", key: (row) => row.name })
+      host.api.subscribeSelection(() => {
+        throw new Error("broken observer")
+      })
+      let calls = 0
+      host.api.subscribeSelection(() => {
+        calls += 1
+      })
+
+      expect(() => host.setSelected({ name: "one" })).not.toThrow()
+      expect(calls).toBe(1)
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
   it("keeps a decoration handle usable — as a no-op — after it is disposed", () => {
-    const host = createRowSource<{ name: string }>({ key: (row) => row.name })
+    const host = createRowSource<{ name: string }>({ pane: "rows", key: (row) => row.name })
     let calls = 0
     const handle = host.api.decorateRows(() => {
       calls += 1
@@ -233,7 +269,7 @@ describe("createRowSource", () => {
   })
 
   it("registers the same provider function twice as two providers", () => {
-    const host = createRowSource<{ name: string }>({ key: (row) => row.name })
+    const host = createRowSource<{ name: string }>({ pane: "rows", key: (row) => row.name })
     const provider = () => undefined
 
     const first = host.api.decorateRows(provider)

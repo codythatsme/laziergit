@@ -330,22 +330,20 @@ describe("stash actions", () => {
   })
 })
 
-describe("stash menu", () => {
-  it("offers the four actions on x and creates a branch that takes the entry with it", async () => {
+describe("contextual stash Commands", () => {
+  it("publishes the four actions and creates a branch that takes the entry with it", async () => {
     const harness = await stashHarness()
     await stash(harness, "wip one")
     await stash(harness, "wip two")
     await start(harness)
 
     await press(harness, "2")
-    await press(harness, "x")
-    await waitForFrame(harness, "a  Apply")
-
-    const menu = frame(harness)
-    expect(menu).toContain("wip two on main")
-    expect(menu).toContain("p  Pop")
-    expect(menu).toContain("d  Drop")
-    expect(menu).toContain("b  Create branch from this stash")
+    const commands = harness.kernel.commands.getSnapshot().map((command) => command.id)
+    expect(commands).toContain("stash.apply")
+    expect(commands).toContain("stash.pop")
+    expect(commands).toContain("stash.drop")
+    expect(commands).toContain("stash.branch")
+    expect(commands).not.toContain("stash.menu")
 
     await press(harness, "b")
     await waitForFrame(harness, "Branch from wip two on main")
@@ -373,8 +371,6 @@ describe("stash menu", () => {
 
     await press(harness, "2")
     await press(harness, "j")
-    await press(harness, "x")
-    await waitForFrame(harness, "a  Apply")
     await press(harness, "b")
     await waitForFrame(harness, "Branch from wip one on main")
 
@@ -403,8 +399,6 @@ describe("stash menu", () => {
     await start(harness)
 
     await press(harness, "2")
-    await press(harness, "x")
-    await waitForFrame(harness, "a  Apply")
     await press(harness, "b")
     await waitForFrame(harness, "Branch from wip one on main")
     await press(harness, () => void harness.setup.mockInput.typeText("-f"))

@@ -147,7 +147,7 @@ export default defineExtension({
   activate(ctx): CommitsApi {
     const diff = ctx.extensions.get("diff")
     const commitFlow = ctx.extensions.get("commit-flow")
-    const rows = createRowSource<Commit>({ key: (row) => row.oid })
+    const rows = createRowSource<Commit>({ pane: "commits", key: (row) => row.oid })
 
     function report(error: unknown): void {
       ctx.popups.notify(describeGitFailure(error), "error")
@@ -426,141 +426,143 @@ export default defineExtension({
       ctx.popups.notify(`Reworded ${commit.shortOid}. Pushed history now needs force-with-lease`, "success")
     }
 
-    ctx.menus.register({
-      id: "commits.actions",
-      title: (commit) => `Commit ${commit.shortOid}`,
-      groups: [
-        {
-          id: "commit",
-          title: "Commit",
-          items: [
-            {
-              key: "c",
-              label: "Check out this commit",
-              run: (commit) =>
-                confirmThen(
-                  {
-                    title: "Check out commit",
-                    message:
-                      `HEAD will be detached at ${commit.shortOid}. Commits made from there belong to no ` +
-                      `branch until you create one.`,
-                    confirmLabel: "detach HEAD",
-                  },
-                  `HEAD detached at ${commit.shortOid}`,
-                  () => ctx.git.checkout(commit.oid),
-                ),
-            },
-            {
-              key: "v",
-              label: "Revert this commit",
-              // Merges are hidden: `git revert` rejects one without `-m`, and this Pane draws
-              // no topology to choose a mainline from.
-              when: (commit) => !isMerge(commit),
-              run: (commit) =>
-                confirmThen(
-                  {
-                    title: "Revert commit",
-                    message: `A new commit on top of HEAD will undo ${commit.shortOid} — ${commit.subject}.`,
-                    confirmLabel: "revert",
-                  },
-                  `Reverted ${commit.shortOid}`,
-                  () => revert(commit),
-                ),
-            },
-            {
-              key: "o",
-              label: "Open this commit on the remote",
-              when: () => remoteWebUrl(ctx.git.state.remotes) !== null,
-              run: async (commit) => {
-                const base = remoteWebUrl(ctx.git.state.remotes)
-                if (base === null) return ctx.popups.notify("No web remote configured", "warning")
-                // GitHub's path, which GitLab and Gitea share.
-                await ctx.open(`${base}/commit/${commit.oid}`)
-              },
-            },
-            {
-              key: "y",
-              label: "Copy the full oid",
-              run: (commit) => attempt(`Copied ${commit.shortOid}`, () => ctx.copy(commit.oid)),
-            },
-          ],
-        },
-        {
-          id: "rewrite",
-          title: "Rewrite history",
-          items: [
-            {
-              key: "q",
-              label: "Squash into the parent commit",
-              when: canSquash,
-              run: async (commit) => {
-                const parent = commit.parents[0]
-                if (parent === undefined || !(await rewriteReady(commit))) return
-                if (
-                  !(await ctx.popups.confirm({
-                    title: "Squash commit",
-                    message:
-                      `${commit.shortOid} — ${commit.subject} will be folded into ${parent.slice(0, 7)}. ` +
-                      "It and every newer commit will get a new oid.",
-                    confirmLabel: "squash",
-                  }))
-                ) {
-                  return
-                }
-                await runRewrite(commit, "squash", `Squashed ${commit.shortOid} into ${parent.slice(0, 7)}`)
-              },
-            },
-            {
-              key: "r",
-              label: "Reword this commit",
-              when: canRewrite,
-              run: reword,
-            },
-            {
-              key: "d",
-              label: "Drop this commit",
-              when: canDrop,
-              run: async (commit) => {
-                if (!(await rewriteReady(commit))) return
-                if (
-                  !(await ctx.popups.confirm({
-                    title: "Drop commit",
-                    message:
-                      `${commit.shortOid} — ${commit.subject} will be removed and every newer commit replayed. ` +
-                      "The original history remains recoverable from the reflog.",
-                    confirmLabel: "drop",
-                    danger: true,
-                  }))
-                ) {
-                  return
-                }
-                await runRewrite(commit, "drop", `Dropped ${commit.shortOid}`)
-              },
-            },
-          ],
-        },
-        {
-          id: "reset",
-          title: "Move this branch here",
-          items: [
-            {
-              key: "s",
-              label: "Reset soft — keep the index and the working tree",
-              run: (commit) => runReset(commit, "soft"),
-            },
-            {
-              key: "m",
-              label: "Reset mixed — keep the working tree, clear the index",
-              run: (commit) => runReset(commit, "mixed"),
-            },
-            {
-              key: "h",
-              label: "Reset hard — discard everything since",
-              run: (commit) => runReset(commit, "hard"),
-            },
-          ],
-        },
-      ],
+    ctx.commands.register({
+      id: "commits.create-branch",
+      source: rows.api,
+      title: "Create branch here",
+      hint: "new branch",
+      keys: "n",
+      run: createBranchAt,
+    })
+    ctx.commands.register({
+      id: "commits.checkout",
+      source: rows.api,
+      title: "Check out this commit",
+      keys: "c",
+      run: (commit) =>
+        confirmThen(
+          {
+            title: "Check out commit",
+            message:
+              `HEAD will be detached at ${commit.shortOid}. Commits made from there belong to no ` +
+              `branch until you create one.`,
+            confirmLabel: "detach HEAD",
+          },
+          `HEAD detached at ${commit.shortOid}`,
+          () => ctx.git.checkout(commit.oid),
+        ),
+    })
+    ctx.commands.register({
+      id: "commits.revert",
+      source: rows.api,
+      title: "Revert this commit",
+      keys: "v",
+      // `git revert` rejects a merge without `-m`, and this Pane draws no topology to choose a mainline.
+      when: (commit) => !isMerge(commit),
+      run: (commit) =>
+        confirmThen(
+          {
+            title: "Revert commit",
+            message: `A new commit on top of HEAD will undo ${commit.shortOid} — ${commit.subject}.`,
+            confirmLabel: "revert",
+          },
+          `Reverted ${commit.shortOid}`,
+          () => revert(commit),
+        ),
+    })
+    ctx.commands.register({
+      id: "commits.open-remote",
+      source: rows.api,
+      title: "Open this commit on the remote",
+      keys: "o",
+      when: () => remoteWebUrl(ctx.git.state.remotes) !== null,
+      run: async (commit) => {
+        const base = remoteWebUrl(ctx.git.state.remotes)
+        if (base === null) return ctx.popups.notify("No web remote configured", "warning")
+        await ctx.open(`${base}/commit/${commit.oid}`)
+      },
+    })
+    ctx.commands.register({
+      id: "commits.copy-oid",
+      source: rows.api,
+      title: "Copy the full commit oid",
+      keys: "y",
+      run: (commit) => attempt(`Copied ${commit.shortOid}`, () => ctx.copy(commit.oid)),
+    })
+    ctx.commands.register({
+      id: "commits.squash",
+      source: rows.api,
+      title: "Squash into the parent commit",
+      keys: "q",
+      when: canSquash,
+      run: async (commit) => {
+        const parent = commit.parents[0]
+        if (parent === undefined || !(await rewriteReady(commit))) return
+        if (
+          !(await ctx.popups.confirm({
+            title: "Squash commit",
+            message:
+              `${commit.shortOid} — ${commit.subject} will be folded into ${parent.slice(0, 7)}. ` +
+              "It and every newer commit will get a new oid.",
+            confirmLabel: "squash",
+          }))
+        ) {
+          return
+        }
+        await runRewrite(commit, "squash", `Squashed ${commit.shortOid} into ${parent.slice(0, 7)}`)
+      },
+    })
+    ctx.commands.register({
+      id: "commits.reword",
+      source: rows.api,
+      title: "Reword this commit",
+      keys: "r",
+      when: canRewrite,
+      run: reword,
+    })
+    ctx.commands.register({
+      id: "commits.drop",
+      source: rows.api,
+      title: "Drop this commit",
+      keys: "d",
+      when: canDrop,
+      run: async (commit) => {
+        if (!(await rewriteReady(commit))) return
+        if (
+          !(await ctx.popups.confirm({
+            title: "Drop commit",
+            message:
+              `${commit.shortOid} — ${commit.subject} will be removed and every newer commit replayed. ` +
+              "The original history remains recoverable from the reflog.",
+            confirmLabel: "drop",
+            danger: true,
+          }))
+        ) {
+          return
+        }
+        await runRewrite(commit, "drop", `Dropped ${commit.shortOid}`)
+      },
+    })
+    ctx.commands.register({
+      id: "commits.reset-soft",
+      source: rows.api,
+      title: "Reset soft to this commit",
+      keys: "s",
+      run: (commit) => runReset(commit, "soft"),
+    })
+    ctx.commands.register({
+      id: "commits.reset-mixed",
+      source: rows.api,
+      title: "Reset mixed to this commit",
+      keys: "m",
+      run: (commit) => runReset(commit, "mixed"),
+    })
+    ctx.commands.register({
+      id: "commits.reset-hard",
+      source: rows.api,
+      title: "Reset hard to this commit",
+      keys: "h",
+      run: (commit) => runReset(commit, "hard"),
     })
 
     function CommitRow({
@@ -631,25 +633,6 @@ export default defineExtension({
         if (!focused || selected === undefined) return
         diff.show({ kind: "commit", ref: selected.oid, path: null })
       }, [focused, selected])
-
-      useCommand({
-        id: "commits.create-branch",
-        title: "Create branch here",
-        hint: "new branch",
-        keys: "n",
-        run: () => (selected === undefined ? undefined : createBranchAt(selected)),
-      })
-
-      useCommand({
-        id: "commits.menu",
-        title: "Commit actions",
-        hint: "menu",
-        keys: "x",
-        run: async () => {
-          if (selected === undefined) return
-          await ctx.menus.open("commits.actions", selected)
-        },
-      })
 
       // OpenTUI calls the key `return`; `enter` would appear in the cheat sheet but never run.
       useCommand({
