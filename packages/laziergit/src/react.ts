@@ -261,6 +261,11 @@ export interface ListCursorOptions<T> {
   /** Singular noun for the cheat-sheet titles, e.g. `"file"` → "Next file". */
   noun: string
   /**
+   * Neighboring rows to keep visible in the direction of travel. `2`, for example, keeps
+   * two upcoming rows below a cursor moving down, like lazygit's scroll-off margin.
+   */
+  scrollOffMargin?: number
+  /**
    * Optional `/` query behavior. A filter projects the list live; a search retains every row
    * and moves among matches with `n` / `N`.
    */
@@ -349,7 +354,13 @@ function nearestMatch(matches: readonly number[], index: number): number {
   return nearest
 }
 
-export function useListCursor<T>({ items, idPrefix, noun, query: queryOptions }: ListCursorOptions<T>): ListCursor<T> {
+export function useListCursor<T>({
+  items,
+  idPrefix,
+  noun,
+  scrollOffMargin = 0,
+  query: queryOptions,
+}: ListCursorOptions<T>): ListCursor<T> {
   const runtime = useRuntime()
   const pane = useEnclosingPane("useListCursor")
   const [requested, setRequested] = useState(0)
@@ -378,6 +389,7 @@ export function useListCursor<T>({ items, idPrefix, noun, query: queryOptions }:
   const last = visibleItems.length - 1
   // Clamped on read, so the render where the list shrank already draws a valid cursor.
   const index = last < 0 ? 0 : Math.min(Math.max(requested, 0), last)
+  const revealedIndex = useRef(index)
   const searchPosition =
     searchIndices.length === 0 ? 0 : Math.min(Math.max(queryState.searchPosition, 0), searchIndices.length - 1)
   const currentSearchMatch = searchIndices[searchPosition]
@@ -388,11 +400,28 @@ export function useListCursor<T>({ items, idPrefix, noun, query: queryOptions }:
 
   // ...and written back, or the clamp would resurrect the old position once the list grew
   // again. Revealing rides along here because this effect runs on exactly the renders that can
-  // move the cursor out of the viewport: a keypress, and a clamp.
+  // move the cursor out of the viewport: a keypress, and a clamp. A scroll-off margin reveals
+  // the neighboring row first, then the selection; the second call is normally a no-op, but
+  // guarantees a very tall custom row cannot push the actual cursor out of view.
   useEffect(() => {
     if (requested !== index) request(index)
-    surface.current?.scrollChildIntoView(`${idPrefix}.row.${index}`)
-  }, [requested, index, idPrefix, request])
+    const node = surface.current
+    const before = revealedIndex.current
+    revealedIndex.current = index
+    if (!node) return
+
+    const configuredMargin = Number.isFinite(scrollOffMargin) ? Math.max(0, Math.trunc(scrollOffMargin)) : 0
+    const viewportRows = Math.max(0, Math.trunc(node.viewport.height))
+    const movingDown = index > before
+    const movingUp = index < before
+    // Lazygit caps its margin at half the viewport. Besides keeping the cursor visible, that
+    // makes an intentionally huge configured value behave like a centred cursor.
+    const marginCap = movingDown ? Math.floor((viewportRows - 1) / 2) : Math.floor(viewportRows / 2)
+    const margin = Math.min(configuredMargin, Math.max(0, marginCap))
+    const revealIndex = movingDown ? Math.min(index + margin, last) : movingUp ? Math.max(index - margin, 0) : index
+    if (revealIndex !== index) node.scrollChildIntoView(`${idPrefix}.row.${revealIndex}`)
+    node.scrollChildIntoView(`${idPrefix}.row.${index}`)
+  }, [requested, index, idPrefix, last, request, scrollOffMargin])
 
   const latest = useRef({
     items,

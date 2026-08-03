@@ -1441,6 +1441,8 @@ positional jump cannot.
     idPrefix: string;
     /** Singular noun for the cheat-sheet titles: "file" → "Next file". */
     noun: string;
+    /** Neighboring rows kept visible in the direction of cursor travel. */
+    scrollOffMargin?: number;
     query?: ListQueryOptions<T>;
   }
 
@@ -1479,8 +1481,9 @@ positional jump cannot.
     /**
      * Callback ref for the pane's `<scrollbox>`: attach it, put {@link rowId} on
      * each row, and the selected row is scrolled into view whenever the cursor
-     * moves past the edge of the viewport, by the minimum needed (so `j` scrolls
-     * one row rather than recentring). Give the box
+     * moves past the edge of the viewport. By default it scrolls by the minimum
+     * needed; `scrollOffMargin` can keep neighboring rows visible in the direction
+     * of travel. Give the box
      * `focusable={false} flexGrow={1} flexBasis={0}` — see {@link ScrollView.ref}
      * for what each of those is load-bearing for.
      *

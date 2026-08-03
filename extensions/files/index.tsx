@@ -215,6 +215,12 @@ export default defineExtension({
       max: 100_000,
       description: "Fold a folder on first draw once it holds this many changed files (0 disables)",
     }),
+    scrollOffMargin: option.number({
+      default: 2,
+      min: 0,
+      max: 100,
+      description: "Keep this many files visible in the direction of cursor travel",
+    }),
   },
 
   activate(ctx): FilesApi {
@@ -227,6 +233,7 @@ export default defineExtension({
     const fold = createCell<FoldState>(noFolds)
     const viewMode = createCell<"tree" | "flat">(ctx.config.view)
     const threshold = ctx.config.collapseThreshold
+    const scrollOffMargin = ctx.config.scrollOffMargin
 
     /**
      * Folds or unfolds one directory, writing to *both* sets. A collapsed set alone cannot
@@ -469,16 +476,25 @@ export default defineExtension({
       const badge = decoration?.badge
 
       return (
-        <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined} onMouseDown={onSelect}>
-          {/* The status pair sits before the indent, so `XY` pins to the same two columns
-              however deep the row is. */}
-          <span fg={dim ? theme.textMuted : theme[cell.indexToken]}>{cell.index}</span>
-          <span fg={dim ? theme.textMuted : theme[cell.worktreeToken]}>{cell.worktree}</span>
-          {/* Indent is spaces inside the one `<text>`, not nested boxes: `scrollChildIntoView`
-              finds a row by id. */}
-          <span fg={dim ? theme.textMuted : theme.text}>{` ${"  ".repeat(depth)}${label}`}</span>
-          <span fg={toneColor(theme, decoration?.tone)}>{badge === undefined ? "" : ` ${badge}`}</span>
-        </text>
+        // The row owns the full width, so its selection background and mouse target do too.
+        // Keeping the cursor id here lets `scrollChildIntoView` follow the same visual row.
+        <box
+          id={id}
+          width="100%"
+          flexDirection="row"
+          backgroundColor={selected && focused ? theme.selection : undefined}
+          onMouseDown={onSelect}
+        >
+          <text wrapMode="none" flexShrink={1}>
+            {/* Indent the whole row marker with its node, matching lazygit's file tree: status
+                letters and folder chevrons should stay beside the name they describe. */}
+            <span>{"  ".repeat(depth)}</span>
+            <span fg={dim ? theme.textMuted : theme[cell.indexToken]}>{cell.index}</span>
+            <span fg={dim ? theme.textMuted : theme[cell.worktreeToken]}>{cell.worktree}</span>
+            <span fg={dim ? theme.textMuted : theme.text}>{` ${label}`}</span>
+            <span fg={toneColor(theme, decoration?.tone)}>{badge === undefined ? "" : ` ${badge}`}</span>
+          </text>
+        </box>
       )
     }
 
@@ -547,6 +563,7 @@ export default defineExtension({
         items: sourceRows,
         idPrefix: "files",
         noun: "file",
+        scrollOffMargin,
         query: {
           mode: "filter",
           fields: (row) =>
