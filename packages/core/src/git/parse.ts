@@ -395,7 +395,16 @@ const commitFormat = ["%H", "%h", "%at", "%an", "%ae", "%P", "%s"].join("%x00")
  * name with a file from being read as a pathspec.
  */
 export function commitArgs(limit: number): readonly string[] {
-  return ["log", "-z", "--no-show-signature", `--max-count=${limit}`, `--format=${commitFormat}`, "HEAD", "--"]
+  return [
+    "log",
+    "-z",
+    "--topo-order",
+    "--no-show-signature",
+    `--max-count=${limit}`,
+    `--format=${commitFormat}`,
+    "HEAD",
+    "--",
+  ]
 }
 
 export function parseCommits(stdout: string): readonly Commit[] {

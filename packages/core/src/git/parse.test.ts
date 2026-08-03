@@ -1,6 +1,7 @@
 import { expect, it } from "bun:test"
 
 import {
+  commitArgs,
   parseBranches,
   parseCommits,
   parseHeadRef,
@@ -295,6 +296,10 @@ it("reads commits including a subject containing a newline, a root commit, and a
       parents: [],
     },
   ])
+})
+
+it("loads commits in topological order so graph lanes do not jump ahead of their parents", () => {
+  expect(commitArgs(300)).toContain("--topo-order")
 })
 
 it("splits a stash subject on the branch, not on the first colon in its message", () => {
