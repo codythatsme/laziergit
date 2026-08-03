@@ -17,6 +17,15 @@ export interface Run {
   updatedAt: string
 }
 
+/** A fresh copy ordered by creation time, with malformed dates parked at the end. */
+export function newestRunsFirst(runs: readonly Run[]): readonly Run[] {
+  const created = (run: Run): number => {
+    const timestamp = Date.parse(run.createdAt)
+    return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp
+  }
+  return [...runs].sort((left, right) => created(right) - created(left))
+}
+
 export interface Step {
   number: number
   name: string
