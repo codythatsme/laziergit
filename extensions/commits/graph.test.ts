@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test"
 
+import { authorColor } from "./authors"
 import { renderCommitGraph, type CommitGraphRow } from "./graph"
 
 interface TestCommit {
@@ -97,6 +98,7 @@ it("highlights every visible pipe sourced from the selected merge", () => {
   const selected = renderCommitGraph(commits, "merge")
 
   expect(ordinary[0]?.some((span) => span.tone !== "highlight")).toBeTrue()
+  expect(ordinary[0]?.every((span) => span.tone === authorColor("Ada"))).toBeTrue()
   expect(selected[0]?.every((span) => span.tone === "highlight")).toBeTrue()
   expect(selected[1]?.some((span) => span.tone === "highlight")).toBeTrue()
 })
