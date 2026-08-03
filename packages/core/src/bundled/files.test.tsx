@@ -694,8 +694,10 @@ describe("what the files pane publishes", () => {
     await waitForFrame(harness, "showing workingTree tracked.txt")
 
     await press(harness, " ")
-    // Staged now, so the same path wants the other side of the diff.
+    // The optimistic row immediately wants the other side of the diff. Still wait for the
+    // canonical snapshot so the fire-and-forget Command cannot escape into test teardown.
     await waitForFrame(harness, "showing staged tracked.txt")
+    await waitFor(harness, () => stagedInStore(harness).length === 1, "the staging to reach the index")
   })
 
   it("leaves the diff alone while another pane is focused", async () => {
