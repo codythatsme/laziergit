@@ -174,19 +174,7 @@ export function installHarnessLifecycle(): void {
 
   afterEach(async () => {
     for (const harness of harnesses.splice(0)) {
-      if (harness.root) {
-        await act(async () => {
-          await harness.kernel.stop()
-          harness.root?.unmount()
-          harness.root = null
-          harness.setup.renderer.destroy()
-        })
-      } else {
-        await harness.kernel.stop()
-        harness.setup.renderer.destroy()
-      }
-      await rm(harness.directory, { recursive: true, force: true })
-      await rm(harness.configDirectory, { recursive: true, force: true })
+      await destroyHarness(harness)
     }
 
     if (leakedUpdates.length > 0) {
@@ -196,6 +184,26 @@ export function installHarnessLifecycle(): void {
       )
     }
   })
+}
+
+/** Destroys one harness immediately instead of leaving it for the installed file lifecycle. */
+export async function destroyHarness(harness: Harness): Promise<void> {
+  const index = activeHarnesses?.indexOf(harness) ?? -1
+  if (index !== -1) activeHarnesses?.splice(index, 1)
+
+  // React's act scope is process-global. Finish its only React work before shutdown waits on
+  // extension, git, watcher, and event drains, so one delayed drain cannot strand an open act
+  // scope and poison every renderer test that follows it.
+  if (harness.root) {
+    act(() => {
+      harness.root?.unmount()
+      harness.root = null
+    })
+  }
+  await harness.kernel.stop()
+  harness.setup.renderer.destroy()
+  await rm(harness.directory, { recursive: true, force: true })
+  await rm(harness.configDirectory, { recursive: true, force: true })
 }
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
