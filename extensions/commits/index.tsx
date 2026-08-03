@@ -19,6 +19,7 @@ import {
 } from "laziergit"
 import { useEffect, useMemo, useState } from "react"
 
+import { authorColor, authorInitials } from "./authors"
 import { renderCommitGraph, type CommitGraphRow, type CommitGraphTone } from "./graph"
 
 function isMerge(commit: Commit): boolean {
@@ -115,7 +116,10 @@ function commitFileLabel(file: CommitFile): string {
 function commitGraphColor(tone: CommitGraphTone, theme: Theme): string {
   if (tone === "neutral") return theme.textMuted
   if (tone === "highlight") return theme.text
-  return theme[tone]
+  if (tone === "accent" || tone === "success" || tone === "warning" || tone === "info" || tone === "danger") {
+    return theme[tone]
+  }
+  return tone
 }
 
 /**
@@ -601,9 +605,8 @@ export default defineExtension({
             </span>
           ))}
           <span fg={dim ? theme.textMuted : theme.accent}>{`${commit.shortOid}  `}</span>
-          <span fg={dim ? theme.textMuted : theme.text}>{commit.subject}</span>
-          {/* Last, because the row clips from the right and the author is the loseable half. */}
-          <span fg={theme.textMuted}>{`  ${commit.author.name}`}</span>
+          <span fg={dim ? theme.textMuted : authorColor(commit.author.name)}>{authorInitials(commit.author.name)}</span>
+          <span fg={dim ? theme.textMuted : theme.text}>{`  ${commit.subject}`}</span>
           {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
         </text>
       )

@@ -1,6 +1,16 @@
 import type { Commit } from "laziergit"
 
-export type CommitGraphTone = "neutral" | "highlight" | "accent" | "success" | "warning" | "info" | "danger"
+import { authorColor, type AuthorColor } from "./authors"
+
+export type CommitGraphTone =
+  | "neutral"
+  | "highlight"
+  | "accent"
+  | "success"
+  | "warning"
+  | "info"
+  | "danger"
+  | AuthorColor
 
 export interface CommitGraphSpan {
   readonly text: string
@@ -40,7 +50,6 @@ interface Glyph {
 
 const emptyTreeOid = "LAZIERGIT_EMPTY_TREE"
 const graphStartOid = "LAZIERGIT_GRAPH_START"
-const authorTones = ["accent", "success", "warning", "info", "danger"] as const
 
 /**
  * Renders the same two-column-per-lane commit graph lazygit draws. The implementation is a
@@ -94,7 +103,7 @@ function nextPipes(previous: readonly Pipe[], commit: GraphCommit): readonly Pip
       fromOid: commit.oid,
       toOid: commit.parents[0] ?? emptyTreeOid,
       kind: "starts",
-      tone: authorTone(commit.author.name),
+      tone: authorColor(commit.author.name),
     },
   ]
   const taken = new Set<number>()
@@ -145,7 +154,7 @@ function nextPipes(previous: readonly Pipe[], commit: GraphCommit): readonly Pip
       fromOid: commit.oid,
       toOid: parent,
       kind: "starts",
-      tone: authorTone(commit.author.name),
+      tone: authorColor(commit.author.name),
     })
     taken.add(available)
   }
@@ -340,17 +349,6 @@ function pipeKindOrder(kind: PipeKind): number {
   if (kind === "terminates") return 0
   if (kind === "starts") return 1
   return 2
-}
-
-function authorTone(author: string): CommitGraphTone {
-  // A tiny deterministic hash keeps one author on one lane color without coupling the pure
-  // graph module to a concrete theme or crypto implementation.
-  let hash = 2_166_136_261
-  for (const character of author) {
-    hash ^= character.codePointAt(0) ?? 0
-    hash = Math.imul(hash, 16_777_619)
-  }
-  return authorTones[(hash >>> 0) % authorTones.length] ?? "accent"
 }
 
 function cellAt(cells: readonly Cell[], position: number): Cell {
