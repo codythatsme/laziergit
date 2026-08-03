@@ -236,18 +236,11 @@ export default defineExtension({
         }
 
         const choices = mergeChoices(await canMergeFastForward(branch))
-        await ctx.popups.menu({
+        const mode = await ctx.popups.select({
           title: `Merge ${branch.name} into ${into}`,
-          groups: [
-            {
-              items: choices.map((choice) => ({
-                key: choice.key,
-                label: choice.label,
-                run: () => mergeBranch(branch, choice.mode),
-              })),
-            },
-          ],
+          items: choices.map((choice) => ({ label: choice.label, value: choice.mode })),
         })
+        if (mode !== undefined) await mergeBranch(branch, mode)
       } catch (error) {
         fail(error)
       }

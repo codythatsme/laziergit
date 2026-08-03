@@ -130,6 +130,13 @@ async function openMergeMenuForSecondBranch(harness: Harness, branch: string): P
   await waitForFrame(harness, `Merge ${branch} into main`)
 }
 
+async function chooseMergeMode(harness: Harness, offset: number): Promise<void> {
+  for (let index = 0; index < offset; index += 1) {
+    await press(harness, () => harness.setup.mockInput.pressArrow("down"))
+  }
+  await press(harness, () => harness.setup.mockInput.pressEnter())
+}
+
 describe("operation activity", () => {
   it("does not show loaders for staging or unstaging", async () => {
     const harness = await createHarness({ git: true })
@@ -312,8 +319,9 @@ describe("merging a branch into the checked-out branch", () => {
     expect(frame(harness)).toContain("Regular merge (fast-forward)")
     expect(frame(harness)).toContain("Regular merge (with merge commit)")
     expect(frame(harness)).toContain("Squash merge and leave uncommitted")
+    expect(frame(harness)).toContain("↑↓ move  ·  enter run  ·  escape cancel")
 
-    await press(harness, "m")
+    await chooseMergeMode(harness, 0)
     // The toast is the command's last act, after the write and its follow-up refresh, so
     // once it shows the repository below is in its final state.
     await waitForFrame(harness, "Merged topic into main")
@@ -331,7 +339,7 @@ describe("merging a branch into the checked-out branch", () => {
     expect(frame(harness)).toContain("Regular merge (with merge commit)")
     expect(frame(harness)).not.toContain("Regular merge (fast-forward)")
 
-    await press(harness, "m")
+    await chooseMergeMode(harness, 0)
     await waitForFrame(harness, "Merged topic into main")
     expect((await git(harness, "show", "--no-patch", "--format=%P", "HEAD")).split(" ")).toHaveLength(2)
     expect(await git(harness, "log", "-1", "--format=%s")).toBe("Merge branch 'topic'")
@@ -345,7 +353,7 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, "s")
+    await chooseMergeMode(harness, 2)
 
     await waitForFrame(harness, "Squash-merged topic; the changes are staged")
     expect(await git(harness, "diff", "--cached", "--name-only")).toBe("work.txt")
@@ -359,7 +367,7 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, "S")
+    await chooseMergeMode(harness, 3)
 
     await waitForFrame(harness, "Squash-merged topic into main")
     expect(await git(harness, "log", "-1", "--format=%s")).toBe("Squash merge topic into main")
@@ -373,7 +381,7 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, "m")
+    await chooseMergeMode(harness, 0)
     await waitForFrame(harness, "Merge topic stopped with conflicts")
 
     expect(frame(harness)).toContain("View conflicted files")
@@ -392,7 +400,7 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, "s")
+    await chooseMergeMode(harness, 1)
     await waitForFrame(harness, "Merge topic stopped with conflicts")
     expect(frame(harness)).toContain("Abort squash merge")
 
@@ -410,7 +418,7 @@ describe("merging a branch into the checked-out branch", () => {
 
     await start(harness)
     await openMergeMenuForSecondBranch(harness, "topic")
-    await press(harness, "m")
+    await chooseMergeMode(harness, 0)
     await waitForFrame(harness, "Merge topic stopped with conflicts")
     await pressEscape(harness)
 

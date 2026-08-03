@@ -488,7 +488,7 @@ describe("laziergit through a real terminal", () => {
       await session.keyboard.type("M")
       await waitForText(session, "Merge topic into main")
       await waitForText(session, "Regular merge (fast-forward)")
-      await session.keyboard.type("m")
+      await session.keyboard.press("Enter")
       await waitForText(session, "Merged topic into main")
 
       expect(await repo.git("symbolic-ref", "--short", "HEAD")).toBe("main\n")
