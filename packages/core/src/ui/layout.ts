@@ -237,9 +237,8 @@ export class LayoutHost {
 
   /**
    * Makes `paneId` the visible tab of its cell, without moving the keyboard — the half a Pane
-   * that follows someone else's selection needs. The diff Pane is tab-grouped with
-   * `commit-flow`, so after a commit it would otherwise sit stranded behind the Commit tab
-   * while every cursor move updated something nobody can see.
+   * that follows someone else's selection needs. A user can tab the diff Pane with another
+   * detail Pane, and cursor movement must still bring the updated diff back into view.
    *
    * Silent where {@link focus} throws: revealing runs on cursor movement, so "that Pane is not
    * on screen right now" is an ordinary condition rather than a programming error.

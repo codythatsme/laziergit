@@ -1190,13 +1190,14 @@ tagged with the extension name, and routed to the log file / debug pane.
 ```
 
 **The number row belongs to core.** `1`–`9` focus the first nine cells of the Layout in
-reading order — columns left to right, cells top to bottom. Tabs in one cell share its digit;
-pressing that digit while its cell is focused cycles to the next tab, just like `]`. Nothing
-an Extension does earns or claims a digit, which is the point: your Pane is reachable the
-moment a Layout places it, and cannot collide with another Extension that guessed the same
-number. The commands are `app.focus.1` … `app.focus.9` and rebindable like any other; their
-titles name all tabs in the cell, so the cheat sheet reads `1 Focus Files`,
-`2 Focus Local branches / Remote`, and so on.
+reading order — columns left to right, cells top to bottom — except that the cell containing
+the bundled `diff` Pane always uses `0`. Tabs in one cell share its digit; pressing that digit
+while its cell is focused cycles to the next tab, just like `]`. Nothing an Extension does
+earns or claims a positional digit, which is the point: your Pane is reachable the moment a
+Layout places it, and cannot collide with another Extension that guessed the same number. The
+commands are `app.focus.0` … `app.focus.9` and rebindable like any other; their titles name all
+tabs in the cell, so the cheat sheet reads `1 Focus Files`, `2 Focus Local branches / Remote`,
+`0 Focus Diff`, and so on.
 
 Register a focus command of your own anyway, without `keys` — the bundled Panes all do
 (`files.focus`, `branches.focus`, …). It costs nothing, gives the palette a row that names
@@ -1252,11 +1253,10 @@ positional jump cannot.
     /**
      * Make this pane the visible tab of its cell WITHOUT moving the keyboard —
      * the verb for a pane that follows someone else's selection. `DiffApi.show`
-     * is the case it exists for: the default Layout tab-groups `diff` with
-     * `commit-flow`, so after a commit the diff pane is stranded behind the
-     * Commit tab and every subsequent cursor move updates something nobody can
-     * see. {@link focus} is the wrong tool there — the user is driving the files
-     * pane, and stealing the keyboard on every cursor move would be unusable.
+     * is the case it exists for: a user can tab `diff` with another detail Pane,
+     * and every subsequent cursor move must make the updated patch visible.
+     * {@link focus} is the wrong tool there — the user is driving the files pane,
+     * and stealing the keyboard on every cursor move would be unusable.
      *
      * Silent where `focus` throws: this runs on cursor movement, so "that pane
      * is not on screen right now" is an ordinary condition to do nothing about,
@@ -2120,10 +2120,10 @@ scroll a pane's viewport** — and added three more surfaces for the same reason
 above. `useScrollView` and `ListCursor.scrollRef` (§1.8) are the scroll seam: OpenTUI's
 `<scrollbox>` scrolls only for a renderable holding the terminal's focus, and laziergit gives
 no renderable that focus, so five real panes (four lists and the diff) had no way to move
-their own viewport. `PaneHandle.reveal` (§1.8) is what makes `DiffApi.show` honest — the diff
-pane is tab-grouped with `commit-flow`, and `focus()` was the wrong verb for a pane following
-someone else's cursor. `literalPathspec` (§1.5) is the smallest fix for the largest bug the
-review found: git globs the paths it is given, `--` does not stop it, and an unwrapped path in
+their own viewport. `PaneHandle.reveal` (§1.8) is what makes `DiffApi.show` honest when a
+layout tab-groups the diff with another detail Pane, and `focus()` was the wrong verb for a
+pane following someone else's cursor. `literalPathspec` (§1.5) is the smallest fix for the
+largest bug the review found: git globs the paths it is given, `--` does not stop it, and an unwrapped path in
 a `raw` argv acts on the user's other files.
 
 ---

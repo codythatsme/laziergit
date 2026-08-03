@@ -118,7 +118,7 @@ const filesStandIn = `
 
 /**
  * The diff Pane, standing in for the Extension that owns it. Registered only where a test asks
- * for it: a cell with one Pane in it cannot show the flow stranding its neighbour.
+ * for it.
  */
 const diffStandIn = `
   /** @jsxImportSource @opentui/react */
@@ -140,9 +140,8 @@ async function start(harness: Harness, options: { readonly tabbed?: boolean } = 
   await writeFile(join(harness.repo, "files.tsx"), filesStandIn)
   const tabbed = options.tabbed === true
   if (tabbed) await writeFile(join(harness.repo, "diff.tsx"), diffStandIn)
-  // The files Pane is first, so it holds focus until `begin` moves it, and the poll is off. A
-  // cell is an array of Pane ids, so the tab group is one cell holding both.
-  const columns = tabbed ? `[["files"], [["diff", "commit-flow"]]]` : `[["files"], ["commit-flow"]]`
+  // The files Pane is first, so its contextual commit keys are live, and the poll is off.
+  const columns = tabbed ? `[["files"], ["diff"]]` : `[["files"]]`
   await writeFile(
     harness.configFiles.repo,
     `{ "layout": { "columns": ${columns} }, "git": { "refreshIntervalMs": 60000 } }`,
@@ -225,6 +224,14 @@ describe("commit-flow popup", () => {
     expect(prompted).toBe(true)
   })
 
+  it("does not add a Commit tab beside the diff", async () => {
+    const harness = await repository()
+    await seed(harness)
+    await startShippedFiles(harness)
+
+    expect(harness.kernel.layout.liveTabs()).toEqual(["files", "diff"])
+  })
+
   it("opens from the shipped Files pane when c is pressed", async () => {
     const harness = await repository()
     await seed(harness)
@@ -290,7 +297,6 @@ describe("commit-flow popup", () => {
 
     // Escape is the most reflexive key in a TUI: it closes the editor and costs nothing.
     await waitForFrame(harness, "Draft kept")
-    expect(frame(harness)).toContain("draft kept: half a thought")
 
     await press(harness, "c")
     expect(frame(harness)).toContain("half a thought")
@@ -317,13 +323,12 @@ describe("commit-flow popup", () => {
     await pressEscape(harness)
     await waitForFrame(harness, "Draft kept")
 
-    await act(async () => harness.kernel.layout.focus("commit-flow"))
-    await settle(harness)
     expect(harness.kernel.commands.getSnapshot().map((command) => command.id)).toContain("commit-flow.discard-draft")
 
-    await press(harness, "d")
+    await act(async () => {
+      await harness.kernel.commands.execute("commit-flow.discard-draft")
+    })
     await waitForFrame(harness, "Draft discarded")
-    expect(frame(harness)).not.toContain("draft kept: throw this away")
     expect(harness.kernel.commands.getSnapshot().map((command) => command.id)).not.toContain(
       "commit-flow.discard-draft",
     )
@@ -417,7 +422,7 @@ describe("commit-flow popup", () => {
     expect(frame(harness)).toContain(popupMarker)
 
     await pressEscape(harness)
-    expect(frame(harness)).toContain("1 staged file")
+    expect(await git(harness.directory, "diff", "--cached", "--name-only")).toBe("feature.txt\n")
     expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("first commit\n")
   }, 30_000)
 
@@ -491,10 +496,10 @@ describe("commit-flow popup", () => {
     expect(commands).not.toContain("commit-flow.signoff")
     expect(commands).not.toContain("commit-flow.menu")
 
-    await act(async () => harness.kernel.layout.focus("commit-flow"))
-    await settle(harness)
-    await press(harness, "a")
-    await waitForFrame(harness, "1 staged file")
-    expect(frame(harness)).toContain(popupMarker)
+    await act(async () => {
+      void harness.kernel.commands.execute("commit-flow.stage-all")
+    })
+    await waitForFrame(harness, popupMarker)
+    expect(await git(harness.directory, "diff", "--cached", "--name-only")).toBe("loose.txt\n")
   }, 30_000)
 })
