@@ -48,6 +48,9 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
 interface RepoOptions {
   /** Leave HEAD unborn — `git init` with nothing committed. */
   readonly unborn?: boolean
+  /** Most Command tests isolate themselves from the Extension's startup/periodic fetch. */
+  readonly autoFetch?: boolean
+  readonly fetchIntervalMs?: number
 }
 
 /** A harness running the real `sync` Extension over a repository with one commit. */
@@ -56,7 +59,18 @@ async function startRepo(options: RepoOptions = {}): Promise<Harness> {
   await symlink(syncExtension, join(harness.bundled, "sync"))
   // Mutations made from outside laziergit reach the store through `refreshGit`, so the
   // fingerprint poll is parked out of every test's way.
-  await writeFile(harness.configFiles.repo, `{ "git": { "refreshIntervalMs": 60000 } }`)
+  await writeFile(
+    harness.configFiles.repo,
+    JSON.stringify({
+      git: { refreshIntervalMs: 60000 },
+      extensions: {
+        sync: {
+          autoFetch: options.autoFetch ?? false,
+          fetchIntervalMs: options.fetchIntervalMs ?? 60000,
+        },
+      },
+    }),
+  )
 
   if (options.unborn !== true) {
     await writeFile(join(harness.directory, "seed.txt"), "seed\n")
@@ -336,6 +350,25 @@ describe("sync.pull and sync.fetch", () => {
     expect(await git(harness.directory, "rev-parse", "main")).toBe(before)
     // The segment's own composition: branch, then only the non-zero counts.
     expect(frame(harness)).toContain("main ↓1")
+  })
+
+  it("automatically discovers remote commits while the app is open", async () => {
+    const harness = await startRepo({ autoFetch: true, fetchIntervalMs: 250 })
+    const origin = await addOrigin(harness)
+    const theirs = await cloneOf(origin)
+
+    await commitIn(theirs, "theirs.txt", "theirs\n")
+    await git(theirs, "push", "--quiet", "origin", "main")
+    await renderApp(harness)
+
+    // lazygit fetches once at startup rather than leaving the first interval stale.
+    await waitForFrame(harness, "main ↓1")
+
+    await commitIn(theirs, "more.txt", "more\n")
+    await git(theirs, "push", "--quiet", "origin", "main")
+
+    // The next scheduled fetch discovers movement that happened after startup.
+    await waitForFrame(harness, "main ↓2")
   })
 
   it("shows git's message when there is no upstream to pull from", async () => {
