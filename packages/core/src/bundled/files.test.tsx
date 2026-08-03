@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import { RGBA } from "@opentui/core"
 import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
+import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
 import {
@@ -11,6 +12,7 @@ import {
   installHarnessLifecycle,
   press,
   renderApp,
+  settle,
   waitFor,
   waitForFrame,
   type Harness,
@@ -157,6 +159,16 @@ async function focusFiles(harness: Harness): Promise<void> {
   await press(harness, "1")
 }
 
+/** Starts a Command without hiding its in-flight optimistic frame from the test. */
+function beginCommand(harness: Harness, id: string): Promise<void> {
+  let pending: Promise<void> | undefined
+  act(() => {
+    pending = harness.kernel.commands.execute(id)
+  })
+  if (pending === undefined) throw new Error(`Command ${id} did not start`)
+  return pending
+}
+
 describe("staging from the files pane", () => {
   it("renders stage and unstage before slow git reconciliation finishes", async () => {
     const harness = await createFilesHarness()
@@ -172,24 +184,30 @@ describe("staging from the files pane", () => {
     await focusFiles(harness)
     await waitForFrame(harness, " M tracked.txt")
 
-    await press(harness, " ")
+    const staging = beginCommand(harness, "files.toggle-stage")
+    await settle(harness)
 
     // The clean filter is still sleeping, so this frame can only come from the optimistic
     // files model; the canonical git snapshot is deliberately still unstaged here.
     expect(frame(harness)).toContain("M  tracked.txt")
     expect(stagedInStore(harness)).toEqual([])
 
-    await waitFor(harness, () => stagedInStore(harness).length === 1, "the slow staging to finish")
+    await act(async () => staging)
+    await settle(harness)
+    expect(stagedInStore(harness)).toEqual(["tracked.txt"])
     expect(await staged(harness)).toEqual(["tracked.txt"])
 
-    await press(harness, " ")
+    const unstaging = beginCommand(harness, "files.toggle-stage")
+    await settle(harness)
 
     // Reset itself is quick, but its status refresh runs the same slow filter. The preview
     // should already have moved the change back to the working-tree column.
     expect(frame(harness)).toContain(" M tracked.txt")
     expect(stagedInStore(harness)).toEqual(["tracked.txt"])
 
-    await waitFor(harness, () => stagedInStore(harness).length === 0, "the slow unstaging to finish")
+    await act(async () => unstaging)
+    await settle(harness)
+    expect(stagedInStore(harness)).toEqual([])
     expect(await staged(harness)).toEqual([])
   }, 15_000)
 
