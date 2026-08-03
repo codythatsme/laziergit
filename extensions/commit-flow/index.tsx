@@ -214,15 +214,6 @@ export default defineExtension({
       pane: "files",
       run: () => start({}),
     })
-    ctx.commands.register({
-      id: "commit-flow.amend",
-      title: "Amend the last commit",
-      hint: "amend",
-      // `shift+a`, not `A`: the parser lowercases a bare letter, colliding with files' `a`.
-      keys: "shift+a",
-      pane: "files",
-      run: () => start({ amend: true }),
-    })
 
     // The extra flow actions remain discoverable in the palette, but no longer need a
     // persistent Commit Pane just to provide them with a focused keybinding scope.

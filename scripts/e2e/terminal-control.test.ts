@@ -386,7 +386,7 @@ describe("laziergit through a real terminal", () => {
     })
   }, 20_000)
 
-  it("stages, commits, amends, and pushes while the editor captures ordinary keys", async () => {
+  it("stages, commits, amends from the palette, and pushes while the editor captures ordinary keys", async () => {
     const repo = await createE2eRepo()
     await addOrigin(repo)
     await repo.write("tracked.txt", "two\n")
@@ -412,8 +412,10 @@ describe("laziergit through a real terminal", () => {
       await session.keyboard.type(" ")
       await waitForText(session, "M  tracked.txt")
 
-      await session.keyboard.type("A")
-      await waitForText(session, "Amend the last commit")
+      await openCommandPalette(session)
+      await session.keyboard.type("Amend the last commit")
+      await session.keyboard.press("Enter")
+      await waitForText(session, "Commit summary")
       await session.keyboard.type(" amended")
       await pressPrimaryModifier(session, "s")
       await waitForText(session, "Amended")
