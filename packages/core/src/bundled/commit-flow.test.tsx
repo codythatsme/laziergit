@@ -79,8 +79,8 @@ async function seed(harness: Harness, ...message: readonly string[]): Promise<vo
 
 /**
  * The files Pane, standing in for the Extension that owns it. It has to be called `files` —
- * `commit-flow` binds `c` and `A` into the Pane of that name. It also consumes `CommitFlowApi`,
- * so every settlement is counted and announced.
+ * `commit-flow` binds `c` into the Pane of that name. It also consumes `CommitFlowApi`, so every
+ * settlement is counted and announced.
  */
 const filesStandIn = `
   /** @jsxImportSource @opentui/react */
@@ -140,7 +140,7 @@ async function start(harness: Harness, options: { readonly tabbed?: boolean } = 
   await writeFile(join(harness.repo, "files.tsx"), filesStandIn)
   const tabbed = options.tabbed === true
   if (tabbed) await writeFile(join(harness.repo, "diff.tsx"), diffStandIn)
-  // The files Pane is first, so its contextual commit keys are live, and the poll is off.
+  // The files Pane is first, so its contextual commit key is live, and the poll is off.
   const columns = tabbed ? `[["files"], ["diff"]]` : `[["files"]]`
   await writeFile(
     harness.configFiles.repo,
@@ -171,7 +171,7 @@ async function stageFile(harness: Harness, path: string): Promise<void> {
 
 /**
  * Focuses the files Pane. At startup the focused Pane is whichever registered first, and `c`
- * and `A` are live only in the files Pane.
+ * is live only in the files Pane.
  */
 async function focusFiles(harness: Harness): Promise<void> {
   await act(async () => {
@@ -491,6 +491,7 @@ describe("commit-flow popup", () => {
     const commands = harness.kernel.commands.getSnapshot().map((command) => command.id)
     expect(commands).toContain("commit-flow.stage-all")
     expect(commands).toContain("commit-flow.amend-here")
+    expect(commands).not.toContain("commit-flow.amend")
     // Nothing is staged, so the two Commands that would commit an empty index are unavailable.
     expect(commands).not.toContain("commit-flow.commit-staged")
     expect(commands).not.toContain("commit-flow.signoff")
