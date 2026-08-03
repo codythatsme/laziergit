@@ -19,6 +19,7 @@ import {
   detailRows,
   formatDuration,
   isLive,
+  newestRunsFirst,
   rowKey,
   runMeta,
   statusGlyph,
@@ -53,7 +54,7 @@ function messageOf(cause: unknown): string {
 
 export default defineExtension({
   name: "gh-workflows",
-  description: "GitHub Actions runs for the current branch (requires the `gh` CLI)",
+  description: "GitHub Actions runs for the current or all branches (requires the `gh` CLI)",
 
   config: {
     limit: option.number({ default: 15, min: 1, max: 100, description: "How many runs to list" }),
@@ -123,6 +124,8 @@ export default defineExtension({
       const listScope = scope.use()
       const [runs, setRuns] = useState<readonly Run[]>([])
       const [error, setError] = useState<string | null>(null)
+      const queryKey = listScope === "all" ? "all" : `branch:${branch ?? ""}`
+      const [loadedQueryKey, setLoadedQueryKey] = useState<string | null>(null)
       const cursor = useListCursor({
         items: runs,
         idPrefix: "gh-workflows",
@@ -141,6 +144,7 @@ export default defineExtension({
         if (listScope === "branch" && branch === null) {
           setRuns([])
           setError(null)
+          setLoadedQueryKey(queryKey)
           return
         }
         try {
@@ -154,17 +158,23 @@ export default defineExtension({
             RUN_FIELDS,
           ])
           if (issued !== ticket.current) return
-          if (res.exitCode !== 0) return setError(res.stderr.trim() || "gh failed")
+          if (res.exitCode !== 0) {
+            setError(res.stderr.trim() || "gh failed")
+            setLoadedQueryKey(queryKey)
+            return
+          }
           // No cursor reset: the cursor clamps itself to a shorter list, and a refresh
           // that returns the same runs should leave you where you were looking.
           const parsed = JSON.parse(res.stdout) as Run[]
           setError(null)
-          setRuns(parsed)
+          setRuns(newestRunsFirst(parsed))
+          setLoadedQueryKey(queryKey)
         } catch (cause) {
           if (issued !== ticket.current) return
           setError(messageOf(cause))
+          setLoadedQueryKey(queryKey)
         }
-      }, [branch, listScope])
+      }, [branch, listScope, queryKey])
 
       useEffect(() => {
         void refresh()
@@ -269,51 +279,64 @@ export default defineExtension({
       useCommand({
         id: "gh-workflows.toggle-scope",
         title: "Toggle runs scope: current branch / all branches",
-        hint: "scope",
+        hint: listScope === "branch" ? "all branches" : "current branch",
         keys: "a",
         run: () => scope.set(scope.get() === "branch" ? "all" : "branch"),
       })
 
-      if (error) return <text fg={theme.danger}>{error}</text>
-      if (listScope === "branch" && branch === null) return <text fg={theme.textMuted}>detached HEAD — no runs</text>
-      if (runs.length === 0)
-        return <text fg={theme.textMuted}>{listScope === "branch" ? `no runs for ${branch}` : "no runs"}</text>
+      const loading = loadedQueryKey !== queryKey
+      const scopeLabel = listScope === "all" ? "all branches" : `current branch · ${branch ?? "detached HEAD"}`
 
       const now = new Date()
       return (
-        // Every prop here is load-bearing. `scrollRef` plus the rows' `rowId` keep the
-        // selected row — the row every key acts on — inside the viewport. `flexBasis={0}`
-        // stops the box being sized by its *content*: a list longer than the pane would
-        // make it taller than the pane and paint over its neighbour instead of scrolling.
-        // `focusable={false}` keeps it out of OpenTUI's single focus slot, which belongs
-        // to the popup layer's inputs.
-        <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
-          {cursor.items.map((run, i) => {
-            const verb = ops.pending.get(run.databaseId)
-            const { glyph, tone } = statusGlyph(run.status, run.conclusion)
-            const selected = i === cursor.index
-            return (
-              // `wrapMode="none"` is not optional decoration: without it a long run title
-              // reflows over two lines and the list stops being a list.
-              <text
-                key={run.databaseId}
-                id={cursor.rowId(i)}
-                wrapMode="none"
-                bg={selected && focused ? theme.selection : undefined}
-                onMouseDown={() => cursor.setIndex(i)}
-              >
-                {/* The highlight is the whole of the cursor — no `❯` beside it. Every
-                    bundled list Pane made the same trade: a marker said a second time what
-                    the bar already says, in the two columns a narrow pane can least spare. */}
-                <span fg={verb === undefined ? toneColor(theme, tone) : theme.info}>
-                  {verb === undefined ? glyph : "↻"}
-                </span>{" "}
-                {run.workflowName} — {run.displayTitle}
-                <span fg={theme.textMuted}> · {verb ?? runMeta(run, listScope === "all", now)}</span>
-              </text>
-            )
-          })}
-        </scrollbox>
+        <box flexDirection="column" flexGrow={1} flexBasis={0}>
+          <text wrapMode="none" fg={theme.accent}>
+            {scopeLabel}
+          </text>
+          {loading ? (
+            <text fg={theme.textMuted}>loading runs…</text>
+          ) : error !== null ? (
+            <text fg={theme.danger}>{error}</text>
+          ) : listScope === "branch" && branch === null ? (
+            <text fg={theme.textMuted}>no runs</text>
+          ) : runs.length === 0 ? (
+            <text fg={theme.textMuted}>{listScope === "branch" ? `no runs for ${branch}` : "no runs"}</text>
+          ) : (
+            // Every prop here is load-bearing. `scrollRef` plus the rows' `rowId` keep the
+            // selected row — the row every key acts on — inside the viewport. `flexBasis={0}`
+            // stops the box being sized by its *content*: a list longer than the pane would
+            // make it taller than the pane and paint over its neighbour instead of scrolling.
+            // `focusable={false}` keeps it out of OpenTUI's single focus slot, which belongs
+            // to the popup layer's inputs.
+            <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
+              {cursor.items.map((run, i) => {
+                const verb = ops.pending.get(run.databaseId)
+                const { glyph, tone } = statusGlyph(run.status, run.conclusion)
+                const selected = i === cursor.index
+                return (
+                  // `wrapMode="none"` is not optional decoration: without it a long run title
+                  // reflows over two lines and the list stops being a list.
+                  <text
+                    key={run.databaseId}
+                    id={cursor.rowId(i)}
+                    wrapMode="none"
+                    bg={selected && focused ? theme.selection : undefined}
+                    onMouseDown={() => cursor.setIndex(i)}
+                  >
+                    {/* The highlight is the whole of the cursor — no `❯` beside it. Every
+                        bundled list Pane made the same trade: a marker said a second time what
+                        the bar already says, in the two columns a narrow pane can least spare. */}
+                    <span fg={verb === undefined ? toneColor(theme, tone) : theme.info}>
+                      {verb === undefined ? glyph : "↻"}
+                    </span>{" "}
+                    {run.workflowName} — {run.displayTitle}
+                    <span fg={theme.textMuted}> · {verb ?? runMeta(run, listScope === "all", now)}</span>
+                  </text>
+                )
+              })}
+            </scrollbox>
+          )}
+        </box>
       )
     }
 

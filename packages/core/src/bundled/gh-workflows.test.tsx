@@ -56,6 +56,7 @@ interface GhStub {
   readonly bin: string
   readonly openLog: string
   setRuns(branch: string, runs: readonly unknown[]): Promise<void>
+  delayRuns(branch: string, seconds: number): Promise<void>
   setDetail(runId: number, detail: unknown): Promise<void>
   setLog(jobId: number, text: string): Promise<void>
   replace(body: string): Promise<void>
@@ -87,7 +88,9 @@ async function installGh(harness: Harness): Promise<GhStub> {
     '  prev="$arg"',
     "done",
     'case "$1 $2" in',
-    `  "run list") exec cat "${bin}/runs-$branch.json" ;;`,
+    '  "run list")',
+    `    if [ -f "${bin}/delay-$branch" ]; then sleep "$(cat "${bin}/delay-$branch")"; fi`,
+    `    exec cat "${bin}/runs-$branch.json" ;;`,
     '  "run view")',
     `    if [ "$wantlog" = 1 ]; then exec cat "${bin}/log-$job.txt"; fi`,
     `    exec cat "${bin}/view-$3.json" ;;`,
@@ -109,6 +112,7 @@ async function installGh(harness: Harness): Promise<GhStub> {
     bin,
     openLog,
     setRuns: (branch, runs) => writeFile(join(bin, `runs-${branch}.json`), JSON.stringify(runs)),
+    delayRuns: (branch, seconds) => writeFile(join(bin, `delay-${branch}`), String(seconds)),
     setDetail: (runId, detail) => writeFile(join(bin, `view-${runId}.json`), JSON.stringify(detail)),
     setLog: (jobId, text) => writeFile(join(bin, `log-${jobId}.txt`), text),
     replace: (body) => writeFile(join(bin, "gh"), `#!/bin/sh\n${body}\n`, { mode: 0o755 }),
@@ -437,7 +441,10 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     const harness = await workflowsHarness()
     const gh = await installGh(harness)
     await gh.setRuns("main", [run(3, "slow run", "in_progress", "")])
-    await start(harness)
+    await start(
+      harness,
+      `{ "extensions": { "gh-workflows": { "pollIntervalMs": 250 } }, "git": { "refreshIntervalMs": 60000 } }`,
+    )
     await frameShowing(harness, "verify — slow run")
 
     await press(harness, "2")
@@ -467,13 +474,21 @@ describe.skipIf(process.platform === "win32")("gh-workflows pane", () => {
     await gh.setRuns("main", [run(1, "on main", "completed", "success")])
     await gh.setRuns("", [run(9, "on other", "completed", "success", { headBranch: "other" })])
     await start(harness)
-    await frameShowing(harness, "verify — on main")
+    const current = await frameShowing(harness, "verify — on main")
+    expect(current).toContain("current branch · main")
+    await gh.delayRuns("", 0.2)
 
     await press(harness, "2")
     await press(harness, "a")
 
+    const loading = frame(harness)
+    expect(loading).toContain("all branches")
+    expect(loading).toContain("loading runs…")
+    expect(loading).not.toContain("on main")
+
     // The all-branches row names its branch; the branch-scoped row never did.
     const all = await frameShowing(harness, "verify — on other")
+    expect(all).toContain("all branches")
     expect(all).toContain("other · push")
     const listCalls = (await gh.calls()).filter((line) => line.startsWith("run list"))
     expect(listCalls.some((line) => !line.includes("--branch"))).toBe(true)
@@ -539,6 +554,7 @@ describe("gh-workflows pane without a branch", () => {
     await git(harness, "checkout", "--quiet", "--detach")
     await start(harness)
 
-    await frameShowing(harness, "detached HEAD — no runs")
+    const detached = await frameShowing(harness, "current branch · detached HEAD")
+    expect(detached).toContain("no runs")
   })
 })

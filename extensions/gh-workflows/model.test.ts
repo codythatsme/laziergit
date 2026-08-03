@@ -7,6 +7,7 @@ import {
   formatAge,
   formatDuration,
   isExpanded,
+  newestRunsFirst,
   rowKey,
   runMeta,
   statusGlyph,
@@ -71,6 +72,30 @@ it("builds a run's meta trailer with and without the branch", () => {
   expect(runMeta(run, false, now)).toBe("push · 42s")
   expect(runMeta(run, true, now)).toBe("main · push · 42s")
   expect(runMeta({ ...run, status: "in_progress" }, false, now)).toBe("push · 1m")
+})
+
+it("orders runs newest first without mutating gh's answer", () => {
+  const base: Run = {
+    databaseId: 1,
+    displayTitle: "run",
+    workflowName: "verify",
+    status: "completed",
+    conclusion: "success",
+    url: "",
+    event: "push",
+    headBranch: "main",
+    createdAt: "2026-07-29T11:00:00Z",
+    startedAt: "2026-07-29T11:00:00Z",
+    updatedAt: "2026-07-29T11:00:42Z",
+  }
+  const runs = [
+    base,
+    { ...base, databaseId: 2, createdAt: "2026-07-29T12:00:00Z" },
+    { ...base, databaseId: 3, createdAt: "not a date" },
+  ]
+
+  expect(newestRunsFirst(runs).map((run) => run.databaseId)).toEqual([2, 1, 3])
+  expect(runs.map((run) => run.databaseId)).toEqual([1, 2, 3])
 })
 
 it("starts failed and live jobs expanded, successful ones folded", () => {

@@ -28,7 +28,7 @@ laziergit          # from inside any git repository
 - **diff** — patch view that follows your cursor across panes
 - **commit-flow** — summary/description commit popup with amend
 - **sync** — push/pull/fetch, force-with-lease, live activity indicator
-- **gh-workflows** — GitHub Actions runs for the current branch: drill into jobs and logs, rerun, cancel (needs the `gh` CLI)
+- **gh-workflows** — GitHub Actions runs for the current or all branches: drill into jobs and logs, rerun, cancel (needs the `gh` CLI)
 
 Lists filter with `/`, the palette runs any command, `?` shows the focused pane's keys, and everything is rebindable.
 
