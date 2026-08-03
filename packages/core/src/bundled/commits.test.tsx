@@ -461,12 +461,24 @@ describe("contextual commit Commands", () => {
     await repo.run("checkout", "--quiet", "main")
     await commit(repo, "main work")
     await repo.run("merge", "--quiet", "--no-ff", "--no-edit", "-m", "merge feature", "feature")
+    const mergeOid = await repo.shortOid("HEAD")
+    const featureOid = await repo.shortOid("feature")
+    const mainOid = await repo.shortOid("HEAD^1")
+    const rootOid = await repo.shortOid("HEAD^1^1")
 
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     // The merge is the newest commit and so the selected row. Offering these Commands here
     // would promise rewrites git refuses or whose mainline the Pane cannot choose.
     await waitForSelection(repo, "HEAD")
+
+    // The graph is calculated from the same topo-ordered Commit objects the cursor and diff use:
+    // the second parent opens to the right, stays live beside its commit, then joins main again.
+    const rendered = frame(repo.harness)
+    expect(rendered).toContain(`◎─╮ ${mergeOid}  merge feature`)
+    expect(rendered).toContain(`│ ○ ${featureOid}  feature work`)
+    expect(rendered).toContain(`○ │ ${mainOid}  main work`)
+    expect(rendered).toContain(`○─╯ ${rootOid}  first commit`)
 
     const merge = commandIds(repo)
     expect(merge).toContain("commits.checkout")
@@ -476,9 +488,10 @@ describe("contextual commit Commands", () => {
     expect(merge).not.toContain("commits.drop")
 
     await press(repo.harness, "j")
-    await waitForSelection(repo, "HEAD~1")
+    await waitForSelection(repo, "feature")
 
-    // Back on the very next row, so this is a gate on merges and not a missing Command.
+    // The topo-ordered next row is the merged feature tip. It is not a merge itself, proving
+    // this is a gate on merges and not a missing Command.
     expect(commandIds(repo)).toContain("commits.revert")
   })
 

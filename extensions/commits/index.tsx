@@ -17,7 +17,9 @@ import {
   type PaneProps,
   type Theme,
 } from "laziergit"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+
+import { renderCommitGraph, type CommitGraphRow, type CommitGraphTone } from "./graph"
 
 function isMerge(commit: Commit): boolean {
   return commit.parents.length > 1
@@ -108,6 +110,12 @@ function commitFileColor(status: string, theme: Theme): string {
 
 function commitFileLabel(file: CommitFile): string {
   return file.previousPath === null ? file.path : `${file.previousPath} → ${file.path}`
+}
+
+function commitGraphColor(tone: CommitGraphTone, theme: Theme): string {
+  if (tone === "neutral") return theme.textMuted
+  if (tone === "highlight") return theme.text
+  return theme[tone]
 }
 
 /**
@@ -567,12 +575,14 @@ export default defineExtension({
 
     function CommitRow({
       commit,
+      graph,
       id,
       selected,
       focused,
       onSelect,
     }: {
       readonly commit: Commit
+      readonly graph: CommitGraphRow
       readonly id: string
       readonly selected: boolean
       readonly focused: boolean
@@ -585,6 +595,11 @@ export default defineExtension({
 
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined} onMouseDown={onSelect}>
+          {graph.map((span, index) => (
+            <span key={index} fg={dim ? theme.textMuted : commitGraphColor(span.tone, theme)}>
+              {span.text}
+            </span>
+          ))}
           <span fg={dim ? theme.textMuted : theme.accent}>{`${commit.shortOid}  `}</span>
           <span fg={dim ? theme.textMuted : theme.text}>{commit.subject}</span>
           {/* Last, because the row clips from the right and the author is the loseable half. */}
@@ -616,6 +631,7 @@ export default defineExtension({
         },
       })
       const selected = cursor.selected
+      const graph = useMemo(() => renderCommitGraph(commits, selected?.oid), [commits, selected?.oid])
 
       useEffect(() => {
         if (selectedOid === null) return
@@ -670,6 +686,7 @@ export default defineExtension({
                 key={commit.oid}
                 id={cursor.rowId(index)}
                 commit={commit}
+                graph={graph[index] ?? []}
                 selected={index === cursor.index}
                 focused={focused}
                 onSelect={() => cursor.setIndex(index)}
