@@ -120,8 +120,11 @@ export interface ExtensionKernelOptions {
 /** Core's own Commands. "app" is a reserved Extension name, so these ids can never collide. */
 const coreOwner = "app"
 
-/** How many Layout cells the number row can jump to. A tenth is still reachable with `tab`. */
+/** How many positional Layout cells the number row can jump to. A tenth is still reachable with `tab`. */
 const maxJumpKeys = 9
+
+/** The bundled detail pane keeps `0` wherever a Layout places it. */
+const diffPaneId = "diff"
 
 function candidateKey(candidate: ExtensionCandidate): string {
   return `${candidate.scope}:${candidate.rootPath}`
@@ -207,7 +210,7 @@ export class ExtensionKernel {
   readonly #disposeThemeBackground: () => void
   /** Live `useKeyCapture` claims, most recent last — React unmounts in no particular order. */
   readonly #captureClaims: { readonly paneId: string }[] = []
-  /** The `1`–`9` Commands, in the order they number the Layout. */
+  /** The `0`–`9` Pane-jump Commands, rebuilt as the Layout changes. */
   readonly #jumpKeys: Disposable[] = []
   /** What the live jump Commands were built from; re-registration is skipped while it holds. */
   #jumpSignature = ""
@@ -572,21 +575,23 @@ export class ExtensionKernel {
   }
 
   /**
-   * Rebuilds the `1`–`9` Commands so each digit names the cell it currently jumps to. Core
-   * owns these rather than each Extension claiming a digit, so a cell's number is its position
-   * in the user's Layout and a third-party Pane is reachable the moment it is placed.
+   * Rebuilds the Pane-jump Commands so `0` always names the Diff cell and `1`–`9` name
+   * positional cells. Core owns these rather than each Extension claiming a digit, so a
+   * third-party Pane is reachable the moment it is placed.
    *
-   * Keyed on a signature of the titles rather than rebuilt on every publish: the Layout also
-   * republishes on focus changes, and that would rebuild every keymap layer per keypress.
+   * Keyed on a signature of the resolved keys and titles rather than rebuilt on every publish:
+   * the Layout also republishes on focus changes, and that would rebuild every keymap layer
+   * per keypress.
    */
   #syncJumpKeys(): void {
     if (this.#stopped) return
 
-    const titles = this.layout
-      .jumpTargets()
-      .slice(0, maxJumpKeys)
-      .map((paneIds) => paneIds.map((paneId) => this.#paneTitle(paneId)).join(" / "))
-    const signature = titles.join("\0")
+    const jumps = this.layout.jumpTargets().flatMap((paneIds, index) => {
+      const key = paneIds.includes(diffPaneId) ? "0" : index < maxJumpKeys ? String(index + 1) : null
+      if (key === null) return []
+      return [{ index, key, title: paneIds.map((paneId) => this.#paneTitle(paneId)).join(" / ") }]
+    })
+    const signature = jumps.map(({ key, title }) => `${key}\0${title}`).join("\u0001")
     if (signature === this.#jumpSignature) return
     this.#jumpSignature = signature
 
@@ -598,12 +603,12 @@ export class ExtensionKernel {
       }
     }
 
-    for (const [index, title] of titles.entries()) {
+    for (const { index, key, title } of jumps) {
       this.#jumpKeys.push(
         this.commands.register(coreOwner, {
-          id: `app.focus.${index + 1}`,
+          id: `app.focus.${key}`,
           title: `Focus ${title}`,
-          keys: String(index + 1),
+          keys: key,
           hidden: true,
           run: () => this.layout.focusAt(index),
         }),

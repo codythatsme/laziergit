@@ -516,11 +516,11 @@ const jumpSource = `
     <text content={name + " " + (focused ? "focused" : "blurred")} />
 
   export default defineExtension({
-    name: "jump",
+    name: "diff",
     activate(ctx) {
-      ctx.panes.register({ id: "jump", title: "Files", component: line("files") })
-      ctx.panes.register({ id: "jump.actions", title: "Actions", component: line("actions") })
-      ctx.panes.register({ id: "jump.detail", title: "Diff", component: line("detail") })
+      ctx.panes.register({ id: "diff.files", title: "Files", component: line("files") })
+      ctx.panes.register({ id: "diff.actions", title: "Actions", component: line("actions") })
+      ctx.panes.register({ id: "diff", title: "Diff", component: line("detail") })
     },
   })
 `
@@ -530,19 +530,22 @@ describe("pane-jump keys", () => {
     const harness = await createHarness()
     await withExtensions(
       harness,
-      { "jump.tsx": jumpSource },
-      `{ "layout": { "columns": [["jump", "jump.actions"], ["jump.detail"]] } }`,
+      { "diff.tsx": jumpSource },
+      `{ "layout": { "columns": [["diff.files", "diff.actions"], ["diff"]] } }`,
     )
 
     expect(frame(harness)).toContain("files focused")
 
-    // `2` is the second cell of the first column and `3` carries on into the next: reading
-    // order, which is the only order the numbers could mean.
+    // `2` is the second cell of the first column. The bundled Diff id keeps `0` instead of
+    // taking its positional `3`, wherever the Layout places it.
     await press(harness, "2")
     await waitForFrame(harness, "actions focused")
     expect(frame(harness)).toContain("files blurred")
 
     await press(harness, "3")
+    expect(frame(harness)).toContain("actions focused")
+
+    await press(harness, "0")
     await waitForFrame(harness, "detail focused")
 
     await press(harness, "1")
@@ -557,8 +560,8 @@ describe("pane-jump keys", () => {
     const harness = await createHarness({ height: 40 })
     await withExtensions(
       harness,
-      { "jump.tsx": jumpSource },
-      `{ "layout": { "columns": [["jump", "jump.actions"], ["jump.detail"]] } }`,
+      { "diff.tsx": jumpSource },
+      `{ "layout": { "columns": [["diff.files", "diff.actions"], ["diff"]] } }`,
     )
 
     await press(harness, "?")
@@ -575,7 +578,7 @@ describe("pane-jump keys", () => {
 
   it("renumbers when the Layout changes under it", async () => {
     const harness = await createHarness()
-    await withExtensions(harness, { "jump.tsx": jumpSource }, `{ "layout": { "columns": [["jump.actions"]] } }`)
+    await withExtensions(harness, { "diff.tsx": jumpSource }, `{ "layout": { "columns": [["diff.actions"]] } }`)
 
     // One cell in the Layout, so the two Panes it leaves out fall back to their placement
     // hints — and `1` names whatever ended up first, not whatever registered first.

@@ -172,7 +172,7 @@ it("keeps local and remote branches in pane 2 and cycles its tabs with 2 or brac
   await press(harness, "[")
   await waitForFrame(harness, "[Local branches] - Remote")
 
-  await press(harness, "3")
+  await press(harness, "0")
   await press(harness, "z")
   await waitForFrame(harness, "diff focused focused")
 }, 30_000)

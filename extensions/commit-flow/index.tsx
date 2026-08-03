@@ -7,24 +7,14 @@ import {
   isStaged,
   isUnstaged,
   isUntracked,
-  useGit,
-  useTheme,
   type CommitFlowApi,
   type CommitFlowResult,
-  type FileChange,
   type Head,
 } from "laziergit"
-import { useMemo } from "react"
 
 function hasCommit(head: Head): boolean {
   return head.kind === "detached" || head.kind === "onBranch"
 }
-
-/** Staged paths the idle summary names before it falls back to a count. */
-const listedPaths = 6
-
-/** How much of a kept draft the idle summary quotes back. */
-const draftPreview = 40
 
 interface CommitDraft {
   readonly initial: string
@@ -50,15 +40,6 @@ interface OpenOptions {
 
 function countLabel(count: number): string {
   return `${count} staged ${count === 1 ? "file" : "files"}`
-}
-
-function describe(file: FileChange): string {
-  return file.previousPath === null ? file.path : `${file.previousPath} → ${file.path}`
-}
-
-function firstLine(text: string): string {
-  const line = text.split("\n", 1)[0] ?? ""
-  return line.length > draftPreview ? `${line.slice(0, draftPreview - 1)}…` : line
 }
 
 function editingTitle(draft: CommitDraft, stagedCount: number): string {
@@ -224,46 +205,6 @@ export default defineExtension({
       return open(options).then(() => undefined)
     }
 
-    function CommitFlowPane() {
-      const theme = useTheme()
-      const keptDraft = kept.use()
-      // Filter outside the selector: `useGit((s) => s.…filter(…))` returns a fresh array every
-      // snapshot, so the store's `Object.is` check never holds and the Pane re-renders forever.
-      const files = useGit((state) => state.status.files)
-      const staged = useMemo(() => files.filter(isStaged), [files])
-
-      return (
-        <box flexDirection="column">
-          {staged.length === 0 ? (
-            <text content="nothing staged" style={{ fg: theme.textMuted }} />
-          ) : (
-            <box flexDirection="column">
-              <text content={countLabel(staged.length)} style={{ fg: theme.text }} />
-              {staged.slice(0, listedPaths).map((file) => (
-                <text key={file.path} wrapMode="none" content={`  ${describe(file)}`} style={{ fg: theme.textMuted }} />
-              ))}
-              {staged.length > listedPaths ? (
-                <text content={`  +${staged.length - listedPaths} more`} style={{ fg: theme.textMuted }} />
-              ) : null}
-            </box>
-          )}
-          {keptDraft.length > 0 ? (
-            <text wrapMode="none" content={`draft kept: ${firstLine(keptDraft)}`} style={{ fg: theme.warning }} />
-          ) : null}
-          {/* The hint bar shows the focused Pane's keys, and these two live on the files Pane. */}
-          <text content="c commit  ·  shift+a amend" style={{ fg: theme.info }} />
-          <text content="from the files pane" style={{ fg: theme.textMuted }} />
-        </box>
-      )
-    }
-
-    ctx.panes.register({
-      id: "commit-flow",
-      title: "Commit",
-      component: CommitFlowPane,
-      placement: { column: 1, order: 20, tabWith: "diff" },
-    })
-
     ctx.commands.register({
       id: "commit-flow.commit",
       title: "Commit",
@@ -282,27 +223,24 @@ export default defineExtension({
       pane: "files",
       run: () => start({ amend: true }),
     })
+
+    // The extra flow actions remain discoverable in the palette, but no longer need a
+    // persistent Commit Pane just to provide them with a focused keybinding scope.
     ctx.commands.register({
       id: "commit-flow.commit-staged",
       title: "Commit staged changes",
-      keys: "c",
-      pane: "commit-flow",
       when: () => ctx.git.state.status.files.some(isStaged),
       run: () => start({}),
     })
     ctx.commands.register({
       id: "commit-flow.signoff",
       title: "Commit staged changes with signoff",
-      keys: "s",
-      pane: "commit-flow",
       when: () => ctx.git.state.status.files.some(isStaged),
       run: () => start({ signoff: true }),
     })
     ctx.commands.register({
       id: "commit-flow.stage-all",
       title: "Stage all changes and commit",
-      keys: "a",
-      pane: "commit-flow",
       when: () => {
         const status = ctx.git.state.status
         return !status.files.some(isConflicted) && status.files.some((file) => isUnstaged(file) || isUntracked(file))
@@ -320,16 +258,12 @@ export default defineExtension({
     ctx.commands.register({
       id: "commit-flow.amend-here",
       title: "Amend the last commit",
-      keys: "m",
-      pane: "commit-flow",
       when: () => hasCommit(ctx.git.state.head),
       run: () => start({ amend: true }),
     })
     const discardDraft = ctx.commands.register({
       id: "commit-flow.discard-draft",
       title: "Discard the kept commit draft",
-      keys: "d",
-      pane: "commit-flow",
       when: () => kept.get().length > 0,
       run: () => {
         setKept("")

@@ -435,7 +435,7 @@ export default defineExtension({
       show: (next) => {
         target.set(next)
         // Reveal, never focus: `show` runs on every cursor move of the Pane the user is
-        // driving. Only for a real target, or an empty diff would displace the commit editor.
+        // driving. Only for a real target, so clearing a source cannot displace another tab.
         if (next !== null) pane.reveal()
       },
     }

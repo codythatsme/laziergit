@@ -727,7 +727,7 @@ describe("what the files pane publishes", () => {
     await renderApp(harness)
     // Diff activates first because Files depends on it, so the cell initially remembers Diff.
     // Repeating the cell's digit cycles to Files.
-    await focusFiles(harness)
+    await press(harness, "0")
     await press(harness, "V")
     await waitForFrame(harness, "selected loose.txt")
 
