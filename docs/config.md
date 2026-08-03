@@ -355,7 +355,7 @@ own Pane, and `keybindings` above decides what each one is labelled with.
 ```jsonc
 {
   "extensions": {
-    "files": { "view": "tree", "collapseThreshold": 200 },
+    "files": { "view": "tree", "collapseThreshold": 200, "scrollOffMargin": 2 },
     "diff": { "view": "unified", "context": 3 },
     "gh-workflows": { "limit": 30 },
   },
@@ -373,5 +373,6 @@ Options the Bundled Extensions declare:
 |---|---|---|
 | `files.view` | `"tree"` | `"tree"` draws a folder hierarchy; `"flat"` draws one list of full paths. A session toggle (`` ` ``) layers over this rather than editing it |
 | `files.collapseThreshold` | `200` | Fold a folder on first draw once it holds this many changed files, so a fresh un-ignored `node_modules/` cannot bury the rest of the tree. Expanding one explicitly outranks the threshold and survives the refresh poll. `0` disables it |
+| `files.scrollOffMargin` | `2` | Keep this many neighboring files visible in the direction of cursor travel. Set it to `0` to scroll only when the selection reaches the viewport edge |
 | `diff.view` | `"unified"` | Initial diff layout |
 | `diff.context` | `3` | Lines of context around each hunk |

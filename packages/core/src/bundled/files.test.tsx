@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test"
+import { RGBA } from "@opentui/core"
 import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 
@@ -126,8 +127,11 @@ function configOf(layout: string): string {
  * linked into the bundled scope. The `.gitignore` is committed first because that directory
  * is also the Extension and config home.
  */
-async function createFilesHarness(layout: string = columnsLayout): Promise<Harness> {
-  const harness = await createHarness({ git: true })
+async function createFilesHarness(
+  layout: string = columnsLayout,
+  viewport: { readonly width?: number; readonly height?: number } = {},
+): Promise<Harness> {
+  const harness = await createHarness({ git: true, ...viewport })
   await Promise.all([
     symlink(join(bundledExtensionDirectory, "files"), join(harness.bundled, "files")),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
@@ -166,6 +170,23 @@ describe("staging from the files pane", () => {
     // tree, so the letter is in the second column.
     await waitFor(harness, () => highlighted(harness).length > 0, "the focused pane to light its cursor")
     expect(highlighted(harness)).toEqual([" M tracked.txt"])
+
+    const row = harness.setup.renderer.root.findDescendantById("files.row.0")
+    if (!row) throw new Error("selected file row did not render")
+    const selection = RGBA.fromHex(harness.kernel.theme.getSnapshot().selection)
+    const selectedLine = harness.setup.captureSpans().lines.find((line) =>
+      line.spans
+        .filter((span) => span.bg?.equals(selection) === true)
+        .map((span) => span.text)
+        .join("")
+        .includes(" M tracked.txt"),
+    )
+    const selectedWidth =
+      selectedLine?.spans
+        .filter((span) => span.bg?.equals(selection) === true)
+        .reduce((width, span) => width + span.text.length, 0) ?? 0
+    expect(selectedWidth).toBe(row.width)
+    expect(selectedWidth).toBeGreaterThan(" M tracked.txt".length)
 
     await press(harness, " ")
     await waitForFrame(harness, "M  tracked.txt")
@@ -211,12 +232,12 @@ describe("staging from the files pane", () => {
     await focusFiles(harness)
 
     const rendered = frame(harness)
-    // The `XY` pair sits in the same two columns on every row and only the name indents, so
-    // the column you scan for "is this staged?" never moves with folder depth.
+    // The marker and name move together: a nested file's status sits beside that file rather
+    // than staying pinned to the pane's left edge.
     expect(rendered).toContain("▼  src")
-    expect(rendered).toContain("??   a.txt")
-    expect(rendered).toContain("▼    nested")
-    expect(rendered).toContain("??     b.txt")
+    expect(rendered).toContain("  ?? a.txt")
+    expect(rendered).toContain("  ▼  nested")
+    expect(rendered).toContain("    ?? b.txt")
     expect(rendered).toContain("?? top.txt")
     // Folders first, then paths: `nested` precedes its sibling file, and the root file is
     // last rather than first.
@@ -232,7 +253,7 @@ describe("staging from the files pane", () => {
     await focusFiles(harness)
 
     expect(frame(harness)).toContain("▼  a/b")
-    expect(frame(harness)).toContain("??   c.txt")
+    expect(frame(harness)).toContain("  ?? c.txt")
   })
 
   it("collapses a directory with return and hides its descendants", async () => {
@@ -241,14 +262,14 @@ describe("staging from the files pane", () => {
 
     await renderApp(harness)
     await focusFiles(harness)
-    expect(frame(harness)).toContain("??   a.txt")
+    expect(frame(harness)).toContain("  ?? a.txt")
 
     await press(harness, "\r")
     await waitForFrame(harness, "▶  src")
     expect(frame(harness)).not.toContain("a.txt")
 
     await press(harness, "\r")
-    await waitForFrame(harness, "??   a.txt")
+    await waitForFrame(harness, "  ?? a.txt")
   })
 
   it("keeps the cursor on the same node when a directory above it collapses", async () => {
@@ -261,12 +282,55 @@ describe("staging from the files pane", () => {
     // Folders before files, so the nested chain comes before `a.txt` rather than after it.
     await press(harness, "j")
     await press(harness, "j")
-    await waitFor(harness, () => highlighted(harness).includes("??     b.txt"), "the cursor to reach b.txt")
+    await waitFor(harness, () => highlighted(harness).includes("    ?? b.txt"), "the cursor to reach b.txt")
 
     // Collapse-all removes the row the cursor was on, so it lands on the deepest visible
     // ancestor rather than wherever the old index now points.
     await press(harness, "-")
     await waitFor(harness, () => highlighted(harness).includes("▶  src"), "the cursor to land on the folded folder")
+  })
+
+  it("keeps two neighboring files visible in the cursor's direction of travel", async () => {
+    const harness = await createFilesHarness(columnsLayout, { height: 12 })
+    const names = Array.from({ length: 40 }, (_, index) => `file-${String(index).padStart(2, "0")}.txt`)
+    await Promise.all(names.map((name) => write(harness, name, `${name}\n`)))
+
+    await renderApp(harness)
+    await focusFiles(harness)
+
+    const initiallyVisibleLast = names.findLastIndex((name) => frame(harness).includes(name))
+    expect(initiallyVisibleLast).toBeGreaterThan(2)
+    expect(initiallyVisibleLast).toBeLessThan(names.length - 2)
+
+    // Stop one row above the original viewport edge. With nearest-only scrolling this leaves
+    // the cursor almost at the bottom; the lazygit-style margin scrolls early enough to reveal
+    // both rows ahead of it.
+    for (let index = 0; index < initiallyVisibleLast - 1; index += 1) await press(harness, "j")
+    const selectedIndex = initiallyVisibleLast - 1
+    await waitFor(
+      harness,
+      () => highlighted(harness).includes(`?? ${names[selectedIndex]}`),
+      "the cursor to reach the scroll-off margin",
+    )
+
+    expect(frame(harness)).toContain(names[selectedIndex + 1] as string)
+    expect(frame(harness)).toContain(names[selectedIndex + 2] as string)
+
+    // The same margin applies above the cursor on the return trip.
+    const lowerIndex = selectedIndex + 5
+    for (let index = selectedIndex; index < lowerIndex; index += 1) await press(harness, "j")
+    const visibleFirst = names.findIndex((name) => frame(harness).includes(name))
+    expect(visibleFirst).toBeGreaterThan(1)
+
+    const upwardIndex = visibleFirst + 1
+    for (let index = lowerIndex; index > upwardIndex; index -= 1) await press(harness, "k")
+    await waitFor(
+      harness,
+      () => highlighted(harness).includes(`?? ${names[upwardIndex]}`),
+      "the cursor to reach the upward scroll-off margin",
+    )
+    expect(frame(harness)).toContain(names[upwardIndex - 1] as string)
+    expect(frame(harness)).toContain(names[upwardIndex - 2] as string)
   })
 
   it("stages a whole directory with space, and unstages it again", async () => {
