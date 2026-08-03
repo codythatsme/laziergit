@@ -17,7 +17,7 @@ import {
   type Theme,
   type UpstreamInfo,
 } from "laziergit"
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 
 import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
 import { pullRequestUrl } from "./pull-request"
@@ -512,10 +512,28 @@ export default defineExtension({
         },
       })
       const visibleBranches = cursor.items
-      const selected = cursor.selected
+      const headName = branches.find((branch) => branch.isHead)?.name ?? null
+
+      /**
+       * A checkout moves the new HEAD to the first row. Follow that branch by name instead of
+       * leaving the cursor at its old numeric position, which now belongs to another branch.
+       * Resolve during render so no frame highlights the wrong row while the cursor catches up.
+       */
+      const previousHeadName = useRef(headName)
+      const headChanged = previousHeadName.current !== headName
+      const checkedOutIndex =
+        headChanged && headName !== null ? visibleBranches.findIndex((branch) => branch.name === headName) : -1
+      const selectedIndex = checkedOutIndex === -1 ? cursor.index : checkedOutIndex
+      const selected = visibleBranches[selectedIndex]
       // Keyed on the name, not the object: a refresh rebuilds every Branch, and re-issuing an
       // unchanged target would refetch the diff on every poll.
       const selectedName = selected?.name
+
+      useEffect(() => {
+        // Keep a filtered-out HEAD pending until clearing the filter makes its row visible.
+        if (!headChanged || headName === null || checkedOutIndex !== -1) previousHeadName.current = headName
+        if (selectedIndex !== cursor.index) cursor.setIndex(selectedIndex)
+      })
 
       useEffect(() => {
         rows.setSelected(selected)
@@ -538,14 +556,14 @@ export default defineExtension({
         // `flexBasis={0}` sizes the box to the Pane rather than to its content, so a long list
         // scrolls instead of overflowing the frame.
         <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
-          {visibleBranches.map((branch, index) => (
+          {visibleBranches.map((branch, rowIndex) => (
             <BranchRow
               key={branch.name}
-              id={cursor.rowId(index)}
+              id={cursor.rowId(rowIndex)}
               branch={branch}
-              selected={index === cursor.index}
+              selected={rowIndex === selectedIndex}
               focused={focused}
-              onSelect={() => cursor.setIndex(index)}
+              onSelect={() => cursor.setIndex(rowIndex)}
             />
           ))}
         </scrollbox>
