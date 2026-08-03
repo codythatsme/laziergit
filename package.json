@@ -55,5 +55,5 @@
     "@opentui/keymap": "catalog:",
     "@opentui/react": "catalog:"
   },
-  "packageManager": "bun@1.3.5"
+  "packageManager": "bun@1.4.0-canary.1"
 }
