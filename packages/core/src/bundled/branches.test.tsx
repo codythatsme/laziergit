@@ -8,6 +8,7 @@ import { gitIsolationEnv } from "../git/test-repo"
 import {
   createHarness,
   frame,
+  highlighted,
   installHarnessLifecycle,
   press,
   pressEscape,
@@ -192,6 +193,28 @@ describe("checking out", () => {
     // goes through the porcelain helper rather than `raw`.
     await waitForFrame(harness, "* other")
     expect(await git(harness, "rev-parse", "--abbrev-ref", "HEAD")).toBe("other")
+  }, 30_000)
+
+  it("moves the cursor to the checked-out branch when it moves to the top", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await git(harness, "branch", "alpha")
+    await git(harness, "branch", "bravo")
+    await git(harness, "branch", "charlie")
+    await git(harness, "branch", "delta")
+
+    await start(harness)
+
+    await press(harness, "j")
+    await press(harness, "j")
+    await press(harness, "j")
+    await press(harness, "j")
+    expect(highlighted(harness).some((row) => row.includes("delta"))).toBeTrue()
+
+    await press(harness, " ")
+    await waitForFrame(harness, "* delta")
+
+    expect(highlighted(harness).some((row) => row.includes("* delta"))).toBeTrue()
   }, 30_000)
 })
 
