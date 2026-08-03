@@ -1,12 +1,14 @@
 import { Effect, Queue, Schedule, Stream } from "effect"
 import {
   GitError,
+  isStaged,
   isUntracked,
   literalPathspec,
   type Disposable,
   type GitOutput,
   type GitState,
   type RawOptions,
+  type StashSaveOptions,
 } from "laziergit"
 
 import type { GitConfig } from "../config/config"
@@ -607,15 +609,45 @@ export class GitService {
     ])
   }
 
+  #saveStash(opts: StashSaveOptions): Promise<void> {
+    const args = [
+      "stash",
+      "push",
+      ...(opts.mode === "staged" ? ["--staged"] : []),
+      ...("includeUntracked" in opts && opts.includeUntracked === true ? ["--include-untracked"] : []),
+      ...("keepIndex" in opts && opts.keepIndex === true ? ["--keep-index"] : []),
+      ...(opts.message === undefined ? [] : ["--message", opts.message]),
+    ]
+
+    if (opts.mode !== "unstaged" || !this.getSnapshot().status.files.some(isStaged)) return this.#write(args)
+
+    // There is no `git stash --unstaged`. Match lazygit's sequence: temporarily commit the
+    // index, stash what remains in the working tree, then put HEAD back while preserving the
+    // original index. Composing the three writes under one refresh prevents the temporary
+    // commit from ever reaching the UI.
+    return this.#announced(
+      args,
+      this.#refreshed(
+        this.#withRepository(args, (root) =>
+          Effect.flatMap(
+            execGit(root, ["commit", "--no-verify", "--quiet", "--message", "[laziergit] stashing unstaged changes"], {
+              write: true,
+            }),
+            () =>
+              Effect.map(
+                Effect.onExit(execGit(root, args, { write: true }), () =>
+                  Effect.map(execGit(root, ["reset", "--soft", "HEAD^"], { write: true }), () => undefined),
+                ),
+                () => undefined,
+              ),
+          ),
+        ),
+      ),
+    )
+  }
+
   readonly stash = {
-    save: (opts: { message?: string; includeUntracked?: boolean; keepIndex?: boolean } = {}): Promise<void> =>
-      this.#write([
-        "stash",
-        "push",
-        ...(opts.includeUntracked === true ? ["--include-untracked"] : []),
-        ...(opts.keepIndex === true ? ["--keep-index"] : []),
-        ...(opts.message === undefined ? [] : ["--message", opts.message]),
-      ]),
+    save: (opts: StashSaveOptions = {}): Promise<void> => this.#saveStash(opts),
     apply: (index?: number): Promise<void> => this.#write(["stash", "apply", stashRef(index)]),
     pop: (index?: number): Promise<void> => this.#write(["stash", "pop", stashRef(index)]),
     drop: (index: number): Promise<void> => this.#write(["stash", "drop", stashRef(index)]),

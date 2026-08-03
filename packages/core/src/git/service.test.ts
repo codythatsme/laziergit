@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "bun:test"
-import { chmod, rm } from "node:fs/promises"
+import { chmod, mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import {
   GitError,
@@ -346,6 +346,66 @@ it("runs the branch and stash porcelain", async () => {
 
   await service.stash.pop()
   expect(state(service).stash).toEqual([])
+  expect(unstagedPaths(service)).toEqual(["seed.txt"])
+})
+
+it("stashes only staged changes", async () => {
+  const repo = await createSeededRepo()
+  await repo.write("staged.txt", "base\n")
+  await repo.write("unstaged.txt", "base\n")
+  await repo.git("add", "staged.txt", "unstaged.txt")
+  await repo.commit("add fixtures")
+  await repo.write("staged.txt", "staged edit\n")
+  await repo.git("add", "staged.txt")
+  await repo.write("unstaged.txt", "unstaged edit\n")
+  const service = await open(repo.path)
+
+  await service.stash.save({ message: "staged only", mode: "staged" })
+
+  expect(stagedPaths(service)).toEqual([])
+  expect(unstagedPaths(service)).toEqual(["unstaged.txt"])
+  expect(state(service).stash.map((entry) => entry.message)).toEqual(["staged only"])
+  expect(await repo.git("diff", "--name-only", "stash@{0}^1", "stash@{0}")).toBe("staged.txt\n")
+})
+
+it("stashes only unstaged changes while preserving HEAD and the index", async () => {
+  const repo = await createSeededRepo()
+  await repo.write("staged.txt", "base\n")
+  await repo.write("unstaged.txt", "base\n")
+  await repo.git("add", "staged.txt", "unstaged.txt")
+  await repo.commit("add fixtures")
+  await repo.write("staged.txt", "staged edit\n")
+  await repo.git("add", "staged.txt")
+  await repo.write("unstaged.txt", "unstaged edit\n")
+  const before = await repo.git("rev-parse", "HEAD")
+  const service = await open(repo.path)
+
+  await service.stash.save({ message: "unstaged only", mode: "unstaged" })
+
+  expect(await repo.git("rev-parse", "HEAD")).toBe(before)
+  expect(stagedPaths(service)).toEqual(["staged.txt"])
+  expect(unstagedPaths(service)).toEqual([])
+  expect(state(service).stash.map((entry) => entry.message)).toEqual(["unstaged only"])
+  expect(await repo.git("diff", "--name-only", "stash@{0}^1", "stash@{0}")).toBe("unstaged.txt\n")
+})
+
+it("restores HEAD and the index when stashing unstaged changes fails", async () => {
+  const repo = await createSeededRepo()
+  await repo.write("staged.txt", "staged\n")
+  await repo.git("add", "staged.txt")
+  await repo.write("seed.txt", "unstaged\n")
+  // A directory at the ref's path lets the temporary commit succeed but makes updating the
+  // stash ref fail. The cleanup must still undo that commit.
+  const before = await repo.git("rev-parse", "HEAD")
+  await mkdir(join(repo.path, ".git", "refs", "stash"))
+  await repo.write(".git/refs/stash/blocked", before)
+  const service = await open(repo.path)
+
+  const failure = await service.stash.save({ mode: "unstaged" }).catch((error: unknown) => error)
+
+  expect(failure).toBeInstanceOf(GitError)
+  expect(await repo.git("rev-parse", "HEAD")).toBe(before)
+  expect(stagedPaths(service)).toEqual(["staged.txt"])
   expect(unstagedPaths(service)).toEqual(["seed.txt"])
 })
 

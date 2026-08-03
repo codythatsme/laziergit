@@ -349,6 +349,18 @@ export interface RawOptions {
   env?: Readonly<Record<string, string>>
 }
 
+export type StashSaveOptions =
+  | {
+      message?: string
+      mode?: "all"
+      includeUntracked?: boolean
+      keepIndex?: boolean
+    }
+  | {
+      message?: string
+      mode: "staged" | "unstaged"
+    }
+
 export class GitError extends Error {
   readonly args: readonly string[]
   readonly exitCode: number
@@ -386,7 +398,7 @@ export interface Git {
   pull(opts?: { rebase?: boolean }): Promise<void>
   fetch(opts?: { remote?: string; prune?: boolean }): Promise<void>
   readonly stash: {
-    save(opts?: { message?: string; includeUntracked?: boolean; keepIndex?: boolean }): Promise<void>
+    save(opts?: StashSaveOptions): Promise<void>
     apply(index?: number): Promise<void>
     pop(index?: number): Promise<void>
     drop(index: number): Promise<void>
