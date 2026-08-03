@@ -130,6 +130,21 @@ async function openMergeMenuForSecondBranch(harness: Harness, branch: string): P
 }
 
 describe("operation activity", () => {
+  it("does not show loaders for staging or unstaging", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await start(harness)
+
+    for (const label of ["staging", "unstaging"]) {
+      const end = harness.kernel.git.activity.begin(label)
+      await waitFor(harness, () => harness.kernel.git.activity.getSnapshot().length === 1, `${label} to be revealed`)
+
+      expect(frame(harness)).not.toContain(label)
+
+      act(() => end())
+    }
+  })
+
   it("animates a commit loader at the end of the checked-out branch row", async () => {
     const harness = await createHarness({ git: true })
     await seed(harness)

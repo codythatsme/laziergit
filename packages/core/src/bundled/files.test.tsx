@@ -158,6 +158,41 @@ async function focusFiles(harness: Harness): Promise<void> {
 }
 
 describe("staging from the files pane", () => {
+  it("renders stage and unstage before slow git reconciliation finishes", async () => {
+    const harness = await createFilesHarness()
+    await write(harness, "tracked.txt", "one\n")
+    await commitTracked(harness, "tracked.txt")
+    await git(harness, "config", "filter.slow.clean", "sleep 0.5; cat")
+    await write(harness, ".gitattributes", "tracked.txt filter=slow\n")
+    await git(harness, "add", ".gitattributes")
+    await git(harness, "commit", "--quiet", "--message", "slow filter")
+    await write(harness, "tracked.txt", "two\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    await waitForFrame(harness, " M tracked.txt")
+
+    await press(harness, " ")
+
+    // The clean filter is still sleeping, so this frame can only come from the optimistic
+    // files model; the canonical git snapshot is deliberately still unstaged here.
+    expect(frame(harness)).toContain("M  tracked.txt")
+    expect(stagedInStore(harness)).toEqual([])
+
+    await waitFor(harness, () => stagedInStore(harness).length === 1, "the slow staging to finish")
+    expect(await staged(harness)).toEqual(["tracked.txt"])
+
+    await press(harness, " ")
+
+    // Reset itself is quick, but its status refresh runs the same slow filter. The preview
+    // should already have moved the change back to the working-tree column.
+    expect(frame(harness)).toContain(" M tracked.txt")
+    expect(stagedInStore(harness)).toEqual(["tracked.txt"])
+
+    await waitFor(harness, () => stagedInStore(harness).length === 0, "the slow unstaging to finish")
+    expect(await staged(harness)).toEqual([])
+  }, 15_000)
+
   it("stages the selected file with space, and unstages it with space again", async () => {
     const harness = await createFilesHarness()
     await write(harness, "tracked.txt", "one\n")
@@ -190,12 +225,14 @@ describe("staging from the files pane", () => {
 
     await press(harness, " ")
     await waitForFrame(harness, "M  tracked.txt")
+    await waitFor(harness, () => stagedInStore(harness).length === 1, "the staging to reach the index")
     expect(await staged(harness)).toEqual(["tracked.txt"])
 
     // The row's columns flipped and the cursor never moved, because it anchors on the path.
     expect(highlighted(harness)).toEqual(["M  tracked.txt"])
     await press(harness, " ")
     await waitForFrame(harness, " M tracked.txt")
+    await waitFor(harness, () => stagedInStore(harness).length === 0, "the file to leave the index")
     expect(await staged(harness)).toEqual([])
 
     for (const heading of ["Conflicted", "Staged", "Unstaged", "Untracked"]) {

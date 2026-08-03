@@ -26,6 +26,7 @@ import {
 } from "laziergit"
 import { useEffect, useMemo, useRef } from "react"
 
+import { previewStage, previewUnstage } from "./optimistic"
 import {
   buildFlatList,
   buildTree,
@@ -232,8 +233,34 @@ export default defineExtension({
     // snapshot and never written back, so a toggle is a session layer over the default.
     const fold = createCell<FoldState>(noFolds)
     const viewMode = createCell<"tree" | "flat">(ctx.config.view)
+    const previewFiles = createCell<readonly FileChange[] | null>(null)
     const threshold = ctx.config.collapseThreshold
     const scrollOffMargin = ctx.config.scrollOffMargin
+    let previewsInFlight = 0
+
+    /**
+     * Lazygit makes this same trade-off: staging is common enough that the known status pairs
+     * move immediately, then the real status refresh corrects anything the preview could not
+     * derive. Overlapping commands retain the combined preview until all have reconciled.
+     */
+    function beginPreview(
+      paths: readonly string[] | "all",
+      transform: (files: readonly FileChange[], selection: readonly string[] | "all") => readonly FileChange[],
+    ): () => void {
+      const current = previewFiles.get() ?? ctx.git.state.status.files
+      const next = transform(current, paths)
+      if (next === current) return () => undefined
+
+      previewsInFlight += 1
+      previewFiles.set(next)
+      let ended = false
+      return () => {
+        if (ended) return
+        ended = true
+        previewsInFlight -= 1
+        if (previewsInFlight === 0) previewFiles.set(null)
+      }
+    }
 
     /**
      * Folds or unfolds one directory, writing to *both* sets. A collapsed set alone cannot
@@ -271,37 +298,51 @@ export default defineExtension({
     }
 
     async function stage(paths: readonly string[] | "all"): Promise<void> {
+      const endPreview = beginPreview(paths, previewStage)
       try {
         await ctx.git.stage(paths)
       } catch (error) {
         fail("Stage", error)
+      } finally {
+        endPreview()
       }
     }
 
     // A staged rename is two index entries, and `unstage` resets exactly the paths it is
     // handed: dropping the previous path would leave the file looking half-renamed.
     async function unstage(change: FileChange): Promise<void> {
+      const paths = pathsOf(change)
+      const endPreview = beginPreview(paths, previewUnstage)
       try {
-        await ctx.git.unstage(pathsOf(change))
+        await ctx.git.unstage(paths)
       } catch (error) {
         fail("Unstage", error)
+      } finally {
+        endPreview()
       }
     }
 
     async function unstageDirectory(node: DirectoryNode): Promise<void> {
       const previous = filesUnder(node).flatMap((change) => (change.previousPath === null ? [] : [change.previousPath]))
+      const paths = [node.path, ...previous]
+      const endPreview = beginPreview(paths, previewUnstage)
       try {
-        await ctx.git.unstage([node.path, ...previous])
+        await ctx.git.unstage(paths)
       } catch (error) {
         fail("Unstage", error)
+      } finally {
+        endPreview()
       }
     }
 
     async function unstageAll(): Promise<void> {
+      const endPreview = beginPreview("all", previewUnstage)
       try {
         await ctx.git.unstage("all")
       } catch (error) {
         fail("Unstage all", error)
+      } finally {
+        endPreview()
       }
     }
 
@@ -546,7 +587,8 @@ export default defineExtension({
 
     function FilesPane({ focused }: PaneProps) {
       const theme = useTheme()
-      const status = useGit((state) => state.status)
+      const storedFiles = useGit((state) => state.status.files)
+      const files = previewFiles.use() ?? storedFiles
       const repository = useGit((state) => inRepository(state.head))
       const view = viewMode.use()
       const folds = fold.use()
@@ -554,10 +596,7 @@ export default defineExtension({
       // Memoised on the store slice's identity: a refresh that changed nothing hands back the
       // same object, so the tree survives the poll. Separate memos so expanding a directory
       // re-walks the tree without rebuilding it.
-      const nodes = useMemo(
-        () => (view === "tree" ? buildTree(status.files) : buildFlatList(status.files)),
-        [status.files, view],
-      )
+      const nodes = useMemo(() => (view === "tree" ? buildTree(files) : buildFlatList(files)), [files, view])
       const sourceRows = useMemo(() => visibleRows(nodes, folds, threshold), [nodes, folds, threshold])
       const cursor = useListCursor({
         items: sourceRows,
@@ -696,7 +735,7 @@ export default defineExtension({
       if (!repository) return <text fg={theme.textMuted} content="no repository here" />
 
       // Measured on the file count, not the row count: they differ once something is folded.
-      if (status.files.length === 0) return <text fg={theme.textMuted} content="working tree clean" />
+      if (files.length === 0) return <text fg={theme.textMuted} content="working tree clean" />
       if (rows.length === 0) return <text fg={theme.textMuted} content="no matching files" />
 
       return (
