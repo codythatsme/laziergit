@@ -437,14 +437,16 @@ export default defineExtension({
     })
 
     /**
-     * Repository writes are shown beside the checked-out branch instead of in the app-wide
-     * status line. Kept in a child component so only HEAD subscribes to activity and owns an
-     * animation timer; repositories with hundreds of branches still have one spinner.
+     * Substantial repository writes are shown beside the checked-out branch instead of in the
+     * app-wide status line. Kept in a child component so only HEAD subscribes to activity and
+     * owns an animation timer; repositories with hundreds of branches still have one spinner.
      */
     function BranchActivity() {
       const theme = useTheme()
-      // The newest operation is the one a single row can name when writes overlap.
-      const busy = useGitActivity().at(-1) ?? null
+      // Staging is the files Pane's immediate state transition, not a long-running repository
+      // operation. Keep an older substantial write visible if one overlaps a stage/unstage.
+      const busy =
+        useGitActivity().findLast((entry) => entry.label !== "staging" && entry.label !== "unstaging") ?? null
       const wave = useSpinner(busy !== null)
       if (busy === null || wave === null) return null
 
