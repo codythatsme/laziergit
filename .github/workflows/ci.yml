@@ -7,6 +7,13 @@ on:
     branches: [main]
   pull_request:
 
+# Superseded commits on one PR should release their runners, while unrelated PRs remain
+# independent. Main uses a unique run id so pushes retain their existing non-cancelling
+# behavior.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Format, lint, typecheck, discipline, and unit tests are platform-independent, so each runs
 # once as its own job — a red check names the task that failed. Suites that spawn git, drive
 # the renderer, or lean on filesystem semantics run per environment, where they have found
@@ -83,15 +90,35 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run test:e2e
 
+  # Deriving the seed from the run id makes it common to every OS/shard and stable when jobs
+  # are re-run. The output job also makes the seed available in matrix job names.
+  stress_seed:
+    name: stress seed
+    runs-on: ubuntu-latest
+    outputs:
+      seed: ${{ steps.seed.outputs.seed }}
+    steps:
+      - name: Derive reproducible shuffle seed
+        id: seed
+        run: |
+          seed=$((GITHUB_RUN_ID % 4294967296))
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "Stress seed: $seed"
+          echo "## Stress seed: \`$seed\`" >> "$GITHUB_STEP_SUMMARY"
+
   # Deliberate async-race hunting over the integration suites: repeated runs in a randomized
   # order, never retried. A failure here is a real flake — reproduce it with the printed
-  # seed. One process per file, because a single process spanning every suite eventually
-  # loses subprocess stdout to a Bun runtime defect, which reads as a flake but is not one.
-  stress:
+  # seed. Files are duration-balanced across four jobs per OS, but each selected file still
+  # gets its own process because a process spanning every suite eventually loses subprocess
+  # stdout to a Bun runtime defect, which reads as a flake but is not one.
+  stress_shards:
+    name: stress (${{ matrix.os }}, shard ${{ matrix.shard }}/4, seed ${{ needs.stress_seed.outputs.seed }})
+    needs: stress_seed
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        shard: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -99,10 +126,23 @@ jobs:
         with:
           bun-version: canary
       - run: bun install --frozen-lockfile
-      - name: Pick a shuffle seed
-        id: seed
-        run: echo "seed=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')" >> "$GITHUB_OUTPUT"
-      - name: Stress integration suites (seed ${{ steps.seed.outputs.seed }})
+      - name: Stress shard ${{ matrix.shard }}/4 (seed ${{ needs.stress_seed.outputs.seed }})
         run: >
-          bun scripts/test.ts integration --rerun-each 10
-          --randomize --seed ${{ steps.seed.outputs.seed }}
+          bun scripts/test.ts integration --shard ${{ matrix.shard }}/4
+          --rerun-each 10 --randomize --seed ${{ needs.stress_seed.outputs.seed }}
+
+  # Stable branch-protection target for the full stress matrix.
+  stress:
+    name: stress
+    if: ${{ always() }}
+    needs: stress_shards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every stress shard to pass
+        env:
+          STRESS_RESULT: ${{ needs.stress_shards.result }}
+        run: |
+          if [ "$STRESS_RESULT" != "success" ]; then
+            echo "Stress shards finished with result: $STRESS_RESULT"
+            exit 1
+          fi
