@@ -12,6 +12,7 @@ import {
   useListCursor,
   useTheme,
   type PaneProps,
+  type StashSaveOptions,
   type StashApi,
   type StashEntry,
 } from "laziergit"
@@ -131,6 +132,63 @@ export default defineExtension({
 
       const trimmed = message.trim()
       await attempt(() => ctx.git.stash.save({ message: trimmed === "" ? undefined : trimmed, includeUntracked }))
+    }
+
+    async function saveFromMenu(opts: StashSaveOptions): Promise<void> {
+      const message = await ctx.popups.prompt({ title: "Stash changes", placeholder: "leave empty for git's default" })
+      if (message === undefined) return
+      const trimmed = message.trim()
+      const entered = trimmed === "" ? undefined : trimmed
+      await attempt(() =>
+        opts.mode === "staged" || opts.mode === "unstaged"
+          ? ctx.git.stash.save({ mode: opts.mode, message: entered })
+          : ctx.git.stash.save({ ...opts, message: entered }),
+      )
+    }
+
+    function hasTrackedChanges(): boolean {
+      return ctx.git.state.status.files.some((file) => isStaged(file) || isUnstaged(file) || isConflicted(file))
+    }
+
+    async function saveTracked(opts: StashSaveOptions = {}): Promise<void> {
+      if (!hasTrackedChanges()) {
+        ctx.popups.notify("You have no files to stash", "warning")
+        return
+      }
+      await saveFromMenu(opts)
+    }
+
+    async function saveStaged(): Promise<void> {
+      if (!ctx.git.state.status.files.some(isStaged)) {
+        ctx.popups.notify("You have no tracked/staged files to stash", "warning")
+        return
+      }
+      await saveFromMenu({ mode: "staged" })
+    }
+
+    async function openSaveMenu(): Promise<void> {
+      await ctx.popups.menu({
+        title: "Stash options",
+        groups: [
+          {
+            items: [
+              { key: "a", label: "Stash all changes", run: () => saveTracked() },
+              {
+                key: "i",
+                label: "Stash all changes and keep index",
+                run: () => saveTracked({ keepIndex: true }),
+              },
+              {
+                key: "shift+u",
+                label: "Stash all changes including untracked files",
+                run: () => saveFromMenu({ includeUntracked: true }),
+              },
+              { key: "s", label: "Stash staged changes", run: saveStaged },
+              { key: "u", label: "Stash unstaged changes", run: () => saveTracked({ mode: "unstaged" }) },
+            ],
+          },
+        ],
+      })
     }
 
     ctx.commands.register({
@@ -268,6 +326,13 @@ export default defineExtension({
       // the files Pane loaded.
       pane: "files",
       run: save,
+    })
+    ctx.commands.register({
+      id: "stash.options",
+      title: "View stash options",
+      keys: "shift+s",
+      pane: "files",
+      run: openSaveMenu,
     })
 
     return rows.api

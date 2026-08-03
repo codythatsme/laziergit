@@ -133,6 +133,10 @@ function stashCount(list: string): number {
   return list.trim() === "" ? 0 : list.trim().split("\n").length
 }
 
+function paths(list: string): readonly string[] {
+  return list.trim() === "" ? [] : list.trim().split("\n").sort()
+}
+
 /**
  * One commit on `main`, with the three Extension scopes excluded first: they live inside the
  * repository root, so `stash --include-untracked` would otherwise sweep them up.
@@ -177,6 +181,28 @@ async function stashHarness(height = 36): Promise<Harness> {
   const harness = await createHarness({ git: true, width: 140, height })
   await seed(harness)
   return harness
+}
+
+async function mixedChanges(harness: Harness, untracked = false): Promise<void> {
+  await writeFile(join(harness.directory, "staged.txt"), "base\n")
+  await writeFile(join(harness.directory, "unstaged.txt"), "base\n")
+  await git(harness, "add", "staged.txt", "unstaged.txt")
+  await git(harness, "commit", "--quiet", "--message", "add stash fixtures")
+  await writeFile(join(harness.directory, "staged.txt"), "staged edit\n")
+  await git(harness, "add", "staged.txt")
+  await writeFile(join(harness.directory, "unstaged.txt"), "unstaged edit\n")
+  if (untracked) await writeFile(join(harness.directory, "scratch.txt"), "scratch\n")
+}
+
+async function chooseStashOption(harness: Harness, key: string, message: string): Promise<void> {
+  await press(harness, "1")
+  await press(harness, "S")
+  await waitForFrame(harness, "Stash options")
+  await press(harness, key)
+  await waitForFrame(harness, "Stash changes")
+  await press(harness, () => void harness.setup.mockInput.typeText(message))
+  await press(harness, () => harness.setup.mockInput.pressEnter())
+  await waitForFrame(harness, `${message} on main`)
 }
 
 describe("stash pane", () => {
@@ -478,5 +504,92 @@ describe("stash.save in the files pane", () => {
     // Refused before any popup: no prompt to dismiss, and nothing reached git.
     expect(frame(harness)).not.toContain("Stash message")
     expect(stashCount(await git(harness, "stash", "list"))).toBe(0)
+  })
+})
+
+describe("stash options in the files pane", () => {
+  it("opens lazygit's five-option menu on capital S and stashes all tracked changes", async () => {
+    const harness = await stashHarness()
+    await mixedChanges(harness, true)
+    await start(harness)
+
+    await press(harness, "1")
+    await press(harness, "S")
+    await waitForFrame(harness, "Stash options")
+
+    const menu = frame(harness)
+    expect(menu).toContain("a        Stash all changes")
+    expect(menu).toContain("i        Stash all changes and keep index")
+    expect(menu).toContain("shift+u  Stash all changes including untracked files")
+    expect(menu).toContain("s        Stash staged changes")
+    expect(menu).toContain("u        Stash unstaged changes")
+
+    await press(harness, "a")
+    await waitForFrame(harness, "Stash changes")
+    await press(harness, () => void harness.setup.mockInput.typeText("all tracked"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+    await waitForFrame(harness, "all tracked on main")
+
+    expect(paths(await git(harness, "diff", "--name-only", "stash@{0}^1", "stash@{0}"))).toEqual([
+      "staged.txt",
+      "unstaged.txt",
+    ])
+    expect(await git(harness, "status", "--porcelain")).toBe("?? scratch.txt\n")
+  })
+
+  it("stashes all changes while keeping the index", async () => {
+    const harness = await stashHarness()
+    await mixedChanges(harness)
+    await start(harness)
+
+    await chooseStashOption(harness, "i", "keep index")
+
+    expect(await git(harness, "diff", "--cached", "--name-only")).toBe("staged.txt\n")
+    expect(await git(harness, "diff", "--name-only")).toBe("")
+    expect(paths(await git(harness, "diff", "--name-only", "stash@{0}^1", "stash@{0}"))).toEqual([
+      "staged.txt",
+      "unstaged.txt",
+    ])
+  })
+
+  it("includes untracked files only when that explicit option is chosen", async () => {
+    const harness = await stashHarness()
+    await mixedChanges(harness, true)
+    await start(harness)
+
+    await chooseStashOption(harness, "U", "with untracked")
+
+    expect(await git(harness, "status", "--porcelain")).toBe("")
+    expect(paths(await git(harness, "stash", "show", "--include-untracked", "--name-only", "stash@{0}"))).toEqual([
+      "scratch.txt",
+      "staged.txt",
+      "unstaged.txt",
+    ])
+  })
+
+  it("stashes staged changes only", async () => {
+    const harness = await stashHarness()
+    await mixedChanges(harness)
+    await start(harness)
+
+    await chooseStashOption(harness, "s", "staged only")
+
+    expect(await git(harness, "diff", "--cached", "--name-only")).toBe("")
+    expect(await git(harness, "diff", "--name-only")).toBe("unstaged.txt\n")
+    expect(await git(harness, "diff", "--name-only", "stash@{0}^1", "stash@{0}")).toBe("staged.txt\n")
+  })
+
+  it("stashes unstaged changes only", async () => {
+    const harness = await stashHarness()
+    await mixedChanges(harness)
+    const before = await git(harness, "rev-parse", "HEAD")
+    await start(harness)
+
+    await chooseStashOption(harness, "u", "unstaged only")
+
+    expect(await git(harness, "rev-parse", "HEAD")).toBe(before)
+    expect(await git(harness, "diff", "--cached", "--name-only")).toBe("staged.txt\n")
+    expect(await git(harness, "diff", "--name-only")).toBe("")
+    expect(await git(harness, "diff", "--name-only", "stash@{0}^1", "stash@{0}")).toBe("unstaged.txt\n")
   })
 })
