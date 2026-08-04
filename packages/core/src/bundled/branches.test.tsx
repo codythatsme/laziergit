@@ -828,14 +828,19 @@ describe("what a row says about its upstream", () => {
     await waitFor(harness, async () => (await gh.calls()).length > 0, "the slow pull request lookup to start")
     await press(harness, "o")
 
-    await waitFor(
-      harness,
-      () => opener.opened() === "https://github.com/acme/tools/compare/main?expand=1",
-      "the pull request creation URL to open independently of the lookup",
-      { timeoutMs: 300 },
-    )
-    await gh.releaseGraphql()
-    await waitForFrame(harness, "* main ")
+    try {
+      await waitFor(
+        harness,
+        () => opener.opened() === "https://github.com/acme/tools/compare/main?expand=1",
+        "the pull request creation URL to open independently of the lookup",
+        { timeoutMs: 300 },
+      )
+    } finally {
+      // Never strand the native stub if the responsiveness assertion fails: Windows keeps
+      // the temporary repository locked until this deliberately blocked process exits.
+      await gh.releaseGraphql()
+      await waitForFrame(harness, "* main ")
+    }
   }, 30_000)
 
   it("finds a branch pull request without waiting for a repository-wide scan", async () => {
