@@ -1,10 +1,12 @@
 /** @jsxImportSource @opentui/react */
 import {
+  createCell,
   createRowSource,
   defineExtension,
   describeGitFailure,
   GitError,
   isConflicted,
+  remoteWebUrl,
   toneColor,
   useGit,
   useGitActivity,
@@ -15,13 +17,16 @@ import {
   type Head,
   type PaneProps,
   type Theme,
+  type Tone,
   type UpstreamInfo,
 } from "laziergit"
 import { useEffect, useRef } from "react"
 
 import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
-import { pullRequestUrl } from "./pull-request"
+import { pullRequestFields, pullRequestsByBranch, pullRequestUrl, type PullRequest } from "./pull-request"
 import { useSpinner } from "./spinner"
+
+const githubGlyph = ""
 
 function divergence(upstream: UpstreamInfo | null): string {
   if (upstream === null || upstream.gone) return ""
@@ -52,6 +57,25 @@ function canFastForward(branch: Branch): boolean {
   return upstream !== null && !upstream.gone && upstream.behind > 0 && upstream.ahead === 0
 }
 
+function isUpToDate(branch: Branch): boolean {
+  const upstream = branch.upstream
+  return upstream !== null && !upstream.gone && upstream.ahead === 0 && upstream.behind === 0
+}
+
+function pullRequestTone(pullRequest: PullRequest): Tone {
+  if (pullRequest.isDraft) return "muted"
+  switch (pullRequest.state.toUpperCase()) {
+    case "OPEN":
+      return "success"
+    case "MERGED":
+      return "info"
+    case "CLOSED":
+      return "danger"
+    default:
+      return "neutral"
+  }
+}
+
 function validateRef(value: string, empty: string): string | null {
   const trimmed = value.trim()
   if (trimmed.length === 0) return empty
@@ -67,8 +91,48 @@ export default defineExtension({
   activate(ctx): BranchesApi {
     const rows = createRowSource<Branch>({ pane: "branches", key: (row) => row.name })
     const diff = ctx.extensions.get("diff")
+    const pullRequests = createCell<ReadonlyMap<string, PullRequest>>(new Map())
+    let pullRequestTicket = 0
 
     const fail = (error: unknown): void => ctx.popups.notify(describeGitFailure(error), "error")
+
+    /**
+     * GitHub metadata is optional: a repository without `gh`, authentication, or a GitHub
+     * remote keeps the ordinary git-only branch UI. Each caller gets its own answer while the
+     * ticket prevents a slower, older repository snapshot from replacing a newer one.
+     */
+    async function refreshPullRequests(): Promise<ReadonlyMap<string, PullRequest> | null> {
+      const issued = (pullRequestTicket += 1)
+      const { branches, remotes } = ctx.git.state
+      if (remoteWebUrl(remotes) === null || !branches.some((branch) => branch.upstream !== null)) {
+        const empty = new Map<string, PullRequest>()
+        if (issued === pullRequestTicket) pullRequests.set(empty)
+        return empty
+      }
+
+      try {
+        const result = await ctx.exec("gh", [
+          "pr",
+          "list",
+          "--state",
+          "all",
+          "--limit",
+          "1000",
+          "--json",
+          pullRequestFields,
+        ])
+        if (result.exitCode !== 0) return null
+        const mapped = pullRequestsByBranch(JSON.parse(result.stdout) as PullRequest[], branches, remotes)
+        if (issued === pullRequestTicket) pullRequests.set(mapped)
+        return mapped
+      } catch {
+        return null
+      }
+    }
+
+    void refreshPullRequests()
+    ctx.events.on("git.branches.changed", () => void refreshPullRequests())
+    ctx.events.on("git.remotes.changed", () => void refreshPullRequests())
 
     function currentBranch(): string | null {
       const head = ctx.git.state.head
@@ -342,7 +406,13 @@ export default defineExtension({
     // Not gated on the branch having an upstream: a branch can be on the remote without one
     // configured, and an unpushed branch gets a 404 from the host.
     async function openPullRequest(branch: Branch): Promise<void> {
-      const url = pullRequestUrl(ctx.git.state.remotes, branch.name)
+      let existing = pullRequests.get().get(branch.name)
+      if (existing === undefined) {
+        // Refresh the miss so returning from a just-created PR and pressing `o` opens it even
+        // when no local git ref changed in the meantime. A visible PR opens without this wait.
+        existing = (await refreshPullRequests())?.get(branch.name)
+      }
+      const url = existing?.url ?? pullRequestUrl(ctx.git.state.remotes, branch.name)
       if (url === null) return ctx.popups.notify("No web remote to open a pull request on", "warning")
       try {
         await ctx.open(url)
@@ -453,12 +523,14 @@ export default defineExtension({
 
     function BranchRow({
       branch,
+      pullRequest,
       id,
       selected,
       focused,
       onSelect,
     }: {
       readonly branch: Branch
+      readonly pullRequest: PullRequest | undefined
       readonly id: string
       readonly selected: boolean
       readonly focused: boolean
@@ -469,6 +541,12 @@ export default defineExtension({
       const ahead = divergence(branch.upstream)
       const dim = decoration?.dim === true
       const badge = decoration?.badge
+      const status =
+        pullRequest !== undefined
+          ? { glyph: githubGlyph, tone: pullRequestTone(pullRequest) }
+          : isUpToDate(branch)
+            ? { glyph: "✓", tone: "success" as const }
+            : null
 
       return (
         <box
@@ -479,12 +557,23 @@ export default defineExtension({
           backgroundColor={selected && focused ? theme.selection : undefined}
           onMouseDown={onSelect}
         >
-          <text wrapMode="none" flexShrink={1}>
-            <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "*" : " "}</span>
-            <span fg={nameColor(branch, theme, dim)}>{` ${branch.name}`}</span>
-            {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}
-            {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
-          </text>
+          {/* Keep every status outside the one shrinkable cell. Like LazyGit's width budget,
+              a narrow row spends its last columns on state and takes them from the name. */}
+          <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
+            <text wrapMode="none" flexShrink={0}>
+              <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "* " : "  "}</span>
+            </text>
+            <text wrapMode="none" flexShrink={1} minWidth={0} truncate>
+              <span fg={nameColor(branch, theme, dim)}>{branch.name}</span>
+            </text>
+            <text wrapMode="none" flexShrink={0}>
+              {status === null ? null : (
+                <span fg={dim ? theme.textMuted : toneColor(theme, status.tone)}>{` ${status.glyph}`}</span>
+              )}
+              {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}
+              {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
+            </text>
+          </box>
           {branch.isHead ? <BranchActivity /> : null}
         </box>
       )
@@ -493,6 +582,7 @@ export default defineExtension({
     function BranchesPane({ focused }: PaneProps) {
       const theme = useTheme()
       const branches = useGit((state) => state.branches)
+      const branchPullRequests = pullRequests.use()
       const repository = useGit((state) => hasRepository(state.head))
       const cursor = useListCursor({
         items: branches,
@@ -556,6 +646,7 @@ export default defineExtension({
               key={branch.name}
               id={cursor.rowId(rowIndex)}
               branch={branch}
+              pullRequest={branchPullRequests.get(branch.name)}
               selected={rowIndex === selectedIndex}
               focused={focused}
               onSelect={() => cursor.setIndex(rowIndex)}

@@ -1,7 +1,7 @@
-import { describe, expect, it } from "bun:test"
+import { afterEach, describe, expect, it } from "bun:test"
 import { RGBA } from "@opentui/core"
-import { symlink, writeFile } from "node:fs/promises"
-import { join, resolve } from "node:path"
+import { mkdir, symlink, writeFile } from "node:fs/promises"
+import { delimiter, join, resolve } from "node:path"
 import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
@@ -21,6 +21,12 @@ import {
 } from "../test-harness"
 
 installHarnessLifecycle()
+
+const originalPath = process.env.PATH
+
+afterEach(() => {
+  process.env.PATH = originalPath
+})
 
 /** The shipped Extension itself, linked into the bundled scope the way `main.tsx` loads it. */
 const branchesExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "branches")
@@ -83,6 +89,71 @@ async function seed(harness: Harness): Promise<void> {
 async function addOrigin(harness: Harness): Promise<void> {
   await git(harness, "-c", "init.defaultBranch=main", "init", "--bare", "--quiet", "origin.git")
   await git(harness, "remote", "add", "origin", join(harness.directory, "origin.git"))
+}
+
+/** A GitHub fetch URL with a local push URL, so git and `gh` can each see the remote they need. */
+async function addGithubOrigin(harness: Harness): Promise<void> {
+  await git(harness, "-c", "init.defaultBranch=main", "init", "--bare", "--quiet", "origin.git")
+  await git(harness, "remote", "add", "origin", "git@github.com:acme/tools.git")
+  await git(harness, "remote", "set-url", "--push", "origin", join(harness.directory, "origin.git"))
+}
+
+interface GhStub {
+  setPullRequests(pullRequests: readonly unknown[]): Promise<void>
+  calls(): Promise<readonly string[]>
+}
+
+interface OpenRecorder {
+  readonly open: (url: string) => Promise<void>
+  readonly opened: () => string
+}
+
+function recordOpens(): OpenRecorder {
+  let opened = ""
+  return {
+    open: async (url) => {
+      opened = url
+    },
+    opened: () => opened,
+  }
+}
+
+/** A controllable, platform-native `gh`; no test lookup can reach the network. */
+async function installGh(harness: Harness): Promise<GhStub> {
+  const bin = join(harness.directory, "bin")
+  const answers = join(bin, "pull-requests.json")
+  const calls = join(bin, "gh.log")
+  await mkdir(bin, { recursive: true })
+
+  const gh =
+    process.platform === "win32"
+      ? [
+          "@echo off",
+          `>>"${calls}" echo(%*`,
+          'if /i "%~1 %~2"=="pr list" (',
+          `  type "${answers}"`,
+          "  exit /b 0",
+          ")",
+          "exit /b 1",
+          "",
+        ].join("\r\n")
+      : [
+          "#!/bin/sh",
+          `printf '%s\\n' "$*" >> "${calls}"`,
+          'if [ "$1 $2" = "pr list" ]; then',
+          `  exec cat "${answers}"`,
+          "fi",
+          "exit 1",
+          "",
+        ].join("\n")
+  const executable = join(bin, process.platform === "win32" ? "gh.cmd" : "gh")
+  await Promise.all([writeFile(executable, gh, { mode: 0o755 }), writeFile(answers, "[]")])
+  process.env.PATH = `${bin}${delimiter}${originalPath}`
+
+  return {
+    setPullRequests: (pullRequests) => writeFile(answers, JSON.stringify(pullRequests)),
+    calls: async () => ((await Bun.file(calls).exists()) ? (await Bun.file(calls).text()).trim().split("\n") : []),
+  }
 }
 
 async function commit(harness: Harness, contents: string, message: string, date?: string): Promise<void> {
@@ -650,7 +721,7 @@ describe("contextual branch Commands", () => {
 })
 
 describe("what a row says about its upstream", () => {
-  it("prints only the counts that are not zero, and nothing at all when in sync", async () => {
+  it("prints only nonzero counts and a check when the upstream is exactly in sync", async () => {
     const harness = await createHarness({ git: true })
     await seed(harness)
     await addOrigin(harness)
@@ -667,11 +738,63 @@ describe("what a row says about its upstream", () => {
     await git(harness, "push", "--quiet")
     await refreshGit(harness)
     await waitForFrame(harness, (screen) => !screen.includes("↑1"))
-    // In sync now, so the whole column goes away rather than becoming a tick.
+    // LazyGit's check means both publication and exact agreement with the tracked ref.
     const synced = frame(harness)
-    expect(synced).toContain("* main")
+    expect(synced).toContain("* main ✓")
     expect(synced).not.toContain("↑")
-    expect(synced).not.toContain("✓")
+  }, 30_000)
+
+  it("replaces the in-sync check with a GitHub logo and opens that pull request", async () => {
+    const opener = recordOpens()
+    const harness = await createHarness({ git: true, openExternal: opener.open })
+    await seed(harness)
+    await addGithubOrigin(harness)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
+    const gh = await installGh(harness)
+    const url = "https://github.com/acme/tools/pull/42"
+    await gh.setPullRequests([
+      {
+        headRefName: "main",
+        headRepositoryOwner: { login: "acme" },
+        state: "OPEN",
+        isDraft: false,
+        url,
+        createdAt: "2026-08-04T00:00:00Z",
+      },
+    ])
+
+    await start(harness)
+    await waitForFrame(harness, "* main ")
+    const row = frame(harness)
+      .split("\n")
+      .find((line) => line.includes("* main"))
+    expect(row).not.toContain("✓")
+    expect((await gh.calls())[0]).toContain(
+      "pr list --state all --limit 1000 --json headRefName,headRepositoryOwner,state,isDraft,url,createdAt",
+    )
+
+    await press(harness, "o")
+    await waitFor(harness, () => opener.opened() === url, "the pull request URL to reach the opener")
+  }, 30_000)
+
+  it("keeps the create-pull-request page as the fallback when GitHub finds no PR", async () => {
+    const opener = recordOpens()
+    const harness = await createHarness({ git: true, openExternal: opener.open })
+    await seed(harness)
+    await addGithubOrigin(harness)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
+    const gh = await installGh(harness)
+
+    await start(harness)
+    await waitFor(harness, async () => (await gh.calls()).length > 0, "the initial pull request lookup")
+    await press(harness, "o")
+
+    await waitFor(
+      harness,
+      () => opener.opened() === "https://github.com/acme/tools/compare/main?expand=1",
+      "the pull request creation URL to reach the opener",
+    )
+    expect(frame(harness)).toContain("* main ✓")
   }, 30_000)
 
   it("draws a branch whose upstream was deleted in the danger colour", async () => {
@@ -701,20 +824,35 @@ describe("what a row says about its upstream", () => {
     expect(nameSpan("main")?.fg?.equals(danger)).toBe(false)
   }, 30_000)
 
-  it("keeps a branch name too long for its column on one line", async () => {
+  it("truncates long names before the in-sync check and divergence", async () => {
     const harness = await createHarness({ git: true, width: 60 })
     await seed(harness)
-    const long = "feature/PROJ-1234-a-name-that-cannot-fit-in-a-narrow-column"
-    await git(harness, "branch", long)
+    await addOrigin(harness)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
+    const behind = "feature/behind-PROJ-1234-a-name-that-cannot-fit-in-a-narrow-column"
+    const synced = "feature/synced-PROJ-1234-a-name-that-cannot-fit-in-a-narrow-column"
+    await git(harness, "branch", behind)
+    await git(harness, "branch", "--set-upstream-to", "origin/main", "--", behind)
+    await commit(harness, "two\n", "remote work")
+    await git(harness, "push", "--quiet")
+    await git(harness, "branch", synced)
+    await git(harness, "branch", "--set-upstream-to", "origin/main", "--", synced)
 
     await start(harness)
-    await waitForFrame(harness, "feature/PROJ")
+    await waitForFrame(harness, "↓1")
 
-    // Clipped, not wrapped: the tail of the name is absent, and no row below it moved down.
+    // The name owns the shrinkable middle cell. Its ellipsis appears before fixed-width status,
+    // and none of its hidden tail can wrap into the next branch's row.
     const lines = frame(harness).split("\n")
-    const index = lines.findIndex((line) => line.includes("feature/PROJ"))
-    expect(index).toBeGreaterThan(-1)
+    const behindLine = lines.find((line) => line.includes("↓1"))
+    const syncedLine = lines.find((line) => line.includes("feature/") && line.includes("✓"))
+    if (behindLine === undefined || syncedLine === undefined) throw new Error("Expected both long branch rows")
+    expect(behindLine).toContain("...")
+    expect(behindLine).toContain("↓1")
+    expect(behindLine.indexOf("...")).toBeLessThan(behindLine.indexOf("↓1"))
+    expect(syncedLine).toContain("...")
+    expect(syncedLine).toContain("✓")
+    expect(syncedLine.indexOf("...")).toBeLessThan(syncedLine.indexOf("✓"))
     expect(frame(harness)).not.toContain("narrow-column")
-    expect(lines[index + 1]).not.toContain("cannot-fit")
   }, 30_000)
 })
