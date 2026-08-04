@@ -867,6 +867,16 @@ describe("what a row says about its upstream", () => {
     await addGithubOrigin(harness)
     await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
     const gh = await installGh(harness, 0, 2)
+    await gh.setPullRequests([
+      {
+        headRefName: "main",
+        headRepositoryOwner: { login: "acme" },
+        state: "OPEN",
+        isDraft: false,
+        url: "https://github.com/acme/tools/pull/42",
+        createdAt: "2026-08-04T00:00:00Z",
+      },
+    ])
 
     await start(harness)
     await waitFor(harness, async () => (await gh.calls()).length > 0, "the pull request lookup to start")
@@ -877,6 +887,9 @@ describe("what a row says about its upstream", () => {
     await settle(harness)
 
     expect(await gh.calls()).toHaveLength(1)
+    // The query intentionally outlives the assertion above. Waiting for its visible result
+    // also lets the native stub exit before Windows tears down its temporary repository.
+    await waitForFrame(harness, "* main ")
   }, 30_000)
 
   it("draws a branch whose upstream was deleted in the danger colour", async () => {
