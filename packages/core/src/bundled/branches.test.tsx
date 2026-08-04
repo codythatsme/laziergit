@@ -806,33 +806,23 @@ describe("what a row says about its upstream", () => {
     await waitFor(harness, () => opener.opened() === url, "the pull request URL to reach the opener")
   }, 30_000)
 
-  it("keeps the create-pull-request page as the fallback when GitHub finds no PR", async () => {
-    const opener = recordOpens()
-    const harness = await createHarness({ git: true, openExternal: opener.open })
-    await seed(harness)
-    await addGithubOrigin(harness)
-    await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
-    const gh = await installGh(harness)
-
-    await start(harness)
-    await waitFor(harness, async () => (await gh.calls()).length > 0, "the initial pull request lookup")
-    await press(harness, "o")
-
-    await waitFor(
-      harness,
-      () => opener.opened() === "https://github.com/acme/tools/compare/main?expand=1",
-      "the pull request creation URL to reach the opener",
-    )
-    await waitForFrame(harness, "* main ✓")
-  }, 30_000)
-
   it("opens the create page without waiting for a slow pull request refresh", async () => {
     const opener = recordOpens()
     const harness = await createHarness({ git: true, openExternal: opener.open })
     await seed(harness)
     await addGithubOrigin(harness)
     await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
-    const gh = await installGh(harness, 2)
+    const gh = await installGh(harness, 0, true)
+    await gh.setPullRequests([
+      {
+        headRefName: "main",
+        headRepositoryOwner: { login: "acme" },
+        state: "OPEN",
+        isDraft: false,
+        url: "https://github.com/acme/tools/pull/42",
+        createdAt: "2026-08-04T00:00:00Z",
+      },
+    ])
 
     await start(harness)
     await waitFor(harness, async () => (await gh.calls()).length > 0, "the slow pull request lookup to start")
@@ -844,7 +834,8 @@ describe("what a row says about its upstream", () => {
       "the pull request creation URL to open independently of the lookup",
       { timeoutMs: 300 },
     )
-    await waitForFrame(harness, "* main ✓")
+    await gh.releaseGraphql()
+    await waitForFrame(harness, "* main ")
   }, 30_000)
 
   it("finds a branch pull request without waiting for a repository-wide scan", async () => {

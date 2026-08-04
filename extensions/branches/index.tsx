@@ -452,9 +452,6 @@ export default defineExtension({
     // configured, and an unpushed branch gets a 404 from the host.
     async function openPullRequest(branch: Branch): Promise<void> {
       const existing = pullRequests.get().get(branch.name)
-      // A network miss must never hold the keypress hostage. Refresh in the background so a
-      // just-created PR replaces the fallback on the next press or refresh cycle.
-      if (existing === undefined) void refreshPullRequests(true)
       const url = existing?.url ?? pullRequestUrl(ctx.git.state.remotes, branch.name)
       if (url === null) return ctx.popups.notify("No web remote to open a pull request on", "warning")
       try {
