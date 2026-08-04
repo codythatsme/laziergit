@@ -192,13 +192,15 @@ describe("identifying commit authors", () => {
     const repo = await openRepo()
     await commit(repo, "analytical engine")
     await commit(repo, "compiler notes", "Grace Hopper <grace@example.com>")
+    const compiler = await repo.shortOid("HEAD")
+    const engine = await repo.shortOid("HEAD~1")
 
     await renderApp(repo.harness)
     await press(repo.harness, "2")
-    await waitForFrame(repo.harness, "GH  compiler notes")
+    await waitForFrame(repo.harness, `${compiler} GH ○ compiler notes`)
 
     const rendered = frame(repo.harness)
-    expect(rendered).toContain("AL  analytical engine")
+    expect(rendered).toContain(`${engine} AL ○ analytical engine`)
     expect(rendered).not.toContain("Ada Lovelace")
     expect(rendered).not.toContain("Grace Hopper")
   })
@@ -492,10 +494,10 @@ describe("contextual commit Commands", () => {
     // The graph is calculated from the same topo-ordered Commit objects the cursor and diff use:
     // the second parent opens to the right, stays live beside its commit, then joins main again.
     const rendered = frame(repo.harness)
-    expect(rendered).toContain(`◎─╮ ${mergeOid}  AL  merge feature`)
-    expect(rendered).toContain(`│ ○ ${featureOid}  AL  feature work`)
-    expect(rendered).toContain(`○ │ ${mainOid}  AL  main work`)
-    expect(rendered).toContain(`○─╯ ${rootOid}  AL  first commit`)
+    expect(rendered).toContain(`${mergeOid} AL ◎─╮ merge feature`)
+    expect(rendered).toContain(`${featureOid} AL │ ○ feature work`)
+    expect(rendered).toContain(`${mainOid} AL ○ │ main work`)
+    expect(rendered).toContain(`${rootOid} AL ○─╯ first commit`)
 
     const merge = commandIds(repo)
     expect(merge).toContain("commits.checkout")

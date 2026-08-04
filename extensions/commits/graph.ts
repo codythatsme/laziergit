@@ -57,7 +57,7 @@ const graphStartOid = "LAZIERGIT_GRAPH_START"
  * between rows, then each row collapses those pipes into box-drawing cells.
  *
  * Commits must be newest-first and topologically ordered. Each returned row ends in one space,
- * ready to be placed directly before the commit hash.
+ * ready to be placed directly before the commit message.
  */
 export function renderCommitGraph(commits: readonly GraphCommit[], selectedOid?: string): readonly CommitGraphRow[] {
   if (commits.length === 0) return []

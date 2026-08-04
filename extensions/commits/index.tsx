@@ -599,14 +599,16 @@ export default defineExtension({
 
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined} onMouseDown={onSelect}>
+          <span fg={dim ? theme.textMuted : theme.accent}>{`${commit.shortOid} `}</span>
+          <span fg={dim ? theme.textMuted : authorColor(commit.author.name)}>
+            {`${authorInitials(commit.author.name)} `}
+          </span>
           {graph.map((span, index) => (
             <span key={index} fg={dim ? theme.textMuted : commitGraphColor(span.tone, theme)}>
               {span.text}
             </span>
           ))}
-          <span fg={dim ? theme.textMuted : theme.accent}>{`${commit.shortOid}  `}</span>
-          <span fg={dim ? theme.textMuted : authorColor(commit.author.name)}>{authorInitials(commit.author.name)}</span>
-          <span fg={dim ? theme.textMuted : theme.text}>{`  ${commit.subject}`}</span>
+          <span fg={dim ? theme.textMuted : theme.text}>{commit.subject}</span>
           {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
         </text>
       )
