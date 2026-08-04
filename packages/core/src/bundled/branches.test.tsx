@@ -100,6 +100,7 @@ async function addGithubOrigin(harness: Harness): Promise<void> {
 
 interface GhStub {
   setPullRequests(pullRequests: readonly unknown[]): Promise<void>
+  releaseGraphql(): Promise<void>
   calls(): Promise<readonly string[]>
 }
 
@@ -119,10 +120,11 @@ function recordOpens(): OpenRecorder {
 }
 
 /** A controllable, platform-native `gh`; no test lookup can reach the network. */
-async function installGh(harness: Harness, listDelaySeconds = 0, graphqlDelaySeconds = 0): Promise<GhStub> {
+async function installGh(harness: Harness, listDelaySeconds = 0, blockGraphql = false): Promise<GhStub> {
   const bin = join(harness.directory, "bin")
   const answers = join(bin, "pull-requests.json")
   const graphqlAnswers = join(bin, "pull-requests-graphql.json")
+  const graphqlRelease = join(bin, "graphql.release")
   const calls = join(bin, "gh.log")
   await mkdir(bin, { recursive: true })
 
@@ -137,7 +139,11 @@ async function installGh(harness: Harness, listDelaySeconds = 0, graphqlDelaySec
           "  exit /b 0",
           ")",
           'if /i "%~1 %~2"=="api graphql" (',
-          ...(graphqlDelaySeconds === 0 ? [] : [`  ping 127.0.0.1 -n ${graphqlDelaySeconds + 1} > nul`]),
+          ...(blockGraphql
+            ? [
+                `  powershell -NoLogo -NoProfile -NonInteractive -Command "while (-not (Test-Path -LiteralPath '${graphqlRelease}')) { Start-Sleep -Milliseconds 25 }"`,
+              ]
+            : []),
           `  type "${graphqlAnswers}"`,
           "  exit /b 0",
           ")",
@@ -152,7 +158,7 @@ async function installGh(harness: Harness, listDelaySeconds = 0, graphqlDelaySec
           `  exec cat "${answers}"`,
           "fi",
           'if [ "$1 $2" = "api graphql" ]; then',
-          ...(graphqlDelaySeconds === 0 ? [] : [`  sleep ${graphqlDelaySeconds}`]),
+          ...(blockGraphql ? [`  while [ ! -f "${graphqlRelease}" ]; do sleep 0.025; done`] : []),
           `  exec cat "${graphqlAnswers}"`,
           "fi",
           "exit 1",
@@ -167,6 +173,7 @@ async function installGh(harness: Harness, listDelaySeconds = 0, graphqlDelaySec
   process.env.PATH = `${bin}${delimiter}${originalPath}`
 
   return {
+    releaseGraphql: () => writeFile(graphqlRelease, ""),
     setPullRequests: async (pullRequests) => {
       await Promise.all([
         writeFile(answers, JSON.stringify(pullRequests)),
@@ -866,7 +873,7 @@ describe("what a row says about its upstream", () => {
     await seed(harness)
     await addGithubOrigin(harness)
     await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
-    const gh = await installGh(harness, 0, 2)
+    const gh = await installGh(harness, 0, true)
     await gh.setPullRequests([
       {
         headRefName: "main",
@@ -887,8 +894,9 @@ describe("what a row says about its upstream", () => {
     await settle(harness)
 
     expect(await gh.calls()).toHaveLength(1)
-    // The query intentionally outlives the assertion above. Waiting for its visible result
-    // also lets the native stub exit before Windows tears down its temporary repository.
+    await gh.releaseGraphql()
+    // Waiting for the visible result proves the released command finished and prevents
+    // Windows teardown from racing a native process that still owns the temp repository.
     await waitForFrame(harness, "* main ")
   }, 30_000)
 
