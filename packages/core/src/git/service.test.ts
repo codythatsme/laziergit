@@ -828,7 +828,13 @@ it("tracks a commit made outside laziergit within one poll interval", async () =
   await repo.git("add", "external.txt")
   await repo.commit("committed elsewhere")
 
-  await waitFor(() => state(service).commits.length === 2, "the external commit to appear")
+  // The refresh fans its reads out concurrently. A pass that overlaps the external commit can
+  // legitimately see the pre-commit status and the post-commit log, especially on Windows;
+  // the next poll converges on one coherent snapshot.
+  await waitFor(
+    () => state(service).commits.length === 2 && state(service).status.isClean,
+    "the external commit and clean tree to appear",
+  )
   expect(state(service).commits[0]?.subject).toBe("committed elsewhere")
   expect(state(service).status.isClean).toBe(true)
 })

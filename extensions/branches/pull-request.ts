@@ -1,6 +1,12 @@
 import { remoteWebUrl, type Branch, type Remote } from "laziergit"
 
-export const pullRequestFields = "headRefName,headRepositoryOwner,state,isDraft,url,createdAt"
+const pullRequestGraphqlFields = "headRefName headRepositoryOwner { login } state isDraft url createdAt"
+
+export interface GitHubRepository {
+  readonly host: string
+  readonly owner: string
+  readonly name: string
+}
 
 /** The part of `gh pr list --json` used by the branches pane. */
 export interface PullRequest {
@@ -10,6 +16,72 @@ export interface PullRequest {
   readonly isDraft: boolean
   readonly url: string
   readonly createdAt: string
+}
+
+interface PullRequestConnection {
+  readonly nodes?: readonly PullRequest[]
+}
+
+interface PullRequestQueryResponse {
+  readonly data?: {
+    readonly repository?: Readonly<Record<string, PullRequestConnection | null>> | null
+  }
+}
+
+/**
+ * The repository whose pull requests local branches target. Fork workflows conventionally
+ * call that remote `upstream`; a single remote is unambiguous, and `origin` is the useful
+ * fallback when several remotes exist without that convention.
+ */
+export function githubRepository(remotes: readonly Remote[]): GitHubRepository | null {
+  const candidates = remotes.flatMap((remote): readonly [readonly [Remote, GitHubRepository]] | readonly [] => {
+    const web = remoteWebUrl([remote])
+    if (web === null) return []
+    try {
+      const url = new URL(web)
+      const [owner, name] = url.pathname.split("/").filter(Boolean)
+      return owner === undefined || name === undefined ? [] : [[remote, { host: url.host, owner, name }]]
+    } catch {
+      return []
+    }
+  })
+  if (candidates.length === 0) return null
+  const selected =
+    candidates.find(([remote]) => remote.name === "upstream") ??
+    candidates.find(([remote]) => remote.name === "origin") ??
+    candidates[0]
+  return selected?.[1] ?? null
+}
+
+/** A targeted GraphQL request: five newest PRs for each tracked branch, as LazyGit does. */
+export function pullRequestQueryArgs(repository: GitHubRepository, branches: readonly string[]): readonly string[] {
+  const declarations = ["$owner: String!", "$repo: String!"]
+  const fields = branches.map((branch, index) => {
+    const variable = `branch${index}`
+    declarations.push(`$${variable}: String!`)
+    return `${variable}: pullRequests(first: 5, headRefName: $${variable}, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ${pullRequestGraphqlFields} } }`
+  })
+  const query = `query(${declarations.join(", ")}) { repository(owner: $owner, name: $repo) { ${fields.join(" ")} } }`
+  return [
+    "api",
+    "graphql",
+    "--hostname",
+    repository.host,
+    "-f",
+    `query=${query}`,
+    "-f",
+    `owner=${repository.owner}`,
+    "-f",
+    `repo=${repository.name}`,
+    ...branches.flatMap((branch, index) => ["-f", `branch${index}=${branch}`]),
+  ]
+}
+
+export function parsePullRequestQuery(stdout: string): readonly PullRequest[] {
+  const response = JSON.parse(stdout) as PullRequestQueryResponse
+  const repository = response.data?.repository
+  if (repository === null || repository === undefined) return []
+  return Object.values(repository).flatMap((connection) => connection?.nodes ?? [])
 }
 
 function remoteOwner(remote: Remote): string | null {
