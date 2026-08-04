@@ -133,21 +133,21 @@ async function installGh(harness: Harness, listDelaySeconds = 0, blockGraphql = 
       ? [
           "@echo off",
           `>>"${calls}" echo(%*`,
-          'if /i "%~1 %~2"=="pr list" (',
+          'if /i "%~1 %~2"=="pr list" goto pr_list',
+          'if /i "%~1 %~2"=="api graphql" goto api_graphql',
+          "exit /b 1",
+          ":pr_list",
           ...(listDelaySeconds === 0 ? [] : [`  ping 127.0.0.1 -n ${listDelaySeconds + 1} > nul`]),
-          `  type "${answers}"`,
-          "  exit /b 0",
-          ")",
-          'if /i "%~1 %~2"=="api graphql" (',
+          `type "${answers}"`,
+          "exit /b 0",
+          ":api_graphql",
           ...(blockGraphql
             ? [
-                `  powershell -NoLogo -NoProfile -NonInteractive -Command "while (-not (Test-Path -LiteralPath '${graphqlRelease}')) { Start-Sleep -Milliseconds 25 }"`,
+                `powershell -NoLogo -NoProfile -NonInteractive -Command "while (-not (Test-Path -LiteralPath '${graphqlRelease}')) { Start-Sleep -Milliseconds 25 }"`,
               ]
             : []),
-          `  type "${graphqlAnswers}"`,
-          "  exit /b 0",
-          ")",
-          "exit /b 1",
+          `type "${graphqlAnswers}"`,
+          "exit /b 0",
           "",
         ].join("\r\n")
       : [
@@ -823,7 +823,7 @@ describe("what a row says about its upstream", () => {
       () => opener.opened() === "https://github.com/acme/tools/compare/main?expand=1",
       "the pull request creation URL to reach the opener",
     )
-    expect(frame(harness)).toContain("* main ✓")
+    await waitForFrame(harness, "* main ✓")
   }, 30_000)
 
   it("opens the create page without waiting for a slow pull request refresh", async () => {
@@ -844,6 +844,7 @@ describe("what a row says about its upstream", () => {
       "the pull request creation URL to open independently of the lookup",
       { timeoutMs: 300 },
     )
+    await waitForFrame(harness, "* main ✓")
   }, 30_000)
 
   it("finds a branch pull request without waiting for a repository-wide scan", async () => {
