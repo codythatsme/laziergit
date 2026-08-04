@@ -119,9 +119,10 @@ function recordOpens(): OpenRecorder {
 }
 
 /** A controllable, platform-native `gh`; no test lookup can reach the network. */
-async function installGh(harness: Harness): Promise<GhStub> {
+async function installGh(harness: Harness, listDelaySeconds = 0, graphqlDelaySeconds = 0): Promise<GhStub> {
   const bin = join(harness.directory, "bin")
   const answers = join(bin, "pull-requests.json")
+  const graphqlAnswers = join(bin, "pull-requests-graphql.json")
   const calls = join(bin, "gh.log")
   await mkdir(bin, { recursive: true })
 
@@ -131,7 +132,13 @@ async function installGh(harness: Harness): Promise<GhStub> {
           "@echo off",
           `>>"${calls}" echo(%*`,
           'if /i "%~1 %~2"=="pr list" (',
+          ...(listDelaySeconds === 0 ? [] : [`  ping 127.0.0.1 -n ${listDelaySeconds + 1} > nul`]),
           `  type "${answers}"`,
+          "  exit /b 0",
+          ")",
+          'if /i "%~1 %~2"=="api graphql" (',
+          ...(graphqlDelaySeconds === 0 ? [] : [`  ping 127.0.0.1 -n ${graphqlDelaySeconds + 1} > nul`]),
+          `  type "${graphqlAnswers}"`,
           "  exit /b 0",
           ")",
           "exit /b 1",
@@ -141,17 +148,31 @@ async function installGh(harness: Harness): Promise<GhStub> {
           "#!/bin/sh",
           `printf '%s\\n' "$*" >> "${calls}"`,
           'if [ "$1 $2" = "pr list" ]; then',
+          ...(listDelaySeconds === 0 ? [] : [`  sleep ${listDelaySeconds}`]),
           `  exec cat "${answers}"`,
+          "fi",
+          'if [ "$1 $2" = "api graphql" ]; then',
+          ...(graphqlDelaySeconds === 0 ? [] : [`  sleep ${graphqlDelaySeconds}`]),
+          `  exec cat "${graphqlAnswers}"`,
           "fi",
           "exit 1",
           "",
         ].join("\n")
   const executable = join(bin, process.platform === "win32" ? "gh.cmd" : "gh")
-  await Promise.all([writeFile(executable, gh, { mode: 0o755 }), writeFile(answers, "[]")])
+  await Promise.all([
+    writeFile(executable, gh, { mode: 0o755 }),
+    writeFile(answers, "[]"),
+    writeFile(graphqlAnswers, JSON.stringify({ data: { repository: {} } })),
+  ])
   process.env.PATH = `${bin}${delimiter}${originalPath}`
 
   return {
-    setPullRequests: (pullRequests) => writeFile(answers, JSON.stringify(pullRequests)),
+    setPullRequests: async (pullRequests) => {
+      await Promise.all([
+        writeFile(answers, JSON.stringify(pullRequests)),
+        writeFile(graphqlAnswers, JSON.stringify({ data: { repository: { branch0: { nodes: pullRequests } } } })),
+      ])
+    },
     calls: async () => ((await Bun.file(calls).exists()) ? (await Bun.file(calls).text()).trim().split("\n") : []),
   }
 }
@@ -769,9 +790,10 @@ describe("what a row says about its upstream", () => {
       .split("\n")
       .find((line) => line.includes("* main"))
     expect(row).not.toContain("✓")
-    expect((await gh.calls())[0]).toContain(
-      "pr list --state all --limit 1000 --json headRefName,headRepositoryOwner,state,isDraft,url,createdAt",
-    )
+    const lookup = (await gh.calls())[0]
+    expect(lookup).toStartWith("api graphql --hostname github.com")
+    expect(lookup).toContain("headRefName headRepositoryOwner { login }")
+    expect(lookup).toContain("-f branch0=main")
 
     await press(harness, "o")
     await waitFor(harness, () => opener.opened() === url, "the pull request URL to reach the opener")
@@ -795,6 +817,66 @@ describe("what a row says about its upstream", () => {
       "the pull request creation URL to reach the opener",
     )
     expect(frame(harness)).toContain("* main ✓")
+  }, 30_000)
+
+  it("opens the create page without waiting for a slow pull request refresh", async () => {
+    const opener = recordOpens()
+    const harness = await createHarness({ git: true, openExternal: opener.open })
+    await seed(harness)
+    await addGithubOrigin(harness)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
+    const gh = await installGh(harness, 2)
+
+    await start(harness)
+    await waitFor(harness, async () => (await gh.calls()).length > 0, "the slow pull request lookup to start")
+    await press(harness, "o")
+
+    await waitFor(
+      harness,
+      () => opener.opened() === "https://github.com/acme/tools/compare/main?expand=1",
+      "the pull request creation URL to open independently of the lookup",
+      { timeoutMs: 300 },
+    )
+  }, 30_000)
+
+  it("finds a branch pull request without waiting for a repository-wide scan", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await addGithubOrigin(harness)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
+    const gh = await installGh(harness, 2)
+    await gh.setPullRequests([
+      {
+        headRefName: "main",
+        headRepositoryOwner: { login: "acme" },
+        state: "OPEN",
+        isDraft: false,
+        url: "https://github.com/acme/tools/pull/42",
+        createdAt: "2026-08-04T00:00:00Z",
+      },
+    ])
+
+    await start(harness)
+    await waitForFrame(harness, "* main ", { timeoutMs: 500 })
+    expect((await gh.calls()).some((call) => call.startsWith("pr list"))).toBe(false)
+  }, 30_000)
+
+  it("coalesces identical refreshes while a pull request query is in flight", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await addGithubOrigin(harness)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
+    const gh = await installGh(harness, 0, 2)
+
+    await start(harness)
+    await waitFor(harness, async () => (await gh.calls()).length > 0, "the pull request lookup to start")
+    const branches = harness.kernel.git.getSnapshot().branches
+    await act(async () => {
+      harness.kernel.events.emit("git.branches.changed", { current: branches, previous: branches })
+    })
+    await settle(harness)
+
+    expect(await gh.calls()).toHaveLength(1)
   }, 30_000)
 
   it("draws a branch whose upstream was deleted in the danger colour", async () => {

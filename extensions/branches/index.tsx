@@ -6,7 +6,6 @@ import {
   describeGitFailure,
   GitError,
   isConflicted,
-  remoteWebUrl,
   toneColor,
   useGit,
   useGitActivity,
@@ -23,10 +22,20 @@ import {
 import { useEffect, useRef } from "react"
 
 import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
-import { pullRequestFields, pullRequestsByBranch, pullRequestUrl, type PullRequest } from "./pull-request"
+import {
+  githubRepository,
+  parsePullRequestQuery,
+  pullRequestQueryArgs,
+  pullRequestsByBranch,
+  pullRequestUrl,
+  type PullRequest,
+} from "./pull-request"
 import { useSpinner } from "./spinner"
 
 const githubGlyph = ""
+const pullRequestRefreshIntervalMs = 60_000
+const pullRequestQueryConcurrency = 5
+const pullRequestQueryMinimumSize = 10
 
 function divergence(upstream: UpstreamInfo | null): string {
   if (upstream === null || upstream.gone) return ""
@@ -93,46 +102,82 @@ export default defineExtension({
     const diff = ctx.extensions.get("diff")
     const pullRequests = createCell<ReadonlyMap<string, PullRequest>>(new Map())
     let pullRequestTicket = 0
+    let pullRequestFingerprint = ""
+    let pullRequestLastAttemptAt = 0
+    let pullRequestInFlight:
+      | {
+          readonly fingerprint: string
+          readonly result: Promise<ReadonlyMap<string, PullRequest> | null>
+        }
+      | undefined
 
     const fail = (error: unknown): void => ctx.popups.notify(describeGitFailure(error), "error")
 
     /**
      * GitHub metadata is optional: a repository without `gh`, authentication, or a GitHub
-     * remote keeps the ordinary git-only branch UI. Each caller gets its own answer while the
-     * ticket prevents a slower, older repository snapshot from replacing a newer one.
+     * remote keeps the ordinary git-only branch UI. Identical snapshots share one request;
+     * the ticket prevents an older repository snapshot from replacing a newer one.
      */
-    async function refreshPullRequests(): Promise<ReadonlyMap<string, PullRequest> | null> {
-      const issued = (pullRequestTicket += 1)
+    async function refreshPullRequests(force = false): Promise<ReadonlyMap<string, PullRequest> | null> {
       const { branches, remotes } = ctx.git.state
-      if (remoteWebUrl(remotes) === null || !branches.some((branch) => branch.upstream !== null)) {
+      const repository = githubRepository(remotes)
+      const trackedBranches = [
+        ...new Set(branches.flatMap((branch) => (branch.upstream === null ? [] : [branch.upstream.branch]))),
+      ]
+      if (repository === null || trackedBranches.length === 0) {
+        const issued = (pullRequestTicket += 1)
         const empty = new Map<string, PullRequest>()
         if (issued === pullRequestTicket) pullRequests.set(empty)
         return empty
       }
 
-      try {
-        const result = await ctx.exec("gh", [
-          "pr",
-          "list",
-          "--state",
-          "all",
-          "--limit",
-          "1000",
-          "--json",
-          pullRequestFields,
-        ])
-        if (result.exitCode !== 0) return null
-        const mapped = pullRequestsByBranch(JSON.parse(result.stdout) as PullRequest[], branches, remotes)
-        if (issued === pullRequestTicket) pullRequests.set(mapped)
-        return mapped
-      } catch {
-        return null
-      }
+      const fingerprint = JSON.stringify([
+        repository,
+        trackedBranches,
+        remotes.map((remote) => [remote.name, remote.fetchUrl]),
+      ])
+      if (pullRequestInFlight?.fingerprint === fingerprint) return pullRequestInFlight.result
+      if (!force && pullRequestFingerprint === fingerprint) return pullRequests.get()
+
+      const issued = (pullRequestTicket += 1)
+      const branchesPerQuery = Math.max(
+        Math.ceil(trackedBranches.length / pullRequestQueryConcurrency),
+        pullRequestQueryMinimumSize,
+      )
+      const chunks = Array.from({ length: Math.ceil(trackedBranches.length / branchesPerQuery) }, (_, index) =>
+        trackedBranches.slice(index * branchesPerQuery, (index + 1) * branchesPerQuery),
+      )
+      pullRequestLastAttemptAt = Date.now()
+      const result = (async (): Promise<ReadonlyMap<string, PullRequest> | null> => {
+        try {
+          const outputs = await Promise.all(
+            chunks.map((chunk) => ctx.exec("gh", pullRequestQueryArgs(repository, chunk))),
+          )
+          if (outputs.some((output) => output.exitCode !== 0)) return null
+          const prs = outputs.flatMap((output) => parsePullRequestQuery(output.stdout))
+          const mapped = pullRequestsByBranch(prs, branches, remotes)
+          if (issued === pullRequestTicket) {
+            pullRequestFingerprint = fingerprint
+            pullRequests.set(mapped)
+          }
+          return mapped
+        } catch {
+          return null
+        }
+      })()
+      pullRequestInFlight = { fingerprint, result }
+      void result.finally(() => {
+        if (pullRequestInFlight?.result === result) pullRequestInFlight = undefined
+      })
+      return result
     }
 
     void refreshPullRequests()
     ctx.events.on("git.branches.changed", () => void refreshPullRequests())
     ctx.events.on("git.remotes.changed", () => void refreshPullRequests())
+    ctx.events.on("git.refreshed", () => {
+      if (Date.now() - pullRequestLastAttemptAt >= pullRequestRefreshIntervalMs) void refreshPullRequests(true)
+    })
 
     function currentBranch(): string | null {
       const head = ctx.git.state.head
@@ -406,12 +451,10 @@ export default defineExtension({
     // Not gated on the branch having an upstream: a branch can be on the remote without one
     // configured, and an unpushed branch gets a 404 from the host.
     async function openPullRequest(branch: Branch): Promise<void> {
-      let existing = pullRequests.get().get(branch.name)
-      if (existing === undefined) {
-        // Refresh the miss so returning from a just-created PR and pressing `o` opens it even
-        // when no local git ref changed in the meantime. A visible PR opens without this wait.
-        existing = (await refreshPullRequests())?.get(branch.name)
-      }
+      const existing = pullRequests.get().get(branch.name)
+      // A network miss must never hold the keypress hostage. Refresh in the background so a
+      // just-created PR replaces the fallback on the next press or refresh cycle.
+      if (existing === undefined) void refreshPullRequests(true)
       const url = existing?.url ?? pullRequestUrl(ctx.git.state.remotes, branch.name)
       if (url === null) return ctx.popups.notify("No web remote to open a pull request on", "warning")
       try {
