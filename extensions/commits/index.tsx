@@ -12,6 +12,7 @@ import {
   useListCursor,
   useTheme,
   type Commit,
+  type CommitBrowserProps,
   type CommitsApi,
   type Head,
   type PaneProps,
@@ -50,6 +51,11 @@ interface CommitFile {
 type CommitFilesLoad =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly files: readonly CommitFile[] }
+  | { readonly kind: "failed"; readonly message: string }
+
+type CommitHistoryLoad =
+  | { readonly kind: "loading" }
+  | { readonly kind: "ready"; readonly commits: readonly Commit[] }
   | { readonly kind: "failed"; readonly message: string }
 
 type CommitPaneView =
@@ -615,20 +621,26 @@ export default defineExtension({
     }
 
     function CommitList({
+      commits,
       focused,
       selectedOid,
+      emptyMessage,
+      publishSelection,
+      idPrefix,
       onOpen,
     }: {
+      readonly commits: readonly Commit[]
       readonly focused: boolean
       readonly selectedOid: string | null
+      readonly emptyMessage: string
+      readonly publishSelection: boolean
+      readonly idPrefix: string
       readonly onOpen: (commit: Commit) => void
     }) {
       const theme = useTheme()
-      const commits = useGit((state) => state.commits)
-      const empty = useGit((state) => emptyReason(state.head))
       const cursor = useListCursor({
         items: commits,
-        idPrefix: "commits",
+        idPrefix,
         noun: "commit",
         query: {
           mode: "search",
@@ -645,9 +657,10 @@ export default defineExtension({
       }, [commits, selectedOid])
 
       useEffect(() => {
+        if (!publishSelection) return
         rows.setSelected(selected)
         return () => rows.setSelected(undefined)
-      }, [selected])
+      }, [publishSelection, selected])
 
       useEffect(() => {
         // Only while focused: the diff belongs to whichever list the user is driving.
@@ -657,7 +670,7 @@ export default defineExtension({
 
       // OpenTUI calls the key `return`; `enter` would appear in the cheat sheet but never run.
       useCommand({
-        id: "commits.view-files",
+        id: `${idPrefix}.view-files`,
         title: "View files changed by commit",
         hint: "files",
         keys: "return",
@@ -667,13 +680,7 @@ export default defineExtension({
       })
 
       if (commits.length === 0) {
-        const message =
-          empty === "noRepository"
-            ? "no repository here"
-            : empty === "unborn"
-              ? "no commits yet — your first commit will appear here"
-              : "no commits to show"
-        return <text fg={theme.textMuted} content={message} />
+        return <text fg={theme.textMuted} content={emptyMessage} />
       }
 
       const last = commits[commits.length - 1]
@@ -712,10 +719,12 @@ export default defineExtension({
     function CommitFiles({
       commit,
       focused,
+      idPrefix,
       onBack,
     }: {
       readonly commit: Commit
       readonly focused: boolean
+      readonly idPrefix: string
       readonly onBack: () => void
     }) {
       const theme = useTheme()
@@ -723,7 +732,7 @@ export default defineExtension({
       const files = load.kind === "ready" ? load.files : []
       const cursor = useListCursor({
         items: files,
-        idPrefix: "commits.files",
+        idPrefix: `${idPrefix}.files`,
         noun: "changed file",
         query: {
           mode: "filter",
@@ -755,7 +764,7 @@ export default defineExtension({
       }, [commit, focused, selected])
 
       useCommand({
-        id: "commits.files.back",
+        id: `${idPrefix}.files.back`,
         title: "Back to commits",
         hint: "back",
         keys: "escape",
@@ -798,17 +807,124 @@ export default defineExtension({
 
     function CommitsPane({ focused }: PaneProps) {
       const [view, setView] = useState<CommitPaneView>({ kind: "list", selectedOid: null })
+      const commits = useGit((state) => state.commits)
+      const empty = useGit((state) => emptyReason(state.head))
+      const emptyMessage =
+        empty === "noRepository"
+          ? "no repository here"
+          : empty === "unborn"
+            ? "no commits yet — your first commit will appear here"
+            : "no commits to show"
+
       return view.kind === "list" ? (
         <CommitList
+          commits={commits}
           focused={focused}
           selectedOid={view.selectedOid}
+          emptyMessage={emptyMessage}
+          publishSelection={true}
+          idPrefix="commits"
           onOpen={(commit) => setView({ kind: "files", commit })}
         />
       ) : (
         <CommitFiles
           commit={view.commit}
           focused={focused}
+          idPrefix="commits"
           onBack={() => setView({ kind: "list", selectedOid: view.commit.oid })}
+        />
+      )
+    }
+
+    function CommitBrowserList({
+      load,
+      title,
+      focused,
+      selectedOid,
+      idPrefix,
+      onOpen,
+      onBack,
+    }: Omit<CommitBrowserProps, "revision"> & {
+      readonly load: CommitHistoryLoad
+      readonly selectedOid: string | null
+      readonly onOpen: (commit: Commit) => void
+    }) {
+      const theme = useTheme()
+
+      useCommand({
+        id: `${idPrefix}.back`,
+        title: "Back to branches",
+        hint: "back",
+        keys: "escape",
+        run: onBack,
+      })
+
+      return (
+        <box flexDirection="column" flexGrow={1} flexBasis={0}>
+          <text wrapMode="none">
+            <span fg={theme.accent}>{title}</span>
+            <span fg={theme.textMuted}> commits</span>
+          </text>
+          {load.kind === "loading" ? (
+            <text fg={theme.textMuted} content="loading commits…" />
+          ) : load.kind === "failed" ? (
+            <text fg={theme.danger} content={load.message} />
+          ) : (
+            <CommitList
+              commits={load.commits}
+              focused={focused}
+              selectedOid={selectedOid}
+              emptyMessage="no commits for this branch"
+              publishSelection={false}
+              idPrefix={idPrefix}
+              onOpen={onOpen}
+            />
+          )}
+        </box>
+      )
+    }
+
+    /** The lazygit-style transient history used by branches and any other ref-owning Pane. */
+    function CommitBrowser({ revision, title, focused, idPrefix, onBack }: CommitBrowserProps) {
+      const [load, setLoad] = useState<CommitHistoryLoad>({ kind: "loading" })
+      const [view, setView] = useState<CommitPaneView>({ kind: "list", selectedOid: null })
+
+      useEffect(() => {
+        let current = true
+        setLoad({ kind: "loading" })
+        void ctx.git.commits(revision).then(
+          (commits) => {
+            if (current) setLoad({ kind: "ready", commits })
+          },
+          (error) => {
+            if (current) setLoad({ kind: "failed", message: describeGitFailure(error) })
+          },
+        )
+        return () => {
+          current = false
+        }
+      }, [revision])
+
+      if (view.kind === "files") {
+        return (
+          <CommitFiles
+            commit={view.commit}
+            focused={focused}
+            idPrefix={idPrefix}
+            onBack={() => setView({ kind: "list", selectedOid: view.commit.oid })}
+          />
+        )
+      }
+
+      return (
+        <CommitBrowserList
+          load={load}
+          title={title}
+          focused={focused}
+          selectedOid={view.selectedOid}
+          idPrefix={idPrefix}
+          onOpen={(commit) => setView({ kind: "files", commit })}
+          onBack={onBack}
         />
       )
     }
@@ -827,6 +943,6 @@ export default defineExtension({
       run: () => pane.focus(),
     })
 
-    return rows.api
+    return { ...rows.api, renderBrowser: CommitBrowser }
   },
 })

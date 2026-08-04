@@ -8,19 +8,21 @@ import {
   GitError,
   isConflicted,
   toneColor,
+  useCommand,
   useGit,
   useGitActivity,
   useListCursor,
   useTheme,
   type Branch,
   type BranchesApi,
+  type CommitBrowserProps,
   type Head,
   type PaneProps,
   type Theme,
   type Tone,
   type UpstreamInfo,
 } from "laziergit"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import stringWidth from "string-width"
 
 import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
@@ -137,10 +139,14 @@ function validateRef(value: string, empty: string): string | null {
   return null
 }
 
+type BranchPaneView =
+  | { readonly kind: "list"; readonly selectedName: string | null }
+  | { readonly kind: "commits"; readonly branchName: string }
+
 export default defineExtension({
   name: "branches",
   description: "Local branches with their upstream divergence",
-  needs: ["diff"],
+  needs: ["diff", "commits"],
 
   activate(ctx): BranchesApi {
     const rows = createRowSource<Branch>({ pane: "branches", key: (row) => row.name })
@@ -155,6 +161,12 @@ export default defineExtension({
           readonly result: Promise<ReadonlyMap<string, PullRequest> | null>
         }
       | undefined
+    const renderCommitBrowser = ctx.extensions.get("commits").renderBrowser
+
+    // The shared renderer owns hooks, so it gets a stable component boundary in this Pane.
+    function CommitBrowser(props: CommitBrowserProps) {
+      return renderCommitBrowser(props)
+    }
 
     const fail = (error: unknown): void => ctx.popups.notify(describeGitFailure(error), "error")
 
@@ -663,7 +675,14 @@ export default defineExtension({
       )
     }
 
-    function BranchesPane({ focused }: PaneProps) {
+    function BranchList({
+      focused,
+      selectedName: restoredName,
+      onOpen,
+    }: Pick<PaneProps, "focused"> & {
+      readonly selectedName: string | null
+      readonly onOpen: (branch: Branch) => void
+    }) {
       const theme = useTheme()
       const branches = useGit((state) => state.branches)
       const branchPullRequests = pullRequests.use()
@@ -715,6 +734,24 @@ export default defineExtension({
         diff.show({ kind: "branch", ref: selectedName, path: null })
       }, [focused, selectedName])
 
+      useEffect(() => {
+        if (restoredName === null) return
+        const index = visibleBranches.findIndex((branch) => branch.name === restoredName)
+        if (index !== -1) cursor.setIndex(index)
+      }, [restoredName])
+
+      // OpenTUI reports the enter key as `return`, the same spelling the commits Pane uses.
+      useCommand({
+        id: "branches.view-commits",
+        title: "View commits",
+        hint: "commits",
+        keys: "return",
+        when: () => selected !== undefined,
+        run: () => {
+          if (selected !== undefined) onOpen(selected)
+        },
+      })
+
       if (branches.length === 0) {
         const message = repository ? "no branches yet — n creates one" : "no repository here"
         return <text fg={theme.textMuted} content={message} />
@@ -737,6 +774,27 @@ export default defineExtension({
             />
           ))}
         </scrollbox>
+      )
+    }
+
+    function BranchesPane({ focused }: PaneProps) {
+      const [view, setView] = useState<BranchPaneView>({ kind: "list", selectedName: null })
+
+      return view.kind === "list" ? (
+        <BranchList
+          focused={focused}
+          selectedName={view.selectedName}
+          onOpen={(branch) => setView({ kind: "commits", branchName: branch.name })}
+        />
+      ) : (
+        <CommitBrowser
+          key={view.branchName}
+          revision={`refs/heads/${view.branchName}`}
+          title={view.branchName}
+          focused={focused}
+          idPrefix="branches.history"
+          onBack={() => setView({ kind: "list", selectedName: view.branchName })}
+        />
       )
     }
 

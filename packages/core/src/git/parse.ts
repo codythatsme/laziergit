@@ -394,7 +394,7 @@ const commitFormat = ["%H", "%h", "%at", "%an", "%ae", "%P", "%s"].join("%x00")
  * NUL-separated field stream with no newlines. The trailing `--` stops a ref that shares a
  * name with a file from being read as a pathspec.
  */
-export function commitArgs(limit: number): readonly string[] {
+export function commitArgs(limit: number, ref = "HEAD"): readonly string[] {
   return [
     "log",
     "-z",
@@ -402,7 +402,8 @@ export function commitArgs(limit: number): readonly string[] {
     "--no-show-signature",
     `--max-count=${limit}`,
     `--format=${commitFormat}`,
-    "HEAD",
+    "--end-of-options",
+    ref,
     "--",
   ]
 }

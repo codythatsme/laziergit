@@ -93,6 +93,22 @@ it("loads head, branches, and history from a real repository", async () => {
   expect(reports).toEqual([])
 })
 
+it("loads the configured history window from a branch other than HEAD", async () => {
+  const repo = await createSeededRepo()
+  await repo.git("checkout", "--quiet", "-b", "topic")
+  await repo.write("topic.txt", "topic\n")
+  await repo.git("add", "topic.txt")
+  await repo.commit("topic commit")
+  await repo.git("checkout", "--quiet", "main")
+
+  const service = await open(repo.path)
+  service.setConfig({ ...defaultGitConfig, commitLimit: 1 })
+
+  expect((await service.commits("refs/heads/topic")).map((commit) => commit.subject)).toEqual(["topic commit"])
+  expect(state(service).commits.map((commit) => commit.subject)).toEqual(["first commit"])
+  expect(reports).toEqual([])
+})
+
 it("reads a repository with no commits without failing on `git log`", async () => {
   const repo = await createTestRepo()
   await repo.write("untracked.txt", "x\n")
