@@ -101,39 +101,58 @@ async function addGithubOrigin(harness: Harness): Promise<void> {
 interface GhStub {
   setPullRequests(pullRequests: readonly unknown[]): Promise<void>
   calls(): Promise<readonly string[]>
-  opened(): Promise<string>
 }
 
-/** A controllable `gh` plus browser opener; neither a test nor `o` can reach the network. */
+interface OpenRecorder {
+  readonly open: (url: string) => Promise<void>
+  readonly opened: () => string
+}
+
+function recordOpens(): OpenRecorder {
+  let opened = ""
+  return {
+    open: async (url) => {
+      opened = url
+    },
+    opened: () => opened,
+  }
+}
+
+/** A controllable, platform-native `gh`; no test lookup can reach the network. */
 async function installGh(harness: Harness): Promise<GhStub> {
   const bin = join(harness.directory, "bin")
   const answers = join(bin, "pull-requests.json")
   const calls = join(bin, "gh.log")
-  const opened = join(bin, "opened.log")
   await mkdir(bin, { recursive: true })
 
-  const gh = [
-    "#!/bin/sh",
-    `printf '%s\\n' "$*" >> "${calls}"`,
-    'if [ "$1 $2" = "pr list" ]; then',
-    `  exec cat "${answers}"`,
-    "fi",
-    "exit 1",
-    "",
-  ].join("\n")
-  const open = `#!/bin/sh\nprintf '%s\\n' "$*" >> "${opened}"\n`
-  await Promise.all([
-    writeFile(join(bin, "gh"), gh, { mode: 0o755 }),
-    writeFile(join(bin, "open"), open, { mode: 0o755 }),
-    writeFile(join(bin, "xdg-open"), open, { mode: 0o755 }),
-    writeFile(answers, "[]"),
-  ])
+  const gh =
+    process.platform === "win32"
+      ? [
+          "@echo off",
+          `>>"${calls}" echo(%*`,
+          'if /i "%~1 %~2"=="pr list" (',
+          `  type "${answers}"`,
+          "  exit /b 0",
+          ")",
+          "exit /b 1",
+          "",
+        ].join("\r\n")
+      : [
+          "#!/bin/sh",
+          `printf '%s\\n' "$*" >> "${calls}"`,
+          'if [ "$1 $2" = "pr list" ]; then',
+          `  exec cat "${answers}"`,
+          "fi",
+          "exit 1",
+          "",
+        ].join("\n")
+  const executable = join(bin, process.platform === "win32" ? "gh.cmd" : "gh")
+  await Promise.all([writeFile(executable, gh, { mode: 0o755 }), writeFile(answers, "[]")])
   process.env.PATH = `${bin}${delimiter}${originalPath}`
 
   return {
     setPullRequests: (pullRequests) => writeFile(answers, JSON.stringify(pullRequests)),
     calls: async () => ((await Bun.file(calls).exists()) ? (await Bun.file(calls).text()).trim().split("\n") : []),
-    opened: async () => ((await Bun.file(opened).exists()) ? (await Bun.file(opened).text()).trim() : ""),
   }
 }
 
@@ -726,7 +745,8 @@ describe("what a row says about its upstream", () => {
   }, 30_000)
 
   it("replaces the in-sync check with a GitHub logo and opens that pull request", async () => {
-    const harness = await createHarness({ git: true })
+    const opener = recordOpens()
+    const harness = await createHarness({ git: true, openExternal: opener.open })
     await seed(harness)
     await addGithubOrigin(harness)
     await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
@@ -754,11 +774,12 @@ describe("what a row says about its upstream", () => {
     )
 
     await press(harness, "o")
-    await waitFor(harness, async () => (await gh.opened()) === url, "the pull request URL to reach the opener")
+    await waitFor(harness, () => opener.opened() === url, "the pull request URL to reach the opener")
   }, 30_000)
 
   it("keeps the create-pull-request page as the fallback when GitHub finds no PR", async () => {
-    const harness = await createHarness({ git: true })
+    const opener = recordOpens()
+    const harness = await createHarness({ git: true, openExternal: opener.open })
     await seed(harness)
     await addGithubOrigin(harness)
     await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
@@ -770,7 +791,7 @@ describe("what a row says about its upstream", () => {
 
     await waitFor(
       harness,
-      async () => (await gh.opened()) === "https://github.com/acme/tools/compare/main?expand=1",
+      () => opener.opened() === "https://github.com/acme/tools/compare/main?expand=1",
       "the pull request creation URL to reach the opener",
     )
     expect(frame(harness)).toContain("* main ✓")
