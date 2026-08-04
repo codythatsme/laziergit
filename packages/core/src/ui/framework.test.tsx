@@ -161,6 +161,14 @@ const leftSegmentSource = `
         pane: "left",
         run: () => undefined,
       })
+      ctx.commands.register({
+        id: "left.more",
+        title: "Do more",
+        hint: "do more",
+        keys: "shift+z",
+        pane: "left",
+        run: () => undefined,
+      })
     },
   })
 `
@@ -538,6 +546,8 @@ describe("contextual Commands, transient menus and status line", () => {
     // One row, shared: core writes the focused Pane's hints along its left and an Extension's
     // own left-aligned segments follow them.
     expect(rendered).toContain("z do it")
+    expect(rendered).toContain("Z do more")
+    expect(rendered).not.toContain("shift+z do more")
     expect(rendered).toContain("left-segment")
     expect(rendered.indexOf("z do it")).toBeLessThan(rendered.indexOf("left-segment"))
   })
