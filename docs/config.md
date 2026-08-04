@@ -287,9 +287,10 @@ solid canvas instead.
 
 Every known surface in a shipped preset is held to contrast floors by test, not by eye. Solid
 canvases keep body text at 7:1 and semantic colors at 4.5:1; the transparent default keeps the
-same guarantees on its selected rows and raised panel. Staged-green is also separated from
-unstaged-red in *luminance* as well as hue, because the files Pane draws those two columns
-side by side and hue alone is not readable to everyone.
+same guarantees on its selected rows and raised panel. A selected row also has to separate
+visibly from a raised panel, so menus do not rely on their text-color change alone.
+Staged-green is separated from unstaged-red in *luminance* as well as hue, because the files
+Pane draws those two columns side by side and hue alone is not readable to everyone.
 
 No palette can guarantee contrast against an arbitrary native terminal background:
 `nocturne` expects a dark terminal profile. On a light profile, use `daybreak` with
