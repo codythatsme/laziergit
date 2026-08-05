@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { symlink, writeFile } from "node:fs/promises"
+import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
 import { gitIsolationEnv } from "../git/test-repo"
@@ -647,6 +647,56 @@ describe("contextual commit Commands", () => {
 
     expect(await repo.oid("HEAD")).toBe(originalHead)
     expect(await Bun.file(join(repo.harness.directory, "first-commit.txt")).text()).toBe("unfinished\n")
+  })
+
+  it("ignores a stale REBASE_HEAD when no rebase is active", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await writeFile(join(repo.harness.directory, ".git", "REBASE_HEAD"), `${await repo.oid("HEAD")}\n`)
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await waitForSelection(repo, "HEAD")
+    await press(repo.harness, "d")
+    await waitFor(
+      repo.harness,
+      () => {
+        const rendered = frame(repo.harness)
+        return (
+          rendered.includes("will be removed and every newer") ||
+          rendered.includes("Finish or abort the current Git operation")
+        )
+      },
+      "the rewrite readiness decision",
+    )
+
+    expect(frame(repo.harness)).toContain("will be removed and every newer")
+  })
+
+  it("refuses to rewrite while a rebase state directory exists", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await waitForSelection(repo, "HEAD")
+    await mkdir(join(repo.harness.directory, ".git", "rebase-merge"))
+    await press(repo.harness, "d")
+    await waitFor(
+      repo.harness,
+      () => {
+        const rendered = frame(repo.harness)
+        return (
+          rendered.includes("will be removed and every newer") ||
+          rendered.includes("Finish or abort the current Git operation")
+        )
+      },
+      "the rewrite readiness decision",
+    )
+
+    expect(frame(repo.harness)).toContain("Finish or abort the current Git operation")
   })
 
   it("aborts a conflicting drop and restores the original history", async () => {
