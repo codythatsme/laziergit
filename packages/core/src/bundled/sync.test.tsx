@@ -365,8 +365,13 @@ describe("sync.pull and sync.fetch", () => {
     // lazygit fetches once at startup rather than leaving the first interval stale.
     await waitForFrame(harness, "main ↓1")
 
-    await commitIn(theirs, "more.txt", "more\n")
-    await git(theirs, "push", "--quiet", "origin", "main")
+    // The background fetch can publish while these real git processes are running. Keep that
+    // publication inside React's test boundary; Windows makes the overlap especially likely
+    // because spawning git takes longer there.
+    await act(async () => {
+      await commitIn(theirs, "more.txt", "more\n")
+      await git(theirs, "push", "--quiet", "origin", "main")
+    })
 
     // The next scheduled fetch discovers movement that happened after startup.
     await waitForFrame(harness, "main ↓2")
