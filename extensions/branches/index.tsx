@@ -34,7 +34,8 @@ import {
 } from "./pull-request"
 import { useSpinner } from "./spinner"
 
-const githubGlyph = ""
+// Font Awesome's mark fills its cell more fully than the smaller Devicons GitHub glyph.
+const githubGlyph = ""
 const pullRequestRefreshIntervalMs = 60_000
 const pullRequestQueryConcurrency = 5
 const pullRequestQueryMinimumSize = 10
@@ -424,6 +425,43 @@ export default defineExtension({
       }
     }
 
+    async function renameBranch(branch: Branch): Promise<void> {
+      if (
+        branch.upstream !== null &&
+        !(await ctx.popups.confirm({
+          title: `Rename ${branch.name}?`,
+          message: "Only the local branch will be renamed; its remote branch keeps its current name.",
+          confirmLabel: "continue",
+        }))
+      ) {
+        return
+      }
+
+      const name = await ctx.popups.prompt({
+        title: "Rename branch",
+        initial: branch.name,
+        validate: (value) => validateRef(value, "Name the branch"),
+      })
+      const renamed = name?.trim()
+      if (renamed === undefined || renamed === branch.name) return
+
+      try {
+        await ctx.git.raw(["branch", "--move", branch.name, renamed])
+        ctx.popups.notify(`Renamed ${branch.name} to ${renamed}`, "success")
+      } catch (error) {
+        fail(error)
+      }
+    }
+
+    async function copyBranchName(branch: Branch): Promise<void> {
+      try {
+        await ctx.copy(branch.name)
+        ctx.popups.notify(`Copied ${branch.name}`, "success")
+      } catch (error) {
+        fail(error)
+      }
+    }
+
     async function forceDelete(branch: Branch, message: string): Promise<void> {
       const confirmed = await ctx.popups.confirm({
         title: `Force delete ${branch.name}?`,
@@ -525,6 +563,20 @@ export default defineExtension({
         hasRepository(ctx.git.state.head)
           ? createBranchAt(rows.api.selected())
           : ctx.popups.notify("No repository here to branch from", "warning"),
+    })
+    ctx.commands.register({
+      id: "branches.rename",
+      source: rows.api,
+      title: "Rename branch",
+      keys: "shift+r",
+      run: renameBranch,
+    })
+    ctx.commands.register({
+      id: "branches.copy-name",
+      source: rows.api,
+      title: "Copy branch name",
+      keys: "mod+c",
+      run: copyBranchName,
     })
     ctx.commands.register({
       id: "branches.delete",
@@ -742,7 +794,7 @@ export default defineExtension({
 
     const pane = ctx.panes.register({
       id: "branches",
-      title: "Local branches",
+      title: "Local",
       component: BranchesPane,
       placement: { column: 0, order: 30 },
     })

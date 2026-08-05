@@ -261,8 +261,8 @@ export interface ListCursorOptions<T> {
   /** Singular noun for the cheat-sheet titles, e.g. `"file"` → "Next file". */
   noun: string
   /**
-   * Neighboring rows to keep visible in the direction of travel. `2`, for example, keeps
-   * two upcoming rows below a cursor moving down, like lazygit's scroll-off margin.
+   * Neighboring rows to keep visible in the direction of travel. Defaults to `2`, matching
+   * lazygit's scroll-off margin; pass `0` when a list deliberately wants nearest-only scrolling.
    */
   scrollOffMargin?: number
   /**
@@ -358,7 +358,7 @@ export function useListCursor<T>({
   items,
   idPrefix,
   noun,
-  scrollOffMargin = 0,
+  scrollOffMargin = 2,
   query: queryOptions,
 }: ListCursorOptions<T>): ListCursor<T> {
   const runtime = useRuntime()

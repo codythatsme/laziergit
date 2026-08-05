@@ -37,7 +37,7 @@ function validateRef(value: string): string | null {
   return null
 }
 
-type ResetMode = "soft" | "mixed" | "hard"
+type ResetMode = "mixed" | "hard"
 type RewriteAction = "squash" | "drop" | "edit"
 
 interface CommitFile {
@@ -498,14 +498,14 @@ export default defineExtension({
       id: "commits.copy-oid",
       source: rows.api,
       title: "Copy the full commit oid",
-      keys: "y",
+      keys: ["mod+c", "y"],
       run: (commit) => attempt(`Copied ${commit.shortOid}`, () => ctx.copy(commit.oid)),
     })
     ctx.commands.register({
       id: "commits.squash",
       source: rows.api,
       title: "Squash into the parent commit",
-      keys: "q",
+      keys: "s",
       when: canSquash,
       run: async (commit) => {
         const parent = commit.parents[0]
@@ -554,13 +554,6 @@ export default defineExtension({
         }
         await runRewrite(commit, "drop", `Dropped ${commit.shortOid}`)
       },
-    })
-    ctx.commands.register({
-      id: "commits.reset-soft",
-      source: rows.api,
-      title: "Reset soft to this commit",
-      keys: "s",
-      run: (commit) => runReset(commit, "soft"),
     })
     ctx.commands.register({
       id: "commits.reset-mixed",

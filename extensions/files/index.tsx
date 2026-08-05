@@ -489,6 +489,15 @@ export default defineExtension({
       }
     }
 
+    async function copyPath(path: string): Promise<void> {
+      try {
+        await ctx.copy(path)
+        ctx.popups.notify(`Copied ${path}`, "success")
+      } catch (error) {
+        fail("Copy", error)
+      }
+    }
+
     /**
      * The shared shape of every row. Split from the two wrappers below because `useDecoration`
      * is a hook and a directory has no `FileChange` to look one up by.
@@ -685,6 +694,16 @@ export default defineExtension({
         title: "Open selected path in default application",
         keys: "o",
         run: () => (selected === undefined ? undefined : openPath(selected.node.path)),
+      })
+      useCommand({
+        id: "files.copy-path",
+        title: "Copy relative file path",
+        keys: "mod+c",
+        when: () => selected?.node.kind === "file",
+        run: () => {
+          const node = selected?.node
+          return node?.kind === "file" ? copyPath(node.path) : undefined
+        },
       })
       useCommand({
         id: "files.unstage-all",

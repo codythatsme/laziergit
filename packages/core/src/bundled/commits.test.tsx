@@ -13,6 +13,7 @@ import {
   waitFor,
   waitForFrame,
   type Harness,
+  type HarnessOptions,
 } from "../test-harness"
 
 installHarnessLifecycle()
@@ -107,8 +108,14 @@ interface Repo {
   shortOid(revision: string): Promise<string>
 }
 
-async function openRepo(options: { readonly config?: string; readonly git?: boolean } = {}): Promise<Repo> {
-  const harness = await createHarness({ git: options.git ?? true })
+async function openRepo(
+  options: {
+    readonly config?: string
+    readonly git?: boolean
+    readonly clipboardWriters?: HarnessOptions["clipboardWriters"]
+  } = {},
+): Promise<Repo> {
+  const harness = await createHarness({ git: options.git ?? true, clipboardWriters: options.clipboardWriters })
   await Promise.all([
     writeFile(join(harness.directory, ".gitignore"), ignored),
     writeFile(harness.configFiles.repo, options.config ?? layout()),
@@ -309,6 +316,24 @@ describe("creating a branch from a commit", () => {
 })
 
 describe("contextual commit Commands", () => {
+  it("copies the selected commit's full hash with the primary modifier and C", async () => {
+    const repo = await openRepo({
+      clipboardWriters: [
+        [process.execPath, ["-e", "if (!/^[0-9a-f]{40}$/.test(await Bun.stdin.text())) process.exit(1)"]],
+      ],
+    })
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    const selected = await repo.shortOid("HEAD")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await waitForSelection(repo, "HEAD")
+    await press(repo.harness, "c", { ctrl: true })
+
+    await waitForFrame(repo.harness, `Copied ${selected}`)
+  })
+
   it("checks a commit out after saying that HEAD will be detached", async () => {
     const repo = await openRepo()
     await commit(repo, "first commit")
@@ -403,52 +428,6 @@ describe("contextual commit Commands", () => {
     // The file the undone commit added survives as untracked: mixed keeps the working tree.
     expect(await Bun.file(join(repo.harness.directory, "second-commit.txt")).text()).toBe("second commit\n")
     expect(await Bun.file(join(repo.harness.directory, "first-commit.txt")).text()).toBe("edited\n")
-  })
-
-  it("leaves the branch where it was when a soft reset is declined", async () => {
-    const repo = await openRepo()
-    await commit(repo, "first commit")
-    await commit(repo, "second commit")
-    await commit(repo, "third commit")
-    const head = await repo.oid("HEAD")
-
-    await renderApp(repo.harness)
-    await press(repo.harness, "2")
-    await press(repo.harness, "j")
-    await waitForSelection(repo, "HEAD~1")
-    await press(repo.harness, "s")
-
-    // Soft touches neither the index nor the files, and still takes a commit off the branch
-    // with only the reflog to get it back.
-    await waitForFrame(repo.harness, "Reset soft to")
-    expect(frame(repo.harness)).toContain("1 commit off this branch, left only in the reflog")
-
-    await press(repo.harness, "n")
-    await waitForFrame(repo.harness, (screen) => !screen.includes("Reset soft to"))
-    expect(await repo.oid("HEAD")).toBe(head)
-  })
-
-  it("moves the branch on a soft reset once confirmed, leaving the undone commit staged", async () => {
-    const repo = await openRepo()
-    await commit(repo, "first commit")
-    await commit(repo, "second commit")
-    const head = await repo.oid("HEAD")
-    const parent = await repo.oid("HEAD~1")
-
-    await renderApp(repo.harness)
-    await press(repo.harness, "2")
-    await press(repo.harness, "j")
-    await waitForSelection(repo, "HEAD~1")
-    await press(repo.harness, "s")
-    await waitForFrame(repo.harness, "1 commit off this branch, left only in the reflog")
-
-    // Nothing has moved yet — the popup is on screen and the reset is behind it.
-    expect(await repo.oid("HEAD")).toBe(head)
-
-    await confirmReset(repo, "Reset soft to", "left only in the reflog", parent)
-    expect(await repo.oid("HEAD")).toBe(parent)
-    // Soft keeps the index, so the undone commit's file is staged rather than untracked.
-    expect((await repo.run("diff", "--cached", "--name-only")).trim()).toBe("second-commit.txt")
   })
 
   it("reverts a commit without opening an editor", async () => {
@@ -550,10 +529,11 @@ describe("contextual commit Commands", () => {
     await press(repo.harness, "2")
     await press(repo.harness, "j")
     await waitForSelection(repo, "HEAD~1")
-    await press(repo.harness, "q")
+    await press(repo.harness, "s")
 
     await waitForFrame(repo.harness, "will be folded into")
     expect(frame(repo.harness)).toContain("every newer commit will get a new oid")
+    expect(commandIds(repo)).not.toContain("commits.reset-soft")
 
     await press(repo.harness, "y")
     await waitForFrame(repo.harness, "Pushed history now needs force-with-lease")
@@ -642,7 +622,7 @@ describe("contextual commit Commands", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await waitForSelection(repo, "HEAD")
-    await press(repo.harness, "q")
+    await press(repo.harness, "s")
     await waitForFrame(repo.harness, "Commit rewrites need a clean working tree")
 
     expect(await repo.oid("HEAD")).toBe(originalHead)

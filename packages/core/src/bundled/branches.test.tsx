@@ -399,6 +399,34 @@ describe("creating a branch", () => {
   }, 30_000)
 })
 
+describe("branch names", () => {
+  it("renames the selected branch with capital R", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await start(harness)
+
+    await press(harness, "R")
+    await waitForFrame(harness, "Rename branch")
+    await press(harness, () => void harness.setup.mockInput.typeText("-renamed"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+
+    await waitForFrame(harness, "* main-renamed")
+    expect(await git(harness, "branch", "--show-current")).toBe("main-renamed")
+  })
+
+  it("copies the selected branch name with the primary modifier and C", async () => {
+    const harness = await createHarness({
+      git: true,
+      clipboardWriters: [[process.execPath, ["-e", 'if (await Bun.stdin.text() !== "main") process.exit(1)']]],
+    })
+    await seed(harness)
+    await start(harness)
+
+    await press(harness, "c", { ctrl: true })
+    await waitForFrame(harness, "Copied main")
+  })
+})
+
 describe("merging a branch into the checked-out branch", () => {
   async function withFastForwardTopic(harness: Harness): Promise<void> {
     await seed(harness)
@@ -814,7 +842,7 @@ describe("what a row says about its upstream", () => {
     ])
 
     await start(harness)
-    await waitForFrame(harness, "* main ")
+    await waitForFrame(harness, "* main ")
     const row = frame(harness)
       .split("\n")
       .find((line) => line.includes("* main"))
@@ -861,7 +889,7 @@ describe("what a row says about its upstream", () => {
       // Never strand the native stub if the responsiveness assertion fails: Windows keeps
       // the temporary repository locked until this deliberately blocked process exits.
       await gh.releaseGraphql()
-      await waitForFrame(harness, "* main ")
+      await waitForFrame(harness, "* main ")
     }
   }, 30_000)
 
@@ -883,7 +911,7 @@ describe("what a row says about its upstream", () => {
     ])
 
     await start(harness)
-    await waitForFrame(harness, "* main ", { timeoutMs: 500 })
+    await waitForFrame(harness, "* main ", { timeoutMs: 500 })
     expect((await gh.calls()).some((call) => call.startsWith("pr list"))).toBe(false)
   }, 30_000)
 
@@ -916,7 +944,7 @@ describe("what a row says about its upstream", () => {
     await gh.releaseGraphql()
     // Waiting for the visible result proves the released command finished and prevents
     // Windows teardown from racing a native process that still owns the temp repository.
-    await waitForFrame(harness, "* main ")
+    await waitForFrame(harness, "* main ")
   }, 30_000)
 
   it("draws a branch whose upstream was deleted in the danger colour", async () => {

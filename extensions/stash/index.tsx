@@ -167,28 +167,34 @@ export default defineExtension({
     }
 
     async function openSaveMenu(): Promise<void> {
-      await ctx.popups.menu({
+      const choice = await ctx.popups.select({
         title: "Stash options",
-        groups: [
-          {
-            items: [
-              { key: "a", label: "Stash all changes", run: () => saveTracked() },
-              {
-                key: "i",
-                label: "Stash all changes and keep index",
-                run: () => saveTracked({ keepIndex: true }),
-              },
-              {
-                key: "shift+u",
-                label: "Stash all changes including untracked files",
-                run: () => saveFromMenu({ includeUntracked: true }),
-              },
-              { key: "s", label: "Stash staged changes", run: saveStaged },
-              { key: "u", label: "Stash unstaged changes", run: () => saveTracked({ mode: "unstaged" }) },
-            ],
-          },
+        items: [
+          { label: "Stash all changes", value: "all" },
+          { label: "Stash all changes and keep index", value: "keep-index" },
+          { label: "Stash all changes including untracked files", value: "include-untracked" },
+          { label: "Stash staged changes", value: "staged" },
+          { label: "Stash unstaged changes", value: "unstaged" },
         ],
       })
+
+      switch (choice) {
+        case "all":
+          await saveTracked()
+          break
+        case "keep-index":
+          await saveTracked({ keepIndex: true })
+          break
+        case "include-untracked":
+          await saveFromMenu({ includeUntracked: true })
+          break
+        case "staged":
+          await saveStaged()
+          break
+        case "unstaged":
+          await saveTracked({ mode: "unstaged" })
+          break
+      }
     }
 
     ctx.commands.register({

@@ -102,6 +102,35 @@ const rowsSource = `
   })
 `
 
+const scrollingRowsSource = `
+  /** @jsxImportSource @opentui/react */
+  import { defineExtension, useListCursor, type PaneProps } from "laziergit"
+
+  const items = Array.from({ length: 30 }, (_, index) => "row-" + String(index).padStart(2, "0"))
+
+  export default defineExtension({
+    name: "scrolling-rows",
+    activate(ctx) {
+      function RowsPane({ focused }: PaneProps) {
+        const cursor = useListCursor({ items, idPrefix: "scrolling-rows", noun: "row" })
+        return (
+          <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
+            {items.map((row, index) => (
+              <text
+                key={row}
+                id={cursor.rowId(index)}
+                content={(focused && index === cursor.index ? "> " : "  ") + row}
+              />
+            ))}
+          </scrollbox>
+        )
+      }
+
+      ctx.panes.register({ id: "scrolling-rows", title: "Scrolling rows", component: RowsPane })
+    },
+  })
+`
+
 const decorationsSource = `
   import { defineExtension } from "laziergit"
 
@@ -187,6 +216,22 @@ async function withExtensions(harness: Harness, sources: Record<string, string>,
 }
 
 describe("useListCursor", () => {
+  it("keeps two upcoming rows visible by default in every scrolling list", async () => {
+    const harness = await createHarness({ height: 12 })
+    await withExtensions(harness, { "scrolling-rows.tsx": scrollingRowsSource })
+    const names = Array.from({ length: 30 }, (_, index) => `row-${String(index).padStart(2, "0")}`)
+    const initiallyVisibleLast = names.findLastIndex((name) => frame(harness).includes(name))
+    expect(initiallyVisibleLast).toBeGreaterThan(2)
+    expect(initiallyVisibleLast).toBeLessThan(names.length - 2)
+
+    const selectedIndex = initiallyVisibleLast - 1
+    for (let index = 0; index < selectedIndex; index += 1) await press(harness, "j")
+    await waitForFrame(harness, `> ${names[selectedIndex]}`)
+
+    expect(frame(harness)).toContain(names[selectedIndex + 1] as string)
+    expect(frame(harness)).toContain(names[selectedIndex + 2] as string)
+  })
+
   it("moves to the row clicked with the mouse", async () => {
     const harness = await createHarness()
     await withExtensions(harness, { "rows.tsx": rowsSource })

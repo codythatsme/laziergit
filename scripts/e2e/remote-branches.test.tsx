@@ -159,18 +159,18 @@ it("keeps local and remote branches in pane 2 and cycles its tabs with 2 or brac
 
   await startNumberedLayout(harness)
   await press(harness, "2")
-  await waitForFrame(harness, "[Local branches] - Remote")
+  await waitForFrame(harness, "[Local] - Remote")
 
   await press(harness, "2")
-  await waitForFrame(harness, "Local branches - [Remote]")
+  await waitForFrame(harness, "Local - [Remote]")
 
   await press(harness, "2")
-  await waitForFrame(harness, "[Local branches] - Remote")
+  await waitForFrame(harness, "[Local] - Remote")
 
   await press(harness, "]")
-  await waitForFrame(harness, "Local branches - [Remote]")
+  await waitForFrame(harness, "Local - [Remote]")
   await press(harness, "[")
-  await waitForFrame(harness, "[Local branches] - Remote")
+  await waitForFrame(harness, "[Local] - Remote")
 
   await press(harness, "0")
   await press(harness, "z")
@@ -184,10 +184,10 @@ it("supports the single-remote branch workflow", async () => {
   await git(harness, "fetch", "--quiet", "origin")
 
   await start(harness)
-  expect(frame(harness)).toContain("[Local branches] - Remote")
+  expect(frame(harness)).toContain("[Local] - Remote")
 
   await press(harness, "]")
-  await waitForFrame(harness, "Local branches - [Remote]")
+  await waitForFrame(harness, "Local - [Remote]")
   expect(frame(harness)).toContain(" origin")
   expect(frame(harness)).toContain("remote-only")
 
