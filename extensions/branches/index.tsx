@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { TextRenderable } from "@opentui/core"
 import {
   createCell,
   createRowSource,
@@ -20,6 +21,7 @@ import {
   type UpstreamInfo,
 } from "laziergit"
 import { useEffect, useRef } from "react"
+import stringWidth from "string-width"
 
 import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
 import {
@@ -36,6 +38,49 @@ const githubGlyph = ""
 const pullRequestRefreshIntervalMs = 60_000
 const pullRequestQueryConcurrency = 5
 const pullRequestQueryMinimumSize = 10
+const ellipsis = "..."
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+
+/** OpenTUI's built-in truncation preserves both ends. Branches read like paths, so preserve the start. */
+function truncateEnd(value: string, width: number): string {
+  if (width <= 0) return ""
+  if (stringWidth(value) <= width) return value
+  if (width <= ellipsis.length) return ellipsis.slice(0, width)
+
+  const contentWidth = width - ellipsis.length
+  let visible = ""
+  let used = 0
+  for (const { segment } of graphemes.segment(value)) {
+    const segmentWidth = stringWidth(segment)
+    if (used + segmentWidth > contentWidth) break
+    visible += segment
+    used += segmentWidth
+  }
+  return `${visible}${ellipsis}`
+}
+
+function BranchName({ name, color }: { readonly name: string; readonly color: string }) {
+  const text = useRef<TextRenderable>(null)
+
+  const resize = (width: number): void => {
+    const visible = truncateEnd(name, width)
+    if (text.current !== null && text.current.plainText !== visible) text.current.content = visible
+  }
+
+  return (
+    <box
+      flexBasis={stringWidth(name)}
+      flexShrink={1}
+      minWidth={0}
+      overflow="hidden"
+      onSizeChange={function () {
+        resize(this.width)
+      }}
+    >
+      <text ref={text} width="100%" wrapMode="none" content={name} fg={color} />
+    </box>
+  )
+}
 
 function divergence(upstream: UpstreamInfo | null): string {
   if (upstream === null || upstream.gone) return ""
@@ -540,9 +585,10 @@ export default defineExtension({
     })
 
     /**
-     * Substantial repository writes are shown beside the checked-out branch instead of in the
-     * app-wide status line. Kept in a child component so only HEAD subscribes to activity and
-     * owns an animation timer; repositories with hundreds of branches still have one spinner.
+     * Substantial repository writes animate beside the checked-out branch, except fetches,
+     * whose complete loading state belongs in the app-wide status line. The action text lives
+     * there for every operation. Kept in a child component so only HEAD owns an animation timer;
+     * repositories with hundreds of branches still have one spinner.
      */
     function BranchActivity() {
       const theme = useTheme()
@@ -550,13 +596,13 @@ export default defineExtension({
       // operation. Keep an older substantial write visible if one overlaps a stage/unstage.
       const busy =
         useGitActivity().findLast((entry) => entry.label !== "staging" && entry.label !== "unstaging") ?? null
-      const wave = useSpinner(busy !== null)
-      if (busy === null || wave === null) return null
+      const inline = busy !== null && !busy.label.startsWith("fetching")
+      const wave = useSpinner(inline)
+      if (wave === null) return null
 
       return (
         <text wrapMode="none" flexShrink={0}>
           <span fg={theme.accent}>{`  ${wave}`}</span>
-          <span fg={theme.textMuted}>{` ${busy.label}`}</span>
         </text>
       )
     }
@@ -599,13 +645,11 @@ export default defineExtension({
         >
           {/* Keep every status outside the one shrinkable cell. Like LazyGit's width budget,
               a narrow row spends its last columns on state and takes them from the name. */}
-          <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
+          <box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
             <text wrapMode="none" flexShrink={0}>
               <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "* " : "  "}</span>
             </text>
-            <text wrapMode="none" flexShrink={1} minWidth={0} truncate>
-              <span fg={nameColor(branch, theme, dim)}>{branch.name}</span>
-            </text>
+            <BranchName name={branch.name} color={nameColor(branch, theme, dim)} />
             <text wrapMode="none" flexShrink={0}>
               {status === null ? null : (
                 <span fg={dim ? theme.textMuted : toneColor(theme, status.tone)}>{` ${status.glyph}`}</span>

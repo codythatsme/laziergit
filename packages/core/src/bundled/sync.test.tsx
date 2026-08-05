@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test"
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
 import {
@@ -438,21 +439,46 @@ describe("the status line segment", () => {
     expect(frame(harness)).toContain("main")
   })
 
-  it("does not put operation activity in the bottom status segment", async () => {
+  it("puts an operation action at the bottom-right without duplicating its animation", async () => {
     const harness = await startRepo()
     await addOrigin(harness)
     await commitIn(harness.directory, "ahead.txt", "one\n")
     await renderApp(harness)
     await waitForFrame(harness, "main ↑1")
 
-    // Activity is global core state. The sync segment deliberately ignores it now: its
-    // bottom-right responsibility is repository context, while the branches Pane owns the
-    // in-place operation treatment.
-    const end = harness.kernel.git.activity.begin("pushing")
+    const end = harness.kernel.git.activity.begin("committing")
     await waitFor(harness, () => harness.kernel.git.activity.getSnapshot().length === 1, "activity to be revealed")
-    expect(frame(harness)).toContain("main ↑1")
-    expect(frame(harness)).not.toContain("pushing")
-    end()
+    await waitForFrame(harness, "main ↑1 committing")
+    const status = frame(harness)
+      .split("\n")
+      .find((line) => line.includes("main ↑1 committing"))
+    if (status === undefined) throw new Error("Expected the bottom status line")
+    expect(status.trimEnd()).toEndWith("committing")
+    expect(status).not.toMatch(/[\u2800-\u28ff]/u)
+
+    act(() => end())
+    await waitForFrame(harness, (screen) => !screen.includes("committing"))
+  })
+
+  it("puts the complete fetch loader at the bottom-right", async () => {
+    const harness = await startRepo()
+    await addOrigin(harness)
+    await renderApp(harness)
+    await waitForFrame(harness, "main")
+
+    const end = harness.kernel.git.activity.begin("fetching")
+    await waitForFrame(harness, (screen) =>
+      screen.split("\n").some((line) => line.includes("main") && /[\u2800-\u28ff]{3} fetching/u.test(line)),
+    )
+    const status = frame(harness)
+      .split("\n")
+      .find((line) => line.includes("main") && line.includes("fetching"))
+    if (status === undefined) throw new Error("Expected the bottom status line")
+    expect(status.trimEnd()).toEndWith("fetching")
+    expect(status).toMatch(/[\u2800-\u28ff]{3} fetching/u)
+
+    act(() => end())
+    await waitForFrame(harness, (screen) => !screen.includes("fetching"))
   })
 
   it("survives a fetch, which used to collapse it for the rest of the session", async () => {

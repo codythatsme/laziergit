@@ -6,11 +6,14 @@ import {
   option,
   remoteWebUrl,
   useGit,
+  useGitActivity,
   useTheme,
   type Head,
   type Theme,
   type UpstreamInfo,
 } from "laziergit"
+
+import { useSpinner } from "./spinner"
 
 type WithoutBranch = Exclude<Head, { kind: "onBranch" }>
 
@@ -329,6 +332,11 @@ export default defineExtension({
     function SyncSegment() {
       const theme = useTheme()
       const head = useGit((state) => state.head)
+      // Staging belongs to the files Pane. If it overlaps a substantial write, keep showing
+      // the older operation instead of letting a quick stage hide it.
+      const busy =
+        useGitActivity().findLast((entry) => entry.label !== "staging" && entry.label !== "unstaging") ?? null
+      const wave = useSpinner(busy?.label.startsWith("fetching") === true)
 
       const tokens: Token[] = []
       if (head.kind === "detached") {
@@ -338,6 +346,8 @@ export default defineExtension({
       }
 
       tokens.push(...upstreamTokens(head.kind === "onBranch" ? head.upstream : null, theme))
+      if (wave !== null) tokens.push({ key: "activity-spinner", text: wave, color: theme.accent })
+      if (busy !== null) tokens.push({ key: "activity", text: busy.label, color: theme.textMuted })
 
       if (tokens.length === 0) return null
 
