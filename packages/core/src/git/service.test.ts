@@ -299,6 +299,20 @@ it("stages, commits, and refreshes before the caller's await resolves", async ()
   expect(state(service).status.isClean).toBe(true)
 })
 
+it("skips commit hooks when requested", async () => {
+  const repo = await createSeededRepo()
+  const service = await open(repo.path)
+  await repo.write("feature.txt", "feature\n")
+  await service.stage(["feature.txt"])
+  await repo.write(".git/hooks/pre-commit", "#!/bin/sh\necho 'hook must not run' >&2\nexit 1\n")
+  await chmod(join(repo.path, ".git", "hooks", "pre-commit"), 0o755)
+
+  await service.commit("checkpoint", { skipHooks: true })
+
+  expect(state(service).commits.at(0)?.subject).toBe("checkpoint")
+  expect(state(service).status.isClean).toBe(true)
+})
+
 it("rewords a commit without folding the current index into it", async () => {
   const repo = await createSeededRepo()
   const service = await open(repo.path)

@@ -555,7 +555,7 @@ export class GitService {
 
   commit(
     message: string,
-    opts: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; messageOnly?: boolean } = {},
+    opts: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; skipHooks?: boolean; messageOnly?: boolean } = {},
   ): Promise<void> {
     // Without `--amend`, git reads `--only` with no paths as "commit no content": an empty
     // commit would land while the staged index silently stayed behind.
@@ -568,6 +568,7 @@ export class GitService {
       ...(opts.allowEmpty === true || opts.messageOnly === true ? ["--allow-empty"] : []),
       ...(opts.messageOnly === true ? ["--only"] : []),
       ...(opts.signoff === true ? ["--signoff"] : []),
+      ...(opts.skipHooks === true ? ["--no-verify"] : []),
       "--message",
       message,
     ])
