@@ -91,9 +91,9 @@ export function recoverModifiedBackspace(
 }
 
 /**
- * OpenTUI 0.4.4 enables xterm modifyOtherKeys level 1 while detecting Kitty support; level 2
- * makes terminals report modified special keys more consistently. OpenTUI still owns cleanup
- * and will reset the mode on shutdown (or before enabling Kitty).
+ * OpenTUI enables xterm modifyOtherKeys level 1 while detecting Kitty support; level 2 makes
+ * terminals report modified special keys more consistently. OpenTUI still owns cleanup and will
+ * reset the mode on shutdown (or before enabling Kitty).
  */
 export function enableLegacyModifiedKeys(
   capabilities: TerminalCapabilities | null,

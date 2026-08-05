@@ -23,6 +23,7 @@ import {
 installHarnessLifecycle()
 
 const originalPath = process.env.PATH
+const githubMarkFallback = "▜▟"
 
 afterEach(() => {
   process.env.PATH = originalPath
@@ -814,7 +815,7 @@ describe("what a row says about its upstream", () => {
     ])
 
     await start(harness)
-    await waitForFrame(harness, "* main ")
+    await waitForFrame(harness, `* main ${githubMarkFallback}`)
     const row = frame(harness)
       .split("\n")
       .find((line) => line.includes("* main"))
@@ -861,7 +862,7 @@ describe("what a row says about its upstream", () => {
       // Never strand the native stub if the responsiveness assertion fails: Windows keeps
       // the temporary repository locked until this deliberately blocked process exits.
       await gh.releaseGraphql()
-      await waitForFrame(harness, "* main ")
+      await waitForFrame(harness, `* main ${githubMarkFallback}`)
     }
   }, 30_000)
 
@@ -883,7 +884,7 @@ describe("what a row says about its upstream", () => {
     ])
 
     await start(harness)
-    await waitForFrame(harness, "* main ", { timeoutMs: 500 })
+    await waitForFrame(harness, `* main ${githubMarkFallback}`, { timeoutMs: 500 })
     expect((await gh.calls()).some((call) => call.startsWith("pr list"))).toBe(false)
   }, 30_000)
 
@@ -916,7 +917,7 @@ describe("what a row says about its upstream", () => {
     await gh.releaseGraphql()
     // Waiting for the visible result proves the released command finished and prevents
     // Windows teardown from racing a native process that still owns the temp repository.
-    await waitForFrame(harness, "* main ")
+    await waitForFrame(harness, `* main ${githubMarkFallback}`)
   }, 30_000)
 
   it("draws a branch whose upstream was deleted in the danger colour", async () => {
@@ -980,5 +981,36 @@ describe("what a row says about its upstream", () => {
     expect(syncedLine.indexOf("...")).toBeLessThan(syncedLine.indexOf("✓"))
     expect(syncedLine.slice(syncedLine.indexOf("...") + 3, syncedLine.indexOf("✓")).trim()).toBe("")
     expect(frame(harness)).not.toContain("narrow-column")
+  }, 30_000)
+
+  it("keeps the native pull-request mark visible after truncating a long branch name", async () => {
+    const harness = await createHarness({ git: true, width: 60 })
+    await seed(harness)
+    await addGithubOrigin(harness)
+    const branch = "feature/native-logo-PROJ-1234-a-name-that-cannot-fit-in-a-narrow-column"
+    await git(harness, "checkout", "--quiet", "-b", branch)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", branch)
+    const gh = await installGh(harness)
+    await gh.setPullRequests([
+      {
+        headRefName: branch,
+        headRepositoryOwner: { login: "acme" },
+        state: "OPEN",
+        isDraft: false,
+        url: "https://github.com/acme/tools/pull/42",
+        createdAt: "2026-08-04T00:00:00Z",
+      },
+    ])
+
+    await start(harness)
+    await waitForFrame(harness, (screen) => screen.includes("...") && screen.includes(githubMarkFallback))
+
+    const row = frame(harness)
+      .split("\n")
+      .find((line) => line.includes("feature/native-"))
+    if (row === undefined) throw new Error("Expected the long pull-request branch row")
+    expect(row.indexOf("...")).toBeLessThan(row.indexOf(githubMarkFallback))
+    expect(row.slice(row.indexOf("...") + 3, row.indexOf(githubMarkFallback)).trim()).toBe("")
+    expect(row).not.toContain("narrow-column")
   }, 30_000)
 })

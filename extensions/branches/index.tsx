@@ -17,13 +17,13 @@ import {
   type Head,
   type PaneProps,
   type Theme,
-  type Tone,
   type UpstreamInfo,
 } from "laziergit"
 import { useEffect, useRef } from "react"
 import stringWidth from "string-width"
 
 import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
+import { githubMarkSource } from "./github-mark"
 import {
   githubRepository,
   parsePullRequestQuery,
@@ -34,7 +34,6 @@ import {
 } from "./pull-request"
 import { useSpinner } from "./spinner"
 
-const githubGlyph = ""
 const pullRequestRefreshIntervalMs = 60_000
 const pullRequestQueryConcurrency = 5
 const pullRequestQueryMinimumSize = 10
@@ -114,20 +113,6 @@ function canFastForward(branch: Branch): boolean {
 function isUpToDate(branch: Branch): boolean {
   const upstream = branch.upstream
   return upstream !== null && !upstream.gone && upstream.ahead === 0 && upstream.behind === 0
-}
-
-function pullRequestTone(pullRequest: PullRequest): Tone {
-  if (pullRequest.isDraft) return "muted"
-  switch (pullRequest.state.toUpperCase()) {
-    case "OPEN":
-      return "success"
-    case "MERGED":
-      return "info"
-    case "CLOSED":
-      return "danger"
-    default:
-      return "neutral"
-  }
 }
 
 function validateRef(value: string, empty: string): string | null {
@@ -607,6 +592,21 @@ export default defineExtension({
       )
     }
 
+    function PullRequestMark({ dim }: { readonly dim: boolean }) {
+      const theme = useTheme()
+      return (
+        <box flexDirection="row" flexShrink={0}>
+          <text content=" " />
+          <image
+            source={githubMarkSource(theme.text)}
+            fit="fill"
+            protocol="auto"
+            style={{ width: 2, height: 1, flexShrink: 0, opacity: dim ? 0.5 : 1 }}
+          />
+        </box>
+      )
+    }
+
     function BranchRow({
       branch,
       pullRequest,
@@ -627,12 +627,7 @@ export default defineExtension({
       const ahead = divergence(branch.upstream)
       const dim = decoration?.dim === true
       const badge = decoration?.badge
-      const status =
-        pullRequest !== undefined
-          ? { glyph: githubGlyph, tone: pullRequestTone(pullRequest) }
-          : isUpToDate(branch)
-            ? { glyph: "✓", tone: "success" as const }
-            : null
+      const upToDate = pullRequest === undefined && isUpToDate(branch)
 
       return (
         <box
@@ -650,10 +645,9 @@ export default defineExtension({
               <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "* " : "  "}</span>
             </text>
             <BranchName name={branch.name} color={nameColor(branch, theme, dim)} />
+            {pullRequest === undefined ? null : <PullRequestMark dim={dim} />}
             <text wrapMode="none" flexShrink={0}>
-              {status === null ? null : (
-                <span fg={dim ? theme.textMuted : toneColor(theme, status.tone)}>{` ${status.glyph}`}</span>
-              )}
+              {upToDate ? <span fg={dim ? theme.textMuted : theme.success}> ✓</span> : null}
               {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}
               {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
             </text>

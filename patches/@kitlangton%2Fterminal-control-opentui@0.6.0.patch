@@ -1,0 +1,13 @@
+diff --git a/package.json b/package.json
+index 623648f778df0202aabaa55ef20ad90c9cca05cc..33b9e6b9a2e85808a521c7eb8fbedf75f6e3cd4a 100644
+--- a/package.json
++++ b/package.json
+@@ -36,7 +36,7 @@
+     "release:check": "node script/release.mjs --check"
+   },
+   "peerDependencies": {
+-    "@opentui/core": ">=0.4.1 <0.5.0"
++    "@opentui/core": ">=0.4.1 <0.6.0"
+   },
+   "devDependencies": {
+     "@opentui/core": "^0.4.5",

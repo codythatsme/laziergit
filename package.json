@@ -10,9 +10,9 @@
     "catalog": {
       "@kitlangton/terminal-control": "0.6.0",
       "@kitlangton/terminal-control-opentui": "0.6.0",
-      "@opentui/core": "0.4.4",
-      "@opentui/keymap": "0.4.4",
-      "@opentui/react": "0.4.4",
+      "@opentui/core": "0.5.1",
+      "@opentui/keymap": "0.5.1",
+      "@opentui/react": "0.5.1",
       "@types/bun": "1.3.5",
       "@types/react": "19.2.0",
       "effect": "4.0.0-beta.83",
@@ -53,9 +53,12 @@
     "typescript": "catalog:"
   },
   "overrides": {
-    "@opentui/core": "catalog:",
+    "@opentui/core": "0.5.1",
     "@opentui/keymap": "catalog:",
     "@opentui/react": "catalog:"
   },
-  "packageManager": "bun@1.4.0-canary.1"
+  "packageManager": "bun@1.4.0-canary.1",
+  "patchedDependencies": {
+    "@kitlangton/terminal-control-opentui@0.6.0": "patches/@kitlangton%2Fterminal-control-opentui@0.6.0.patch"
+  }
 }
