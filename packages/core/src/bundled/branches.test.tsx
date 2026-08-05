@@ -252,20 +252,23 @@ describe("operation activity", () => {
     }
   })
 
-  it("animates a commit loader at the end of the checked-out branch row", async () => {
+  it("keeps only the commit animation at the end of the checked-out branch row", async () => {
     const harness = await createHarness({ git: true })
     await seed(harness)
     await git(harness, "branch", "other")
     await start(harness)
 
     const end = harness.kernel.git.activity.begin("committing")
-    await waitForFrame(harness, "committing")
+    const loader = /[\u2800-\u28ff]{3}/u
+    await waitForFrame(harness, (screen) =>
+      screen.split("\n").some((line) => line.includes("* main") && loader.test(line)),
+    )
 
     const frames: string[] = []
-    while (frames.length < 12 && frame(harness).includes("committing")) {
+    while (frames.length < 12 && harness.kernel.git.activity.getSnapshot().length > 0) {
       const line = frame(harness)
         .split("\n")
-        .find((row) => row.includes("committing"))
+        .find((row) => row.includes("* main") && loader.test(row))
       if (line === undefined) break
       frames.push(line)
       await act(async () => {
@@ -277,22 +280,41 @@ describe("operation activity", () => {
 
     for (const line of frames) {
       expect(line).toContain("* main")
-      const activityEnd = line.indexOf("committing") + "committing".length
+      expect(line).not.toContain("committing")
+      const activityEnd = line.search(loader) + 3
       expect(activityEnd).toBeGreaterThan(line.indexOf("main"))
-      // Right-aligned in the row: after the label there is only the Pane's own padding and
+      // Right-aligned in the row: after the animation there is only the Pane's own padding and
       // border, not unused row width.
       const borderDistance = line.slice(activityEnd).indexOf("│")
       expect(borderDistance).toBeGreaterThanOrEqual(0)
       expect(borderDistance).toBeLessThanOrEqual(2)
-      expect(line).not.toContain("  other  committing")
+      const other = line.slice(line.indexOf("other"))
+      expect(loader.test(other)).toBe(false)
     }
     const glyphs = new Set(frames.flatMap((line) => Array.from(line).filter((char) => char >= "⠀" && char <= "⣿")))
     expect(glyphs.size).toBeGreaterThan(3)
 
     act(() => end())
-    await waitFor(harness, () => !frame(harness).includes("committing"), "the inline loader to withdraw")
+    await waitFor(harness, () => !loader.test(frame(harness)), "the inline loader to withdraw")
     expect(frame(harness)).toContain("* main")
     expect(harness.kernel.diagnostics.getSnapshot()).toEqual([])
+  })
+
+  it("does not show a fetch loader in the checked-out branch row", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await start(harness)
+
+    const end = harness.kernel.git.activity.begin("fetching")
+    await waitFor(harness, () => harness.kernel.git.activity.getSnapshot().length === 1, "fetching to be revealed")
+    const headRow = frame(harness)
+      .split("\n")
+      .find((line) => line.includes("* main"))
+    if (headRow === undefined) throw new Error("Expected the checked-out branch row")
+    expect(headRow).not.toContain("fetching")
+    expect(headRow).not.toMatch(/[\u2800-\u28ff]/u)
+
+    act(() => end())
   })
 })
 
@@ -939,20 +961,24 @@ describe("what a row says about its upstream", () => {
     await git(harness, "branch", "--set-upstream-to", "origin/main", "--", synced)
 
     await start(harness)
-    await waitForFrame(harness, "↓1")
+    await waitForFrame(harness, (screen) => screen.includes("↓1") && screen.includes("..."))
 
-    // The name owns the shrinkable middle cell. Its ellipsis appears before fixed-width status,
-    // and none of its hidden tail can wrap into the next branch's row.
+    // The name owns the shrinkable middle cell. Its ellipsis ends the visible prefix before
+    // fixed-width status, and none of its hidden tail can wrap into the next branch's row.
     const lines = frame(harness).split("\n")
     const behindLine = lines.find((line) => line.includes("↓1"))
     const syncedLine = lines.find((line) => line.includes("feature/") && line.includes("✓"))
     if (behindLine === undefined || syncedLine === undefined) throw new Error("Expected both long branch rows")
     expect(behindLine).toContain("...")
+    expect(behindLine).toContain("feature/behind-")
     expect(behindLine).toContain("↓1")
     expect(behindLine.indexOf("...")).toBeLessThan(behindLine.indexOf("↓1"))
+    expect(behindLine.slice(behindLine.indexOf("...") + 3, behindLine.indexOf("↓1")).trim()).toBe("")
     expect(syncedLine).toContain("...")
+    expect(syncedLine).toContain("feature/synced-")
     expect(syncedLine).toContain("✓")
     expect(syncedLine.indexOf("...")).toBeLessThan(syncedLine.indexOf("✓"))
+    expect(syncedLine.slice(syncedLine.indexOf("...") + 3, syncedLine.indexOf("✓")).trim()).toBe("")
     expect(frame(harness)).not.toContain("narrow-column")
   }, 30_000)
 })

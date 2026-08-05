@@ -18,9 +18,11 @@
       "name": "@laziergit/extension-branches",
       "version": "0.0.0",
       "dependencies": {
+        "@opentui/core": "catalog:",
         "@opentui/react": "catalog:",
         "laziergit": "workspace:*",
         "react": "catalog:",
+        "string-width": "catalog:",
       },
       "devDependencies": {
         "@types/react": "catalog:",
@@ -187,6 +189,7 @@
     "oxlint": "1.74.0",
     "oxlint-tsgolint": "0.25.0",
     "react": "19.2.0",
+    "string-width": "7.2.0",
     "typescript": "5.9.3",
   },
   "packages": {
