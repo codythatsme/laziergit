@@ -34,6 +34,18 @@ const branchesExtension = resolve(import.meta.dir, "..", "..", "..", "..", "exte
 const commitsExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commits")
 const commitFlowExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commit-flow")
 
+/** Most branch tests do not enter commit history, so keep their dependency lightweight. */
+const commitsStub = `
+  import { defineExtension } from "laziergit"
+
+  export default defineExtension({
+    name: "commits",
+    activate() {
+      return { renderBrowser: () => null }
+    },
+  })
+`
+
 /**
  * Stands in for the diff Extension, which `branches` needs. A stub keeps this file about
  * branches: the {@link DiffTarget} the pane asks for is on screen where an assertion can see
@@ -208,23 +220,39 @@ async function commit(harness: Harness, contents: string, message: string, date?
  * unmounts — the one that was showing. Mutations made behind the app's back reach the store
  * through {@link refreshGit}, so the fingerprint poll is parked out of every test's way.
  */
-async function start(harness: Harness, focus: "branches" | "diff" | "tabbed" = "branches"): Promise<void> {
-  const columns =
-    focus === "tabbed"
+async function start(
+  harness: Harness,
+  focus: "branches" | "diff" | "tabbed" = "branches",
+  realCommits = false,
+): Promise<void> {
+  const columns = realCommits
+    ? focus === "tabbed"
       ? `[[["branches", "commits", "diff"]]]`
       : focus === "branches"
         ? `[[["branches", "commits"]], ["diff"]]`
         : `[["diff"], [["branches", "commits"]]]`
-  await Promise.all([
+    : focus === "tabbed"
+      ? `[[["branches", "diff"]]]`
+      : focus === "branches"
+        ? `[["branches"], ["diff"]]`
+        : `[["diff"], ["branches"]]`
+  const setup = [
     symlink(branchesExtension, join(harness.bundled, "branches")),
-    symlink(commitsExtension, join(harness.bundled, "commits")),
-    symlink(commitFlowExtension, join(harness.bundled, "commit-flow")),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
     writeFile(
       harness.configFiles.repo,
       `{ "layout": { "columns": ${columns} }, "git": { "refreshIntervalMs": 60000 } }`,
     ),
-  ])
+  ]
+  if (realCommits) {
+    setup.push(
+      symlink(commitsExtension, join(harness.bundled, "commits")),
+      symlink(commitFlowExtension, join(harness.bundled, "commit-flow")),
+    )
+  } else {
+    setup.push(writeFile(join(harness.repo, "commits.ts"), commitsStub))
+  }
+  await Promise.all(setup)
   await renderApp(harness)
   if (focus === "branches") await runCommand(harness, "branches.focus")
 }
@@ -259,7 +287,7 @@ describe("viewing a branch's commits and files", () => {
     await writeFile(join(harness.directory, "main-only.txt"), "main\n")
     await git(harness, "add", "main-only.txt")
     await git(harness, "commit", "--quiet", "--message", "main only")
-    await start(harness)
+    await start(harness, "branches", true)
 
     await press(harness, "j")
     await waitForFrame(harness, "diff branch topic path=none")
