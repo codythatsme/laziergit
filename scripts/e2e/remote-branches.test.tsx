@@ -19,6 +19,8 @@ import {
 installHarnessLifecycle()
 
 const branchesExtension = resolve(import.meta.dir, "..", "..", "extensions", "branches")
+const commitsExtension = resolve(import.meta.dir, "..", "..", "extensions", "commits")
+const commitFlowExtension = resolve(import.meta.dir, "..", "..", "extensions", "commit-flow")
 const remoteBranchesExtension = resolve(import.meta.dir, "..", "..", "extensions", "remote-branches")
 
 const filesStub = `
@@ -106,6 +108,8 @@ async function commit(harness: Harness, contents: string, message: string): Prom
 async function start(harness: Harness): Promise<void> {
   await Promise.all([
     symlink(branchesExtension, join(harness.bundled, "branches")),
+    symlink(commitsExtension, join(harness.bundled, "commits")),
+    symlink(commitFlowExtension, join(harness.bundled, "commit-flow")),
     symlink(remoteBranchesExtension, join(harness.bundled, "remote-branches")),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
     writeFile(
@@ -119,6 +123,8 @@ async function start(harness: Harness): Promise<void> {
 async function startNumberedLayout(harness: Harness): Promise<void> {
   await Promise.all([
     symlink(branchesExtension, join(harness.bundled, "branches")),
+    symlink(commitsExtension, join(harness.bundled, "commits")),
+    symlink(commitFlowExtension, join(harness.bundled, "commit-flow")),
     symlink(remoteBranchesExtension, join(harness.bundled, "remote-branches")),
     writeFile(join(harness.repo, "files.tsx"), filesStub),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),

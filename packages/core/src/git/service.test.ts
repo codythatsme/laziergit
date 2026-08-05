@@ -103,6 +103,7 @@ it("loads the configured history window from a branch other than HEAD", async ()
 
   const service = await open(repo.path)
   service.setConfig({ ...defaultGitConfig, commitLimit: 1 })
+  await service.refresh()
 
   expect((await service.commits("refs/heads/topic")).map((commit) => commit.subject)).toEqual(["topic commit"])
   expect(state(service).commits.map((commit) => commit.subject)).toEqual(["first commit"])
