@@ -373,6 +373,13 @@ describe("sync.pull and sync.fetch", () => {
     })
     await renderApp(harness)
 
+    const pullSettled = Promise.withResolvers<void>()
+    const unsubscribe = harness.kernel.notifications.subscribe(() => {
+      if (toasts(harness).some((toast) => toast.includes("Pulled main") || toast.startsWith("error:"))) {
+        pullSettled.resolve()
+      }
+    })
+
     try {
       await fetchStarted.promise
       await press(harness, "p")
@@ -380,10 +387,15 @@ describe("sync.pull and sync.fetch", () => {
       expect(toasts(harness).join("\n")).not.toContain("try again when it finishes")
       expect(await git(harness.directory, "rev-parse", "main")).toBe(before)
     } finally {
-      releaseFetch.resolve()
+      await act(async () => {
+        releaseFetch.resolve()
+        // Keep React's test boundary open through the fetch refresh, queued pull, and toast.
+        await pullSettled.promise
+      })
+      unsubscribe()
     }
 
-    await waitForToast(harness, "Pulled main")
+    expect(toasts(harness).join("\n")).toContain("Pulled main")
     expect(await git(harness.directory, "rev-parse", "main")).toEqual(await git(theirs, "rev-parse", "HEAD"))
   })
 
