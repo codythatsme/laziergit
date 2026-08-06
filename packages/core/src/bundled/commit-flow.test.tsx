@@ -426,6 +426,30 @@ describe("commit-flow popup", () => {
     expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("first commit\n")
   }, 30_000)
 
+  it("opens a blank WIP message with w and commits without running hooks", async () => {
+    const harness = await repository()
+    await seed(harness)
+    const hook = join(harness.directory, ".git", "hooks", "pre-commit")
+    await writeFile(hook, "#!/bin/sh\necho 'blocking hook ran' >&2\nexit 1\n")
+    await chmod(hook, 0o755)
+    await start(harness)
+    await stageFile(harness, "feature.txt")
+    await focusFiles(harness)
+
+    await press(harness, "w")
+
+    const opened = frame(harness)
+    expect(opened).toContain("hooks skipped")
+    expect(opened).toContain(popupMarker)
+    expect(opened).not.toContain("WIP")
+
+    await press(harness, () => void harness.setup.mockInput.typeText("checkpoint"))
+    await press(harness, submit(harness))
+    await waitForFrame(harness, "Committed")
+
+    expect(await git(harness.directory, "log", "-1", "--format=%s")).toBe("checkpoint\n")
+  }, 30_000)
+
   it("settles begin when the flow closes, whichever way it closes", async () => {
     const harness = await repository()
     await seed(harness)

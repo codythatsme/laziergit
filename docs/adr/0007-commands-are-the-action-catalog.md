@@ -32,7 +32,7 @@ No production Extension contributed a `menus.extend` splice; the only splice con
 - Files and folders: `s/u/m/d/o/a/r/shift+d` becomes `space/u/space/d/o/a/r/shift+d`.
 - Commits: `return/c/v/o/y/q/r/d/s/m/h` keeps the same direct keys.
 - Stash: `a/p/d/b` becomes `space/p/d/b`.
-- Commit flow: `c` stays contextual to Files; submit/signoff/stage-all/amend/discard stay
+- Commit flow: `c` and no-hooks `w` stay contextual to Files; submit/signoff/stage-all/amend/discard stay
   available through the palette without requiring a persistent Commit pane.
 - Sync: `p/u/o/l/r/f/n/b/y` becomes `shift+p/u/o/p/r/f/n/b/y`.
 - Diff: `v/y/s/u/r` keeps the same direct keys.

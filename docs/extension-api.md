@@ -931,6 +931,8 @@ tagged with the extension name, and routed to the log file / debug pane.
         amend?: boolean;
         allowEmpty?: boolean;
         signoff?: boolean;
+        /** Skip the pre-commit and commit-msg hooks (`git commit --no-verify`). */
+        skipHooks?: boolean;
         /**
          * Amend the message without including anything currently staged. Rejects unless
          * `amend` is also set: a plain commit has no previous content to keep.
@@ -2012,14 +2014,16 @@ are Commands (§1.7), including operations contributed to another Extension's Ro
      * composed message (conventional-commit, changelog tooling) to the
      * standard commit UX instead of committing blind. Resolves when the flow
      * closes, and says which way it closed, so a composer knows whether to
-     * keep its draft. `signoff` is here because the bundled commit flow
-     * offers it and a bundled extension holds no privilege an author does
-     * not (ADR-0001).
+     * keep its draft. `signoff` and `skipHooks` are here because the bundled
+     * commit flow offers them and a bundled extension holds no privilege an
+     * author does not (ADR-0001).
      */
     begin(opts?: {
       message?: string;
       amend?: boolean;
       signoff?: boolean;
+      /** Commit with `--no-verify`, bypassing the pre-commit and commit-msg hooks. */
+      skipHooks?: boolean;
       /** Amend only the message, leaving the current index out of the commit. Requires `amend`. */
       messageOnly?: boolean;
     }): Promise<CommitFlowResult>;

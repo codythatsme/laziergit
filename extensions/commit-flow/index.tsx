@@ -20,6 +20,7 @@ interface CommitDraft {
   readonly initial: string
   readonly amend: boolean
   readonly signoff: boolean
+  readonly skipHooks: boolean
   readonly messageOnly: boolean
 }
 
@@ -35,6 +36,7 @@ interface OpenOptions {
   readonly message?: string
   readonly amend?: boolean
   readonly signoff?: boolean
+  readonly skipHooks?: boolean
   readonly messageOnly?: boolean
 }
 
@@ -45,6 +47,7 @@ function countLabel(count: number): string {
 function editingTitle(draft: CommitDraft, stagedCount: number): string {
   const parts = [draft.amend ? "Amend the last commit" : "Commit", countLabel(stagedCount)]
   if (draft.signoff) parts.push("signoff")
+  if (draft.skipHooks) parts.push("hooks skipped")
   return parts.join("  ·  ")
 }
 
@@ -133,6 +136,7 @@ export default defineExtension({
           await ctx.git.commit(message, {
             amend: flow.draft.amend,
             signoff: flow.draft.signoff,
+            skipHooks: flow.draft.skipHooks,
             messageOnly: flow.draft.messageOnly,
           })
         } catch (error) {
@@ -181,6 +185,7 @@ export default defineExtension({
           initial,
           amend,
           signoff: options.signoff === true,
+          skipHooks: options.skipHooks === true,
           messageOnly: options.messageOnly === true,
         },
         message: initial,
@@ -213,6 +218,13 @@ export default defineExtension({
       // A Pane id is a name, not a live object: this needs no `needs`, and is inert without it.
       pane: "files",
       run: () => start({}),
+    })
+    ctx.commands.register({
+      id: "commit-flow.commit-without-hooks",
+      title: "Commit staged changes without hooks",
+      keys: "w",
+      pane: "files",
+      run: () => start({ skipHooks: true }),
     })
 
     // The extra flow actions remain discoverable in the palette, but no longer need a
@@ -277,6 +289,7 @@ export default defineExtension({
           message: opts?.message,
           amend: opts?.amend,
           signoff: opts?.signoff,
+          skipHooks: opts?.skipHooks,
           messageOnly: opts?.messageOnly,
         }),
     }

@@ -4,6 +4,7 @@ import {
   isStaged,
   isUntracked,
   literalPathspec,
+  type Commit,
   type Disposable,
   type GitOutput,
   type GitState,
@@ -189,6 +190,14 @@ export class GitService {
 
   subscribeSelector<T>(selector: (state: GitState) => T, onChange: (value: T, previous: T) => void): Disposable {
     return this.store.subscribeSelector(selector, onChange)
+  }
+
+  /** Reads the same bounded commit shape as the snapshot, but from any branch or other ref. */
+  commits(ref: string): Promise<readonly Commit[]> {
+    const args = commitArgs(this.#config.commitLimit, ref)
+    return this.#run(
+      this.#withRepository(args, (root) => Effect.map(execGit(root, args), (output) => parseCommits(output.stdout))),
+    )
   }
 
   /**
@@ -555,7 +564,7 @@ export class GitService {
 
   commit(
     message: string,
-    opts: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; messageOnly?: boolean } = {},
+    opts: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; skipHooks?: boolean; messageOnly?: boolean } = {},
   ): Promise<void> {
     // Without `--amend`, git reads `--only` with no paths as "commit no content": an empty
     // commit would land while the staged index silently stayed behind.
@@ -568,6 +577,7 @@ export class GitService {
       ...(opts.allowEmpty === true || opts.messageOnly === true ? ["--allow-empty"] : []),
       ...(opts.messageOnly === true ? ["--only"] : []),
       ...(opts.signoff === true ? ["--signoff"] : []),
+      ...(opts.skipHooks === true ? ["--no-verify"] : []),
       "--message",
       message,
     ])
