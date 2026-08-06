@@ -157,6 +157,8 @@ export class GitService {
   readonly #repoRoot: string
   readonly #report: (message: string, error?: unknown) => void
   readonly #inflight = new Set<Promise<unknown>>()
+  /** Every accepted Promise-face write, in invocation order. Reads remain concurrent. */
+  #writeQueue: Promise<void> = Promise.resolve()
   #config: GitConfig
   #repository: Repository | null = null
   #opened: Promise<void> | undefined
@@ -413,16 +415,25 @@ export class GitService {
   }
 
   /**
-   * {@link #run}, plus an entry in {@link activity} for as long as the work lasts. Wrapped
-   * around the promise so it ends on every exit, and so it covers `#refreshed`'s follow-up
-   * read: until the store catches up the screen still shows the old repository.
+   * Queues a Promise-face write behind every earlier one, then runs it with an
+   * {@link activity} entry. The entry covers `#refreshed`'s follow-up read too: until the
+   * store catches up the screen still shows the old repository. Either outcome releases the
+   * next write in the queue.
    */
   #announced<A>(args: readonly string[], effect: Effect.Effect<A, GitError>): Promise<A> {
     const subcommand = subcommandOf(args)
-    // Nothing to name. `isMutating` already assumes the worst about it and refreshes.
-    if (subcommand === null) return this.#run(effect)
-    const end = this.activity.begin(labelFor(args, subcommand.name))
-    return this.#run(effect).finally(end)
+    const queued = this.#writeQueue.then(() => {
+      // Nothing to name. `isMutating` already assumes the worst about it and refreshes. Do
+      // not publish new activity after synchronous shutdown has cleared the store.
+      if (subcommand === null || this.#stopped) return this.#run(effect)
+      const end = this.activity.begin(labelFor(args, subcommand.name))
+      return this.#run(effect).finally(end)
+    })
+    this.#writeQueue = queued.then(
+      () => undefined,
+      () => undefined,
+    )
+    return queued
   }
 
   /**
@@ -687,7 +698,7 @@ export class GitService {
   async drain(): Promise<void> {
     this.#stopped = true
     this.#disarmPoll()
-    await Promise.allSettled([this.#opened, this.#refreshing, ...this.#inflight])
+    await Promise.allSettled([this.#opened, this.#writeQueue, this.#refreshing, ...this.#inflight])
     // After the wait: until the writes settle they really are in flight.
     this.activity.clear()
   }

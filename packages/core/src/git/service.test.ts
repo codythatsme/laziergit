@@ -1,4 +1,5 @@
-import { afterEach, expect, it } from "bun:test"
+import { afterEach, expect, it, spyOn } from "bun:test"
+import { Effect } from "effect"
 import { chmod, mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import {
@@ -659,6 +660,56 @@ it("resolves a write's own refresh against reads taken after the write", async (
 
   expect(stagedPaths(service)).toEqual(["late.txt"])
   await inFlight
+})
+
+it("queues a raw fetch from one caller ahead of a pull from another", async () => {
+  const repo = await createSeededRepo()
+  await addOrigin(repo)
+  await repo.git("checkout", "--quiet", "-b", "remote-work")
+  await repo.write("remote.txt", "remote\n")
+  await repo.git("add", "remote.txt")
+  await repo.commit("remote work")
+  await repo.git("push", "--quiet", "origin", "remote-work:main")
+  await repo.git("checkout", "--quiet", "main")
+  const service = await open(repo.path)
+
+  const fetchStarted = Promise.withResolvers<void>()
+  const releaseFetch = Promise.withResolvers<void>()
+  const realRawEffect = service.rawEffect.bind(service)
+  let pullStarted = false
+  spyOn(service, "rawEffect").mockImplementation((args, options) => {
+    const invocation = realRawEffect(args, options)
+    if (args[0] === "fetch") {
+      return Effect.flatMap(
+        Effect.sync(() => fetchStarted.resolve()),
+        () =>
+          Effect.flatMap(
+            Effect.promise(() => releaseFetch.promise),
+            () => invocation,
+          ),
+      )
+    }
+    if (args[0] === "pull") {
+      return Effect.flatMap(
+        Effect.sync(() => {
+          pullStarted = true
+        }),
+        () => invocation,
+      )
+    }
+    return invocation
+  })
+
+  const fetching = service.raw(["fetch", "--all"])
+  await fetchStarted.promise
+  const pulling = service.raw(["pull"])
+  await Promise.resolve()
+  expect(pullStarted).toBe(false)
+
+  releaseFetch.resolve()
+  await Promise.all([fetching, pulling])
+  expect(pullStarted).toBe(true)
+  expect((await repo.git("rev-parse", "main")).trim()).toBe((await repo.git("rev-parse", "origin/main")).trim())
 })
 
 it("fails a raw invocation with the exit code and stderr git reported", async () => {
