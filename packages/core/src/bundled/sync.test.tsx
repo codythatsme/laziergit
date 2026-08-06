@@ -403,6 +403,16 @@ describe("sync.pull and sync.fetch", () => {
     const harness = await startRepo({ autoFetch: true, fetchIntervalMs: 250 })
     const origin = await addOrigin(harness)
     const theirs = await cloneOf(origin)
+    const discoveredSecondCommit = Promise.withResolvers<void>()
+    const realRaw = harness.kernel.git.raw.bind(harness.kernel.git)
+    spyOn(harness.kernel.git, "raw").mockImplementation(async (args, options) => {
+      const output = await realRaw(args, options)
+      const head = harness.kernel.git.getSnapshot().head
+      if (args.includes("--no-write-fetch-head") && head.kind === "onBranch" && head.upstream?.behind === 2) {
+        discoveredSecondCommit.resolve()
+      }
+      return output
+    })
 
     await commitIn(theirs, "theirs.txt", "theirs\n")
     await git(theirs, "push", "--quiet", "origin", "main")
@@ -415,6 +425,7 @@ describe("sync.pull and sync.fetch", () => {
     await git(theirs, "push", "--quiet", "origin", "main")
 
     // The next scheduled fetch discovers movement that happened after startup.
+    await act(async () => discoveredSecondCommit.promise)
     await waitForFrame(harness, "main ↓2")
   })
 
