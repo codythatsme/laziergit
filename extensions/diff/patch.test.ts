@@ -109,4 +109,27 @@ index 1234567..0000000
  second
 `)
   })
+
+  it("keeps a partial reverse-deletion patch valid by restoring only the selected line", () => {
+    const deleted = present(
+      createPatchSession(`diff --git a/old.txt b/old.txt
+deleted file mode 100644
+index 1234567..0000000
+--- a/old.txt
++++ /dev/null
+@@ -1,2 +0,0 @@
+-first
+-second
+`),
+    )
+
+    expect(selectPatch(deleted, { reverse: true })).toBe(`diff --git a/old.txt b/old.txt
+deleted file mode 100644
+index 1234567..0000000
+--- a/old.txt
++++ /dev/null
+@@ -1,1 +0,0 @@
+-first
+`)
+  })
 })

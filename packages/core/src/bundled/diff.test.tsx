@@ -13,6 +13,7 @@ import {
   renderApp,
   runCommand,
   settle,
+  waitFor,
   waitForFrame,
   type Harness,
 } from "../test-harness"
@@ -421,6 +422,43 @@ describe("interactive diff workflows", () => {
     expect(await git(diff.harness, "diff", "--name-only", "--", "tracked.txt")).toBe("tracked.txt\n")
   }, 30_000)
 
+  it("unstages one line from a staged deletion without restoring the working-tree file", async () => {
+    const diff = await createDiffHarness()
+    const path = join(diff.harness.directory, "tracked.txt")
+    await rm(path)
+    await git(diff.harness, "add", "tracked.txt")
+    await diff.show("driver.open-staging")
+    await waitForFrame(diff.harness, "staged tracked.txt  [line]")
+    await runCommand(diff.harness, "diff.staging-discard")
+
+    expect(await git(diff.harness, "show", ":tracked.txt")).toBe("one\n")
+    expect(await Bun.file(path).exists()).toBeFalse()
+  }, 30_000)
+
+  it("discards one line from an unstaged deletion without restoring unselected lines", async () => {
+    const diff = await createDiffHarness()
+    const path = join(diff.harness.directory, "tracked.txt")
+    await rm(path)
+    await diff.show("driver.open-staging")
+    await waitForFrame(diff.harness, "unstaged tracked.txt  [line]")
+
+    await press(diff.harness, "d")
+    await waitForFrame(diff.harness, "Discard selected changes?")
+    await press(diff.harness, "y")
+    await waitFor(
+      diff.harness,
+      async () => (await Bun.file(path).exists()) && (await Bun.file(path).text()) === "one\n",
+      "the selected deleted line to be restored",
+    )
+    await waitForFrame(
+      diff.harness,
+      (screen) => screen.includes("-two") && !screen.includes("-one") && !screen.includes("Discard selected changes?"),
+    )
+
+    expect(await git(diff.harness, "diff", "--", "tracked.txt")).toContain("-two")
+    expect(await git(diff.harness, "diff", "--", "tracked.txt")).toContain("-three")
+  }, 30_000)
+
   it("unstages one line from a newly added file without removing the rest of it", async () => {
     const diff = await createDiffHarness()
     await writeFile(join(diff.harness.directory, "new.txt"), "first\nsecond\n")
@@ -467,9 +505,20 @@ describe("interactive diff workflows", () => {
     await diff.show("driver.open-conflict")
     await waitForFrame(diff.harness, "conflict tracked.txt  1/2")
 
+    await runCommand(diff.harness, "diff.next-block")
+    await waitForFrame(diff.harness, "conflict tracked.txt  2/2")
+    await act(async () => diff.harness.kernel.git.refresh())
+    await act(async () => diff.harness.kernel.events.drain())
+    await settle(diff.harness)
+    expect(frame(diff.harness)).toContain("conflict tracked.txt  2/2")
+
     await runCommand(diff.harness, "diff.choose")
-    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).not.toContain("incoming one")
-    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toContain("incoming two")
+    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toContain("incoming one")
+    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).not.toContain("incoming two")
+
+    await act(async () => diff.harness.kernel.git.refresh())
+    await act(async () => diff.harness.kernel.events.drain())
+    await settle(diff.harness)
 
     await runCommand(diff.harness, "diff.undo-conflict")
     expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toBe(conflict)

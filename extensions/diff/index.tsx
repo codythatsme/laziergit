@@ -27,6 +27,7 @@ import {
   moveConflict,
   moveSide,
   parseConflicts,
+  replaceConflictSession,
   sideRange,
   undoConflict,
   type ConflictChoice,
@@ -259,11 +260,11 @@ export default defineExtension({
       }
     }
 
-    async function readConflict(path: string, preferred?: ConflictSession["side"]): Promise<ConflictSession | null> {
+    async function readConflict(path: string, previous?: ConflictSession): Promise<ConflictSession | null> {
       const content = await Bun.file(`${ctx.git.root}/${path}`).text()
       const parsed = parseConflicts(content)
       if (parsed.kind === "malformed") throw new Error(parsed.message)
-      return createConflictSession(content, preferred)
+      return previous === undefined ? createConflictSession(content) : replaceConflictSession(previous, content)
     }
 
     async function fetchStagingPatch(path: string, side: StagingSide): Promise<string> {
@@ -300,7 +301,7 @@ export default defineExtension({
       const open = interaction.get()
       try {
         if (open.kind === "conflict") {
-          const session = await readConflict(open.path, open.session.side)
+          const session = await readConflict(open.path, open.session)
           if (issued !== interactionTicket) return
           if (session === null) {
             interaction.set({ kind: "passive" })

@@ -7,6 +7,7 @@ import {
   moveConflict,
   moveSide,
   parseConflicts,
+  replaceConflictSession,
   splitLines,
   undoConflict,
 } from "./conflicts"
@@ -77,5 +78,19 @@ describe("conflict session", () => {
     const undone = undoConflict(picked)
     expect(undone.content).toBe(session.content)
     expect(undone.conflicts).toHaveLength(2)
+  })
+
+  it("keeps navigation and undo across unchanged refreshes, but drops stale undo after an external edit", () => {
+    const original = moveConflict(present(createConflictSession(ordinary + ordinary + ordinary, "incoming")), 2)
+    const picked = present(chooseConflict(original, "incoming").session)
+    expect(picked.conflictIndex).toBe(1)
+    expect(picked.undo).toHaveLength(1)
+
+    expect(replaceConflictSession(picked, picked.content)).toBe(picked)
+
+    const changed = present(replaceConflictSession(picked, `${picked.content}external\n`))
+    expect(changed.conflictIndex).toBe(1)
+    expect(changed.side).toBe("incoming")
+    expect(changed.undo).toEqual([])
   })
 })

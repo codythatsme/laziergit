@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import {
   createCell,
+  containsConflictMarker,
   createRowSource,
   defineExtension,
   describeGitFailure,
@@ -125,10 +126,6 @@ function pathsOf(change: FileChange): readonly string[] {
 
 function inRepository(head: Head): boolean {
   return head.kind !== "noRepository"
-}
-
-function containsConflictMarkers(contents: string): boolean {
-  return /^<{7,}(?: |\r?$)/m.test(contents) && /^>{7,}(?: |\r?$)/m.test(contents)
 }
 
 /**
@@ -380,7 +377,7 @@ export default defineExtension({
             change.ours === "modified" &&
             change.theirs === "modified" &&
             !contents.includes("\0") &&
-            !containsConflictMarkers(contents)
+            !containsConflictMarker(contents)
           if (resolvedText) {
             await stage([change.path])
             return

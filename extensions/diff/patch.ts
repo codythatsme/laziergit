@@ -161,10 +161,12 @@ function transformedLine(
   line: PatchLine,
   selected: ReadonlySet<number>,
   keepUnselectedAdditions: boolean,
+  omitUnselectedRemovals: boolean,
 ): string | null {
   if (line.kind === "added")
     return selected.has(line.index) ? line.text : keepUnselectedAdditions ? ` ${line.text.slice(1)}` : null
-  if (line.kind === "removed") return selected.has(line.index) ? line.text : ` ${line.text.slice(1)}`
+  if (line.kind === "removed")
+    return selected.has(line.index) ? line.text : omitUnselectedRemovals ? null : ` ${line.text.slice(1)}`
   return line.text
 }
 
@@ -200,6 +202,7 @@ export function selectPatch(session: PatchSession, options: SelectPatchOptions =
   const deletedFile = header.some((line) => line.text.startsWith("deleted file mode ") || line.text === "+++ /dev/null")
   const regularizeNew = options.reverse === true && !complete && newFile
   const regularizeDeleted = options.reverse !== true && !complete && deletedFile
+  const partialReverseDeleted = options.reverse === true && !complete && deletedFile
   output.push(
     ...(regularizeNew
       ? regularFileHeader(header, "new")
@@ -221,7 +224,7 @@ export function selectPatch(session: PatchSession, options: SelectPatchOptions =
         if (previousSurvived) transformed.push(line.text)
         continue
       }
-      const value = transformedLine(line, selected, regularizeNew)
+      const value = transformedLine(line, selected, regularizeNew, partialReverseDeleted)
       previousSurvived = value !== null
       if (value !== null) transformed.push(value)
     }

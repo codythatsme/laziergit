@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import {
+  containsConflictMarker,
   defineExtension,
   describeGitFailure,
   GitError,
@@ -38,16 +39,6 @@ function conflictCount(operation: GitOperation, files: readonly { readonly kind:
   return operation.effective === null ? 0 : files.filter((file) => file.kind === "conflicted").length
 }
 
-function hasConflictMarkers(contents: string): boolean {
-  let start = false
-  for (const line of contents.split(/(?<=\n)/)) {
-    const bare = line.endsWith("\n") ? line.slice(0, -1).replace(/\r$/, "") : line.replace(/\r$/, "")
-    if (/^<{7,}(?: |$)/.test(bare)) start = true
-    if (start && /^>{7,}(?: |$)/.test(bare)) return true
-  }
-  return false
-}
-
 function isEmptyStep(error: GitError): boolean {
   const message = `${error.stderr}\n${error.stdout}`
   return (
@@ -71,6 +62,7 @@ export default defineExtension({
   activate(ctx) {
     let checkingResolvedFiles = false
     let continuePromptOpen = false
+    let operationRevision = 0
     const observedInlineConflicts = new Set<string>()
 
     const fail = (verb: string, error: unknown): void => {
@@ -85,10 +77,17 @@ export default defineExtension({
       return conflictCount(ctx.git.state.operation, ctx.git.state.status.files)
     }
 
-    async function runChoice(choice: "continue" | "abort" | "skip"): Promise<void> {
+    async function runChoice(
+      choice: "continue" | "abort" | "skip",
+      expected?: { readonly kind: GitOperationKind; readonly revision: number },
+    ): Promise<void> {
       const kind = currentKind()
       if (kind === null) {
         ctx.popups.notify("No merge, rebase, cherry-pick, or revert is in progress", "warning")
+        return
+      }
+      if (expected !== undefined && (kind !== expected.kind || operationRevision !== expected.revision)) {
+        ctx.popups.notify("Git operation changed while the menu was open", "warning")
         return
       }
       if (choice === "continue" && unresolved() > 0) {
@@ -129,6 +128,7 @@ export default defineExtension({
     async function openMenu(): Promise<void> {
       const kind = currentKind()
       if (kind === null) return
+      const expected = { kind, revision: operationRevision }
       const items = [
         { label: "continue", value: "continue" as const },
         { label: "abort", value: "abort" as const },
@@ -139,8 +139,8 @@ export default defineExtension({
         title: `${labels[kind][0]?.toUpperCase()}${labels[kind].slice(1)} options`,
         items,
       })
-      if (choice === "continue" || choice === "skip") await runChoice(choice)
-      else if (choice === "abort") await runChoice("abort")
+      if (choice === "continue" || choice === "skip") await runChoice(choice, expected)
+      else if (choice === "abort") await runChoice("abort", expected)
       else if (choice === "view") await viewConflicts()
     }
 
@@ -151,9 +151,15 @@ export default defineExtension({
       when: () => currentKind() !== null,
       run: openMenu,
     })
+    let previousConflictCount = unresolved()
     ctx.git.subscribe(
       (state) => state.operation,
-      () => menuCommand.refresh(),
+      () => {
+        operationRevision += 1
+        observedInlineConflicts.clear()
+        previousConflictCount = unresolved()
+        menuCommand.refresh()
+      },
     )
 
     function OperationSegment() {
@@ -168,16 +174,32 @@ export default defineExtension({
       if (checkingResolvedFiles || !ctx.config.autoStageResolvedConflicts) return
       checkingResolvedFiles = true
       try {
+        if (currentKind() === null) {
+          observedInlineConflicts.clear()
+          return
+        }
         const conflicted = ctx.git.state.status.files.filter(isConflicted)
+        const conflictedPaths = new Set(conflicted.map((file) => file.path))
+        for (const path of observedInlineConflicts) {
+          if (!conflictedPaths.has(path)) observedInlineConflicts.delete(path)
+        }
         for (const file of conflicted) {
+          if (file.ours !== "modified" || file.theirs !== "modified") {
+            observedInlineConflicts.delete(file.path)
+            continue
+          }
           let contents: string
           try {
             contents = await Bun.file(`${ctx.git.root}/${file.path}`).text()
           } catch {
+            observedInlineConflicts.delete(file.path)
             continue
           }
-          if (contents.includes("\0")) continue
-          if (hasConflictMarkers(contents)) {
+          if (contents.includes("\0")) {
+            observedInlineConflicts.delete(file.path)
+            continue
+          }
+          if (containsConflictMarker(contents)) {
             observedInlineConflicts.add(file.path)
             continue
           }
@@ -194,7 +216,7 @@ export default defineExtension({
       }
     }
 
-    async function offerContinue(kind: GitOperationKind): Promise<void> {
+    async function offerContinue(kind: GitOperationKind, revision: number): Promise<void> {
       if (continuePromptOpen || !ctx.config.autoStageResolvedConflicts) return
       continuePromptOpen = true
       try {
@@ -206,19 +228,18 @@ export default defineExtension({
         if (!confirmed) return
         const current = ctx.git.state.operation
         if (current.effective !== kind || conflictCount(current, ctx.git.state.status.files) > 0) return
-        await runChoice("continue")
+        await runChoice("continue", { kind, revision })
       } finally {
         continuePromptOpen = false
       }
     }
 
-    let previousConflictCount = unresolved()
     ctx.events.on("git.refreshed", async ({ state }) => {
       const kind = state.operation.effective
       const conflicts = conflictCount(state.operation, state.status.files)
 
       if (kind !== null && conflicts === 0 && previousConflictCount > 0 && state.operation.initiatedHere) {
-        void offerContinue(kind)
+        void offerContinue(kind, operationRevision)
       }
 
       previousConflictCount = conflicts

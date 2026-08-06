@@ -744,6 +744,53 @@ describe("conflicts, shown and delegated", () => {
     expect(await Bun.file(join(harness.directory, "shared.txt")).text()).toBe("ours\n")
   }, 30_000)
 
+  it("does not auto-stage a text conflict with an unmatched marker", async () => {
+    const harness = await createInteractiveFilesHarness()
+    await conflict(harness)
+    await renderApp(harness)
+    await act(async () => harness.kernel.git.refresh())
+    await act(async () => harness.kernel.events.drain())
+    await settle(harness)
+
+    await write(harness, "shared.txt", "<<<<<<< HEAD\nunfinished\n")
+    await act(async () => harness.kernel.git.refresh())
+    await act(async () => harness.kernel.events.drain())
+    await settle(harness)
+
+    expect(await git(harness, "ls-files", "--unmerged", "--", "shared.txt")).not.toBe("")
+  }, 30_000)
+
+  it("does not carry an observed text conflict into a later modify/delete conflict on the same path", async () => {
+    const harness = await createInteractiveFilesHarness()
+    await write(harness, "shared.txt", "base\n")
+    await commitTracked(harness, "shared.txt")
+    await git(harness, "checkout", "--quiet", "-b", "deletes")
+    await git(harness, "rm", "--quiet", "shared.txt")
+    await git(harness, "commit", "--quiet", "--message", "delete shared")
+    await git(harness, "checkout", "--quiet", "main")
+    await git(harness, "checkout", "--quiet", "-b", "inline")
+    await write(harness, "shared.txt", "inline\n")
+    await git(harness, "commit", "--quiet", "--all", "--message", "inline")
+    await git(harness, "checkout", "--quiet", "main")
+    await write(harness, "shared.txt", "main\n")
+    await git(harness, "commit", "--quiet", "--all", "--message", "main")
+    expect((await run(harness.directory, ["merge", "inline"])).exitCode).not.toBe(0)
+
+    await renderApp(harness)
+    await act(async () => harness.kernel.git.refresh())
+    await act(async () => harness.kernel.events.drain())
+    await settle(harness)
+    await act(async () => harness.kernel.git.raw(["merge", "--abort"]))
+    await act(async () => {
+      const result = await harness.kernel.git.raw(["merge", "deletes"], { allowFailure: true })
+      expect(result.exitCode).not.toBe(0)
+    })
+    await act(async () => harness.kernel.events.drain())
+    await settle(harness)
+
+    expect(await git(harness, "ls-files", "--unmerged", "--", "shared.txt")).not.toBe("")
+  }, 30_000)
+
   it("scrolls the inline picker to the selected conflict side", async () => {
     const harness = await createInteractiveFilesHarness()
     await conflict(harness)
@@ -793,6 +840,29 @@ describe("conflicts, shown and delegated", () => {
     await waitForFrame(harness, "merge aborted")
     await waitFor(harness, () => harness.kernel.git.getSnapshot().operation.effective === null, "the merge to abort")
     expect(await git(harness, "status", "--porcelain")).toBe("")
+  }, 30_000)
+
+  it("does not apply a stale merge-menu choice to a replacement operation", async () => {
+    const harness = await createInteractiveFilesHarness()
+    await conflict(harness)
+    await renderApp(harness)
+    await focusFiles(harness)
+    await press(harness, "m")
+    await waitForFrame(harness, "Merge options")
+
+    await act(async () => harness.kernel.git.raw(["merge", "--abort"]))
+    await act(async () => {
+      const result = await harness.kernel.git.raw(["rebase", "theirs"], { allowFailure: true })
+      expect(result.exitCode).not.toBe(0)
+    })
+    expect(harness.kernel.git.getSnapshot().operation.effective).toBe("rebase")
+
+    await press(harness, () => harness.setup.mockInput.pressArrow("down"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+    await waitForFrame(harness, "Git operation changed while the menu was open")
+    expect(harness.kernel.git.getSnapshot().operation.effective).toBe("rebase")
+
+    await act(async () => harness.kernel.git.raw(["rebase", "--abort"]))
   }, 30_000)
 
   it("offers to continue after resolving an operation started in this session", async () => {

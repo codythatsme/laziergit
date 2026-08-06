@@ -306,18 +306,17 @@ export default defineExtension({
 
     async function openMergeRecovery(): Promise<void> {
       const branch = currentBranch()
-      await ctx.popups.menu({
+      const choice = await ctx.popups.select({
         title: branch === null ? "Merge in progress" : `Merge in progress on ${branch}`,
-        groups: [
-          {
-            items: [
-              { key: "c", label: "Continue merge", run: continueMerge },
-              { key: "a", label: "Abort merge", run: abortMerge },
-              { key: "v", label: "View files", run: () => ctx.commands.execute("files.focus") },
-            ],
-          },
+        items: [
+          { label: "Continue merge", value: "continue" as const },
+          { label: "Abort merge", value: "abort" as const },
+          { label: "View files", value: "view" as const },
         ],
       })
+      if (choice === "continue") await continueMerge()
+      else if (choice === "abort") await abortMerge()
+      else if (choice === "view") await ctx.commands.execute("files.focus")
     }
 
     async function handleMergeConflict(branch: Branch, mode: MergeMode): Promise<void> {

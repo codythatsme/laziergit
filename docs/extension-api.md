@@ -751,7 +751,21 @@ tagged with the extension name, and routed to the log file / debug pane.
   export function isStaged(change: FileChange): boolean;
   export function isUnstaged(change: FileChange): boolean;
   export function isUntracked(change: FileChange): boolean;
-  export function isConflicted(change: FileChange): boolean;
+  export function isConflicted(
+    change: FileChange,
+  ): change is Extract<FileChange, { kind: "conflicted" }>;
+
+  export type ConflictMarkerKind = "start" | "ancestor" | "separator" | "end";
+
+  export interface ConflictMarker {
+    readonly kind: ConflictMarkerKind;
+    readonly size: number;
+  }
+
+  /** Classify one complete line using Git's marker grammar. */
+  export function parseConflictMarker(line: string): ConflictMarker | null;
+  /** True for any Git conflict marker, including an unmatched or malformed one. */
+  export function containsConflictMarker(contents: string): boolean;
 
   export interface StashEntry {
     /** Position in the stash list (stash@{index}). */
@@ -1592,6 +1606,8 @@ positional jump cannot.
      * measurement an extension cannot compute, and what page-wise motions need.
      */
     viewportRows(): number;
+    /** Rows laid out in the scrollable content, or 0 before the first content layout. */
+    contentRows(): number;
     /** Columns the viewport shows, or 0 before the first layout. */
     viewportColumns(): number;
     /** Scroll by whole rows; negative is up. Clamped to the content. */

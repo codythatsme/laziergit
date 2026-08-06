@@ -1,3 +1,5 @@
+import { parseConflictMarker } from "laziergit"
+
 export type ConflictSideChoice = "current" | "ancestor" | "incoming"
 export type ConflictChoice = ConflictSideChoice | "both"
 
@@ -33,27 +35,6 @@ export function splitLines(content: string): readonly string[] {
   return content.match(/[^\n]*\n|[^\n]+$/g) ?? []
 }
 
-function bare(line: string): string {
-  const withoutLf = line.endsWith("\n") ? line.slice(0, -1) : line
-  return withoutLf.endsWith("\r") ? withoutLf.slice(0, -1) : withoutLf
-}
-
-function marker(
-  line: string,
-): { readonly kind: "start" | "ancestor" | "separator" | "end"; readonly size: number } | null {
-  const value = bare(line)
-  const labelled = /^(<{7,}|\|{7,}|>{7,})(?: .*)?$/.exec(value)
-  if (labelled?.[1] !== undefined) {
-    const token = labelled[1]
-    return {
-      kind: token[0] === "<" ? "start" : token[0] === "|" ? "ancestor" : "end",
-      size: token.length,
-    }
-  }
-  const separator = /^(={7,})$/.exec(value)?.[1]
-  return separator === undefined ? null : { kind: "separator", size: separator.length }
-}
-
 export function parseConflicts(content: string): ConflictParseResult {
   const lines = splitLines(content)
   const conflicts: ConflictBlock[] = []
@@ -67,7 +48,7 @@ export function parseConflicts(content: string): ConflictParseResult {
     | undefined
 
   for (const [index, line] of lines.entries()) {
-    const found = marker(line)
+    const found = parseConflictMarker(line)
     if (found === null) continue
 
     if (found.kind === "start") {
@@ -139,6 +120,22 @@ export function createConflictSession(
     side: normalizeSide(preferred, first),
     undo: [],
   }
+}
+
+/** Refresh an open conflict without losing navigation or valid in-memory undo history. */
+export function replaceConflictSession(previous: ConflictSession, content: string): ConflictSession | null {
+  if (content === previous.content) return previous
+  const next = createConflictSession(content, previous.side)
+  if (next === null) return null
+  const conflictIndex = Math.min(previous.conflictIndex, next.conflicts.length - 1)
+  const block = next.conflicts[conflictIndex]
+  return block === undefined
+    ? null
+    : {
+        ...next,
+        conflictIndex,
+        side: normalizeSide(previous.side, block),
+      }
 }
 
 export function moveConflict(session: ConflictSession, offset: number): ConflictSession {
