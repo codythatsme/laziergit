@@ -565,7 +565,7 @@ tagged with the extension name, and routed to the log file / debug pane.
     readonly head: Head;
     /** Local branches, HEAD first, then most-recently-committed first. */
     readonly branches: readonly Branch[];
-    /** Cached remote-tracking branches. */
+    /** Cached remote-tracking branches, most-recently-committed first. */
     readonly remoteBranches: readonly RemoteBranch[];
     readonly remotes: readonly Remote[];
     readonly tags: readonly Tag[];
