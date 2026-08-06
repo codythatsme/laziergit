@@ -706,6 +706,12 @@ it("queues a raw fetch from one caller ahead of a pull from another", async () =
   await Promise.resolve()
   expect(pullStarted).toBe(false)
 
+  // Fetch and pull share the remote-synchronization FIFO, but unrelated local index work
+  // remains usable while the network operation is in flight.
+  await repo.write("local.txt", "local\n")
+  await service.stage(["local.txt"])
+  expect((await repo.git("diff", "--cached", "--name-only")).trim()).toBe("local.txt")
+
   releaseFetch.resolve()
   await Promise.all([fetching, pulling])
   expect(pullStarted).toBe(true)

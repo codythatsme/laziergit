@@ -96,6 +96,13 @@ const readOnlySubcommandPairs: ReadonlySet<string> = new Set([
   "worktree list",
 ])
 
+/**
+ * Remote synchronization operations which must keep their invocation order across every
+ * Extension. Local index and working-tree writes deliberately stay outside this queue: git can
+ * stage while a fetch owns only remote refs, and the Files pane previews that stage immediately.
+ */
+const queuedSyncSubcommands: ReadonlySet<string> = new Set(["fetch", "pull", "push"])
+
 /** Global options that consume the argument after them, which is therefore not the subcommand. */
 const valueTakingGlobals: ReadonlySet<string> = new Set([
   "-c",
@@ -157,8 +164,8 @@ export class GitService {
   readonly #repoRoot: string
   readonly #report: (message: string, error?: unknown) => void
   readonly #inflight = new Set<Promise<unknown>>()
-  /** Every accepted Promise-face write, in invocation order. Reads remain concurrent. */
-  #writeQueue: Promise<void> = Promise.resolve()
+  /** Every accepted Promise-face remote synchronization operation, in invocation order. */
+  #syncQueue: Promise<void> = Promise.resolve()
   #config: GitConfig
   #repository: Repository | null = null
   #opened: Promise<void> | undefined
@@ -415,21 +422,24 @@ export class GitService {
   }
 
   /**
-   * Queues a Promise-face write behind every earlier one, then runs it with an
-   * {@link activity} entry. The entry covers `#refreshed`'s follow-up read too: until the
-   * store catches up the screen still shows the old repository. Either outcome releases the
-   * next write in the queue.
+   * Runs a Promise-face write with an {@link activity} entry. Fetch, pull, and push share one
+   * FIFO across every Extension; local index and working-tree writes remain independent. The
+   * entry covers `#refreshed`'s follow-up read too: until the store catches up the screen still
+   * shows the old repository. Either outcome releases the next synchronization operation.
    */
   #announced<A>(args: readonly string[], effect: Effect.Effect<A, GitError>): Promise<A> {
     const subcommand = subcommandOf(args)
-    const queued = this.#writeQueue.then(() => {
+    const run = () => {
       // Nothing to name. `isMutating` already assumes the worst about it and refreshes. Do
       // not publish new activity after synchronous shutdown has cleared the store.
       if (subcommand === null || this.#stopped) return this.#run(effect)
       const end = this.activity.begin(labelFor(args, subcommand.name))
       return this.#run(effect).finally(end)
-    })
-    this.#writeQueue = queued.then(
+    }
+    if (subcommand === null || !queuedSyncSubcommands.has(subcommand.name)) return run()
+
+    const queued = this.#syncQueue.then(run)
+    this.#syncQueue = queued.then(
       () => undefined,
       () => undefined,
     )
@@ -698,7 +708,7 @@ export class GitService {
   async drain(): Promise<void> {
     this.#stopped = true
     this.#disarmPoll()
-    await Promise.allSettled([this.#opened, this.#writeQueue, this.#refreshing, ...this.#inflight])
+    await Promise.allSettled([this.#opened, this.#syncQueue, this.#refreshing, ...this.#inflight])
     // After the wait: until the writes settle they really are in flight.
     this.activity.clear()
   }
