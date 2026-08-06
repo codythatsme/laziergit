@@ -209,6 +209,14 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function interactionCursorOf(active: Interaction): number {
+  if (active.kind === "conflict") {
+    const selected = active.session.conflicts[active.session.conflictIndex]
+    return selected === undefined ? 0 : sideRange(selected, active.session.side)[0]
+  }
+  return active.kind === "staging" ? (active.session?.cursor ?? 0) : -1
+}
+
 export default defineExtension({
   name: "diff",
   description: "Diff of the focused pane's selection",
@@ -544,15 +552,16 @@ export default defineExtension({
         scroll.scrollTo("start")
       }, [shownKey, scroll])
 
-      const interactiveCursor =
-        active.kind === "conflict"
-          ? (active.session.conflicts[active.session.conflictIndex]?.start ?? 0)
-          : active.kind === "staging"
-            ? (active.session?.cursor ?? 0)
-            : -1
+      const interactiveCursor = interactionCursorOf(active)
       useEffect(() => {
         if (interactiveCursor >= 0) scroll.scrollTo(Math.max(0, interactiveCursor - 2))
       }, [interactiveCursor, scroll])
+
+      const moveInteraction = (next: Interaction): void => {
+        interaction.set(next)
+        const cursor = interactionCursorOf(next)
+        if (cursor >= 0) scroll.scrollTo(Math.max(0, cursor - 2))
+      }
 
       // Staging, committing and checking out change what an unchanged target diffs to.
       useEvent("git.refreshed", () => (interaction.get().kind === "passive" ? load() : refreshInteraction()))
@@ -636,9 +645,9 @@ export default defineExtension({
         hidden: true,
         run: () => {
           const open = interaction.get()
-          if (open.kind === "conflict") interaction.set({ ...open, session: moveSide(open.session, 1) })
+          if (open.kind === "conflict") moveInteraction({ ...open, session: moveSide(open.session, 1) })
           else if (open.kind === "staging" && open.session !== null) {
-            interaction.set({ ...open, session: movePatchCursor(open.session, 1) })
+            moveInteraction({ ...open, session: movePatchCursor(open.session, 1) })
           } else scroll.scrollBy(1)
         },
       })
@@ -649,9 +658,9 @@ export default defineExtension({
         hidden: true,
         run: () => {
           const open = interaction.get()
-          if (open.kind === "conflict") interaction.set({ ...open, session: moveSide(open.session, -1) })
+          if (open.kind === "conflict") moveInteraction({ ...open, session: moveSide(open.session, -1) })
           else if (open.kind === "staging" && open.session !== null) {
-            interaction.set({ ...open, session: movePatchCursor(open.session, -1) })
+            moveInteraction({ ...open, session: movePatchCursor(open.session, -1) })
           } else scroll.scrollBy(-1)
         },
       })
@@ -662,9 +671,9 @@ export default defineExtension({
         when: () => interaction.get().kind !== "passive",
         run: () => {
           const open = interaction.get()
-          if (open.kind === "conflict") interaction.set({ ...open, session: moveConflict(open.session, -1) })
+          if (open.kind === "conflict") moveInteraction({ ...open, session: moveConflict(open.session, -1) })
           else if (open.kind === "staging" && open.session !== null)
-            interaction.set({ ...open, session: movePatchHunk(open.session, -1) })
+            moveInteraction({ ...open, session: movePatchHunk(open.session, -1) })
         },
       })
       useCommand({
@@ -674,9 +683,9 @@ export default defineExtension({
         when: () => interaction.get().kind !== "passive",
         run: () => {
           const open = interaction.get()
-          if (open.kind === "conflict") interaction.set({ ...open, session: moveConflict(open.session, 1) })
+          if (open.kind === "conflict") moveInteraction({ ...open, session: moveConflict(open.session, 1) })
           else if (open.kind === "staging" && open.session !== null)
-            interaction.set({ ...open, session: movePatchHunk(open.session, 1) })
+            moveInteraction({ ...open, session: movePatchHunk(open.session, 1) })
         },
       })
       useCommand({
