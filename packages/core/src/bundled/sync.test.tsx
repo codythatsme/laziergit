@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test"
+import { afterEach, describe, expect, it, spyOn } from "bun:test"
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -353,22 +353,88 @@ describe("sync.pull and sync.fetch", () => {
     expect(frame(harness)).toContain("main ↓1")
   })
 
+  it("queues a pull pressed while an automatic fetch is still running", async () => {
+    const harness = await startRepo({ autoFetch: true })
+    const origin = await addOrigin(harness)
+    const theirs = await cloneOf(origin)
+    await commitIn(theirs, "theirs.txt", "theirs\n")
+    await git(theirs, "push", "--quiet", "origin", "main")
+    const before = await git(harness.directory, "rev-parse", "main")
+
+    const fetchStarted = Promise.withResolvers<void>()
+    const releaseFetch = Promise.withResolvers<void>()
+    const realRaw = harness.kernel.git.raw.bind(harness.kernel.git)
+    spyOn(harness.kernel.git, "raw").mockImplementation(async (args, options) => {
+      if (args.includes("--no-write-fetch-head")) {
+        fetchStarted.resolve()
+        await releaseFetch.promise
+      }
+      return realRaw(args, options)
+    })
+    await renderApp(harness)
+
+    const pullSettled = Promise.withResolvers<void>()
+    const unsubscribe = harness.kernel.notifications.subscribe(() => {
+      if (toasts(harness).some((toast) => toast.includes("Pulled main") || toast.startsWith("error:"))) {
+        pullSettled.resolve()
+      }
+    })
+
+    try {
+      await fetchStarted.promise
+      await press(harness, "p")
+
+      expect(toasts(harness).join("\n")).not.toContain("try again when it finishes")
+      expect(await git(harness.directory, "rev-parse", "main")).toBe(before)
+    } finally {
+      await act(async () => {
+        releaseFetch.resolve()
+        // Keep React's test boundary open through the fetch refresh, queued pull, and toast.
+        await pullSettled.promise
+      })
+      unsubscribe()
+    }
+
+    expect(toasts(harness).join("\n")).toContain("Pulled main")
+    expect(await git(harness.directory, "rev-parse", "main")).toEqual(await git(theirs, "rev-parse", "HEAD"))
+  })
+
   it("automatically discovers remote commits while the app is open", async () => {
     const harness = await startRepo({ autoFetch: true, fetchIntervalMs: 250 })
     const origin = await addOrigin(harness)
     const theirs = await cloneOf(origin)
+    const releaseScheduledFetch = Promise.withResolvers<void>()
+    const discoveredSecondCommit = Promise.withResolvers<void>()
+    const realRaw = harness.kernel.git.raw.bind(harness.kernel.git)
+    let automaticFetches = 0
+    spyOn(harness.kernel.git, "raw").mockImplementation(async (args, options) => {
+      if (args.includes("--no-write-fetch-head")) {
+        automaticFetches += 1
+        if (automaticFetches === 2) await releaseScheduledFetch.promise
+      }
+      const output = await realRaw(args, options)
+      const head = harness.kernel.git.getSnapshot().head
+      if (args.includes("--no-write-fetch-head") && head.kind === "onBranch" && head.upstream?.behind === 2) {
+        discoveredSecondCommit.resolve()
+      }
+      return output
+    })
 
     await commitIn(theirs, "theirs.txt", "theirs\n")
     await git(theirs, "push", "--quiet", "origin", "main")
+    await commitIn(theirs, "more.txt", "more\n")
     await renderApp(harness)
 
     // lazygit fetches once at startup rather than leaving the first interval stale.
     await waitForFrame(harness, "main ↓1")
 
-    await commitIn(theirs, "more.txt", "more\n")
     await git(theirs, "push", "--quiet", "origin", "main")
 
     // The next scheduled fetch discovers movement that happened after startup.
+    await act(async () => {
+      releaseScheduledFetch.resolve()
+      await discoveredSecondCommit.promise
+    })
     await waitForFrame(harness, "main ↓2")
   })
 
