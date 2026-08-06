@@ -11,6 +11,7 @@ import {
   parseStatus,
   parseTags,
   readHead,
+  remoteBranchArgs,
 } from "./parse"
 
 /** Builds the NUL-terminated stream git emits, so the fixtures below read as records. */
@@ -203,6 +204,7 @@ it("marks no branch as HEAD while detached, where git marks none either", () => 
 })
 
 it("reads remote branches, skips symbolic HEADs, and honours remote names containing slashes", () => {
+  expect(remoteBranchArgs).toContain("--sort=-committerdate")
   const remotes = [
     { name: "origin", fetchUrl: "x", pushUrl: "x" },
     { name: "team/upstream", fetchUrl: "y", pushUrl: "y" },
@@ -210,23 +212,24 @@ it("reads remote branches, skips symbolic HEADs, and honours remote names contai
   expect(
     parseRemoteBranches(
       [
-        "a83bc136 refs/remotes/origin/feature",
-        "a83bc136 refs/remotes/origin/HEAD",
+        // `for-each-ref` has already put the newest tip first; parsing must retain that order.
         "b1234567 refs/remotes/team/upstream/release/v2",
+        "a83bc136 refs/remotes/origin/HEAD",
+        "a83bc136 refs/remotes/origin/feature",
         "c1234567 refs/remotes/removed/stale",
       ].join("\n"),
       remotes,
     ),
   ).toEqual([
     {
-      name: "feature",
-      remote: "origin",
-      oid: "a83bc136",
-    },
-    {
       name: "release/v2",
       remote: "team/upstream",
       oid: "b1234567",
+    },
+    {
+      name: "feature",
+      remote: "origin",
+      oid: "a83bc136",
     },
   ])
 })
