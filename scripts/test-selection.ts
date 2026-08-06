@@ -31,6 +31,7 @@ export const defaultTestFileWeight = 1
  * heavy-file tail current is enough; new and fast files receive the default weight above.
  */
 export const stressTestFileWeights: Readonly<Record<string, number>> = {
+  "packages/core/src/bundled/branches-clean.test.tsx": 9,
   "packages/core/src/bundled/branches.test.tsx": 110,
   "packages/core/src/bundled/commit-flow.test.tsx": 53,
   "packages/core/src/bundled/commits.test.tsx": 92,
