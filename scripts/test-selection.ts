@@ -9,6 +9,7 @@ export interface TestShard {
 export interface TestArguments {
   mode: TestMode
   shard?: TestShard
+  rerunEach?: number
   extraArgs: string[]
 }
 
@@ -31,6 +32,7 @@ export const defaultTestFileWeight = 1
  * heavy-file tail current is enough; new and fast files receive the default weight above.
  */
 export const stressTestFileWeights: Readonly<Record<string, number>> = {
+  "packages/core/src/bundled/branches-clean.test.tsx": 9,
   "packages/core/src/bundled/branches.test.tsx": 110,
   "packages/core/src/bundled/commit-flow.test.tsx": 53,
   "packages/core/src/bundled/commits.test.tsx": 92,
@@ -74,23 +76,42 @@ export const parseTestArguments = (args: readonly string[]): TestArguments => {
   const runnerArgs = isMode(first) ? args.slice(1) : args
   const extraArgs: string[] = []
   let shard: TestShard | undefined
+  let rerunEach: number | undefined
 
   for (let index = 0; index < runnerArgs.length; index += 1) {
     const argument = runnerArgs[index]
     const isSeparateShard = argument === "--shard"
     const isInlineShard = argument?.startsWith("--shard=") ?? false
-    if (!isSeparateShard && !isInlineShard) {
-      if (argument !== undefined) extraArgs.push(argument)
+    if (isSeparateShard || isInlineShard) {
+      if (shard !== undefined) throw new Error("Only one --shard argument may be provided")
+      const value = isSeparateShard ? runnerArgs[index + 1] : argument?.slice("--shard=".length)
+      shard = parseShard(value)
+      if (isSeparateShard) index += 1
       continue
     }
 
-    if (shard !== undefined) throw new Error("Only one --shard argument may be provided")
-    const value = isSeparateShard ? runnerArgs[index + 1] : argument?.slice("--shard=".length)
-    shard = parseShard(value)
-    if (isSeparateShard) index += 1
+    const isSeparateRerun = argument === "--rerun-each"
+    const isInlineRerun = argument?.startsWith("--rerun-each=") ?? false
+    if (isSeparateRerun || isInlineRerun) {
+      if (rerunEach !== undefined) throw new Error("Only one --rerun-each argument may be provided")
+      const value = isSeparateRerun ? runnerArgs[index + 1] : argument?.slice("--rerun-each=".length)
+      rerunEach = Number(value)
+      if (!Number.isSafeInteger(rerunEach) || rerunEach < 1) {
+        throw new Error(`Invalid --rerun-each ${JSON.stringify(value ?? "")}; expected a positive integer`)
+      }
+      if (isSeparateRerun) index += 1
+      continue
+    }
+
+    if (argument !== undefined) extraArgs.push(argument)
   }
 
-  return shard === undefined ? { mode, extraArgs } : { mode, shard, extraArgs }
+  return {
+    mode,
+    ...(shard === undefined ? {} : { shard }),
+    ...(rerunEach === undefined ? {} : { rerunEach }),
+    extraArgs,
+  }
 }
 
 export const discoverTestFiles = (): string[] =>

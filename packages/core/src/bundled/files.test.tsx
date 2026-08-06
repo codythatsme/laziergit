@@ -16,6 +16,7 @@ import {
   waitFor,
   waitForFrame,
   type Harness,
+  type HarnessOptions,
 } from "../test-harness"
 
 installHarnessLifecycle()
@@ -131,9 +132,9 @@ function configOf(layout: string): string {
  */
 async function createFilesHarness(
   layout: string = columnsLayout,
-  viewport: { readonly width?: number; readonly height?: number } = {},
+  options: Pick<HarnessOptions, "width" | "height" | "clipboardWriters"> = {},
 ): Promise<Harness> {
-  const harness = await createHarness({ git: true, ...viewport })
+  const harness = await createHarness({ git: true, ...options })
   await Promise.all([
     symlink(join(bundledExtensionDirectory, "files"), join(harness.bundled, "files")),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
@@ -535,6 +536,23 @@ describe("discarding from the files pane", () => {
 })
 
 describe("the files Command catalog", () => {
+  it("copies a file's repository-relative path with the primary modifier and C", async () => {
+    const harness = await createFilesHarness(columnsLayout, {
+      clipboardWriters: [
+        [process.execPath, ["-e", 'if (await Bun.stdin.text() !== "nested/loose.txt") process.exit(1)']],
+      ],
+    })
+    await write(harness, "nested/loose.txt", "untracked\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    await press(harness, "j")
+    await waitForFrame(harness, "nested/loose.txt")
+    await press(harness, "c", { ctrl: true })
+
+    await waitForFrame(harness, "Copied nested/loose.txt")
+  })
+
   it("publishes the file and all-files actions without an x menu", async () => {
     const harness = await createFilesHarness()
     await write(harness, "loose.txt", "untracked\n")

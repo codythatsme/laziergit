@@ -17,7 +17,7 @@ const selection = {
 
 const entrypoint = resolve(import.meta.dir, "..", "..", "packages", "core", "src", "main.tsx")
 const specification = resolve(import.meta.dir, "..", "..", "docs", "extension-api.md")
-const paneTitles = ["Files", "Local branches", "Commits", "Stash", "Actions", "Diff"] as const
+const paneTitles = ["Files", "Local", "Commits", "Stash", "Actions", "Diff"] as const
 
 type Layout = "all-panes" | "working-panes"
 
@@ -600,7 +600,7 @@ describe("laziergit through a real terminal", () => {
 
       // The four panes share the cell, so the Stash tab is reached by cycling, not by number.
       await session.keyboard.type("]")
-      await waitForText(session, "[Local branches]")
+      await waitForText(session, "[Local]")
       await session.keyboard.type("]")
       await waitForText(session, "[Commits]")
       await session.keyboard.type("]")
