@@ -394,7 +394,7 @@ export interface Git {
   discard(paths: readonly string[]): Promise<void>
   commit(
     message: string,
-    opts?: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; messageOnly?: boolean },
+    opts?: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; skipHooks?: boolean; messageOnly?: boolean },
   ): Promise<void>
   push(opts?: { remote?: string; ref?: string; force?: boolean | "with-lease"; setUpstream?: boolean }): Promise<void>
   pull(opts?: { rebase?: boolean }): Promise<void>
@@ -646,6 +646,7 @@ export interface CommitFlowApi {
     message?: string
     amend?: boolean
     signoff?: boolean
+    skipHooks?: boolean
     messageOnly?: boolean
   }): Promise<CommitFlowResult>
 }
