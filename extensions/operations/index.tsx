@@ -142,15 +142,18 @@ export default defineExtension({
       const kind = currentKind()
       if (kind === null) return
       const items = [
-        { key: "c", label: "continue", run: () => runChoice("continue") },
-        { key: "a", label: "abort…", run: abort },
-        ...(kind === "merge" ? [] : [{ key: "s", label: "skip", run: () => runChoice("skip") }]),
-        ...(unresolved() === 0 ? [] : [{ key: "v", label: "view conflicts", run: viewConflicts }]),
+        { label: "continue", value: "continue" as const },
+        { label: "abort…", value: "abort" as const },
+        ...(kind === "merge" ? [] : [{ label: "skip", value: "skip" as const }]),
+        ...(unresolved() === 0 ? [] : [{ label: "view conflicts", value: "view" as const }]),
       ]
-      await ctx.popups.menu({
+      const choice = await ctx.popups.select({
         title: `${labels[kind][0]?.toUpperCase()}${labels[kind].slice(1)} options`,
-        groups: [{ items }],
+        items,
       })
+      if (choice === "continue" || choice === "skip") await runChoice(choice)
+      else if (choice === "abort") await abort()
+      else if (choice === "view") await viewConflicts()
     }
 
     const menuCommand = ctx.commands.register({
