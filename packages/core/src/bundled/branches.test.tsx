@@ -110,6 +110,14 @@ async function addOrigin(harness: Harness): Promise<void> {
 /** A GitHub fetch URL with a local push URL, so git and `gh` can each see the remote they need. */
 async function addGithubOrigin(harness: Harness): Promise<void> {
   await git(harness, "-c", "init.defaultBranch=main", "init", "--bare", "--quiet", "origin.git")
+  // Production still sees the GitHub URL, while git fetches from the local bare repository.
+  // That lets cleanup exercise its real `fetch --all --prune` without touching the network.
+  await git(
+    harness,
+    "config",
+    `url.${join(harness.directory, "origin.git")}.insteadOf`,
+    "git@github.com:acme/tools.git",
+  )
   await git(harness, "remote", "add", "origin", "git@github.com:acme/tools.git")
   await git(harness, "remote", "set-url", "--push", "origin", join(harness.directory, "origin.git"))
 }
@@ -696,6 +704,85 @@ describe("deleting a branch", () => {
   }, 30_000)
 })
 
+describe("cleaning merged branches", () => {
+  async function withDeletedRemoteBranch(harness: Harness, name: string): Promise<string> {
+    await seed(harness)
+    await addGithubOrigin(harness)
+    await git(harness, "checkout", "--quiet", "-b", name)
+    await commit(harness, `${name}\n`, `${name} work`)
+    const oid = await git(harness, "rev-parse", name)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", name)
+    await git(harness, "checkout", "--quiet", "main")
+    await git(harness, "push", "--quiet", "--delete", "origin", name)
+    return oid
+  }
+
+  it("confirms the exact merged-head branches, respects decline, then deletes them", async () => {
+    const harness = await createHarness({ git: true })
+    const oid = await withDeletedRemoteBranch(harness, "finished")
+    const gh = await installGh(harness)
+    await gh.setPullRequests([
+      {
+        headRefName: "finished",
+        headRefOid: oid,
+        headRepositoryOwner: { login: "acme" },
+        state: "MERGED",
+        isDraft: false,
+        url: "https://github.com/acme/tools/pull/42",
+        createdAt: "2026-08-04T00:00:00Z",
+      },
+    ])
+    await start(harness)
+
+    expect(harness.kernel.commands.getSnapshot().find((command) => command.id === "branches.clean")?.title).toBe(
+      "Clean branches",
+    )
+    await press(harness, () => void harness.kernel.commands.execute("branches.clean"))
+    await waitForFrame(harness, "Delete 1 local branch?")
+    expect(frame(harness)).toContain("Permanently delete the following local branch")
+    expect(frame(harness)).toContain("finished")
+    expect(frame(harness)).toContain("merged pull request has the")
+    expect(frame(harness)).toContain("same head commit")
+
+    await press(harness, "n")
+    await waitForFrame(harness, (screen) => !screen.includes("Delete 1 local branch?"))
+    expect(await git(harness, "branch", "--list", "finished", "--format=%(refname:short)")).toBe("finished")
+
+    await press(harness, () => void harness.kernel.commands.execute("branches.clean"))
+    await waitForFrame(harness, "Delete 1 local branch?")
+    await press(harness, "y")
+    await waitForFrame(harness, "Deleted local branch finished")
+    expect(await git(harness, "branch", "--list", "finished", "--format=%(refname:short)")).toBe("")
+    expect((await gh.calls()).some((call) => call.includes("states: [MERGED]") && call.includes("headRefOid"))).toBe(
+      true,
+    )
+  }, 30_000)
+
+  it("keeps a gone branch when the merged PR points at another commit", async () => {
+    const harness = await createHarness({ git: true })
+    await withDeletedRemoteBranch(harness, "moved")
+    const gh = await installGh(harness)
+    await gh.setPullRequests([
+      {
+        headRefName: "moved",
+        headRefOid: "f".repeat(40),
+        headRepositoryOwner: { login: "acme" },
+        state: "MERGED",
+        isDraft: false,
+        url: "https://github.com/acme/tools/pull/43",
+        createdAt: "2026-08-04T00:00:00Z",
+      },
+    ])
+    await start(harness)
+
+    await runCommand(harness, "branches.clean")
+
+    await waitForFrame(harness, "No deleted-upstream branches have a merged PR at their current head")
+    expect(await git(harness, "branch", "--list", "moved", "--format=%(refname:short)")).toBe("moved")
+    expect(harness.kernel.popups.top).toBeUndefined()
+  }, 30_000)
+})
+
 describe("contextual branch Commands", () => {
   /**
    * `stale` sits one commit behind `origin/main` with nothing of its own — the only shape a
@@ -899,7 +986,7 @@ describe("what a row says about its upstream", () => {
     expect(row).not.toContain("✓")
     const lookup = (await gh.calls())[0]
     expect(lookup).toStartWith("api graphql --hostname github.com")
-    expect(lookup).toContain("headRefName headRepositoryOwner { login }")
+    expect(lookup).toContain("headRefName headRefOid headRepositoryOwner { login }")
     expect(lookup).toContain("-f branch0=main")
 
     await press(harness, "o")
