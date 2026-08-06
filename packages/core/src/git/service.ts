@@ -27,6 +27,7 @@ import {
   parseStatus,
   parseTags,
   readHead,
+  remoteBranchArgs,
   refSnapshotArgs,
   configArgs,
   stashArgs,
@@ -276,6 +277,7 @@ export class GitService {
         config: execGitAllowingEmpty(root, configArgs, 1),
         tags: execGit(root, tagArgs),
         stash: execGit(root, stashArgs),
+        remoteBranches: execGit(root, remoteBranchArgs),
         // Not used to build the snapshot — it is the other half of the poll fingerprint.
         refs: execGitAllowingEmpty(root, refSnapshotArgs, 1),
       },
@@ -318,7 +320,7 @@ export class GitService {
         state: {
           head,
           branches,
-          remoteBranches: parseRemoteBranches(outputs.refs.stdout, remotes),
+          remoteBranches: parseRemoteBranches(outputs.remoteBranches.stdout, remotes),
           remotes,
           tags: parseTags(outputs.tags.stdout),
           status: { files: status.files, isClean: status.files.length === 0 },

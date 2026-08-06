@@ -188,6 +188,7 @@ export interface GitActivity {
 export interface GitState {
   readonly head: Head
   readonly branches: readonly Branch[]
+  /** Cached remote-tracking branches, most-recently-committed first. */
   readonly remoteBranches: readonly RemoteBranch[]
   readonly remotes: readonly Remote[]
   readonly tags: readonly Tag[]
