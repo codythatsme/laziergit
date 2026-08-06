@@ -27,27 +27,27 @@ export const defaultTestFileWeight = 1
 
 /**
  * Approximate seconds for integration files taking at least ten seconds in the successful
- * macOS stress run https://github.com/codythatsme/laziergit/actions/runs/30801463252/job/91646753164.
+ * macOS stress run https://github.com/codythatsme/laziergit/actions/runs/31100075197.
  * Longest-processing-time assignment only needs relative weights, so keeping the small
  * heavy-file tail current is enough; new and fast files receive the default weight above.
  */
 export const stressTestFileWeights: Readonly<Record<string, number>> = {
-  "packages/core/src/bundled/branches-clean.test.tsx": 9,
-  "packages/core/src/bundled/branches.test.tsx": 110,
-  "packages/core/src/bundled/commit-flow.test.tsx": 53,
-  "packages/core/src/bundled/commits.test.tsx": 92,
-  "packages/core/src/bundled/diff-context.test.tsx": 24,
-  "packages/core/src/bundled/diff.test.tsx": 29,
-  "packages/core/src/bundled/files.test.tsx": 137,
-  "packages/core/src/bundled/gh-workflows.test.tsx": 59,
-  "packages/core/src/bundled/stash.test.tsx": 87,
-  "packages/core/src/bundled/sync.test.tsx": 76,
-  "packages/core/src/extension/kernel.test.tsx": 38,
+  "packages/core/src/bundled/branches-clean.test.tsx": 12,
+  "packages/core/src/bundled/branches.test.tsx": 169,
+  "packages/core/src/bundled/commit-flow.test.tsx": 69,
+  "packages/core/src/bundled/commits.test.tsx": 100,
+  "packages/core/src/bundled/diff-context.test.tsx": 28,
+  "packages/core/src/bundled/diff.test.tsx": 28,
+  "packages/core/src/bundled/files.test.tsx": 170,
+  "packages/core/src/bundled/gh-workflows.test.tsx": 70,
+  "packages/core/src/bundled/stash.test.tsx": 95,
+  "packages/core/src/bundled/sync.test.tsx": 115,
+  "packages/core/src/extension/kernel.test.tsx": 44,
   "packages/core/src/git/activity.test.ts": 14,
-  "packages/core/src/git/live-pane.test.tsx": 17,
-  "packages/core/src/git/service.test.ts": 151,
-  "packages/core/src/public-api.test.tsx": 31,
-  "packages/core/src/ui/framework.test.tsx": 36,
+  "packages/core/src/git/live-pane.test.tsx": 19,
+  "packages/core/src/git/service.test.ts": 198,
+  "packages/core/src/public-api.test.tsx": 55,
+  "packages/core/src/ui/framework.test.tsx": 48,
 }
 
 const isMode = (value: string | undefined): value is TestMode =>
