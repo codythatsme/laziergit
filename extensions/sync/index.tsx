@@ -135,34 +135,38 @@ export default defineExtension({
     const root = ctx.git.root
 
     /**
-     * The operation in flight: a mutual-exclusion latch. A reload landing mid-push never
-     * clears it, which is harmless because `activate` runs again and builds a fresh one.
+     * One serial queue for every sync operation. Commands reserve their place immediately,
+     * so a pull pressed during a fetch runs afterwards instead of racing git or being lost.
+     * A reload builds a fresh queue; work already handed to Core still finishes during drain.
      */
-    let running: string | null = null
+    let operationQueue: Promise<void> = Promise.resolve()
+    let pendingOperations = 0
 
-    type Outcome =
-      | { readonly kind: "done" }
-      | { readonly kind: "failed"; readonly error: GitError }
-      /** Refused before it started: another sync operation is still running. */
-      | { readonly kind: "busy" }
+    type Outcome = { readonly kind: "done" } | { readonly kind: "failed"; readonly error: GitError }
 
-    async function run(label: string, work: () => Promise<void>): Promise<Outcome> {
-      if (running !== null) {
-        ctx.popups.notify(`Still ${running} — try again when it finishes`, "warning")
-        return { kind: "busy" }
-      }
+    function run(work: () => Promise<void>): Promise<Outcome> {
+      pendingOperations += 1
+      const outcome = operationQueue.then(async (): Promise<Outcome> => {
+        try {
+          await work()
+          return { kind: "done" }
+        } catch (error) {
+          // Anything that is not git refusing is a bug here; the Command host reports those.
+          if (!(error instanceof GitError)) throw error
+          return { kind: "failed", error }
+        }
+      })
 
-      running = label
-      try {
-        await work()
-        return { kind: "done" }
-      } catch (error) {
-        // Anything that is not git refusing is a bug here; the Command host reports those.
-        if (!(error instanceof GitError)) throw error
-        return { kind: "failed", error }
-      } finally {
-        running = null
-      }
+      // A failed Command must not poison the queue: later Commands still get their turn.
+      operationQueue = outcome.then(
+        () => {
+          pendingOperations -= 1
+        },
+        () => {
+          pendingOperations -= 1
+        },
+      )
+      return outcome
     }
 
     /**
@@ -214,7 +218,7 @@ export default defineExtension({
 
       // Named explicitly rather than left to core's fallback, so git is told what the confirm
       // promised.
-      const outcome = await run("pushing", () => ctx.git.push({ remote, ref: branch, setUpstream: true }))
+      const outcome = await run(() => ctx.git.push({ remote, ref: branch, setUpstream: true }))
       if (outcome.kind === "failed") return surface(outcome.error)
       if (outcome.kind === "done") ctx.popups.notify(`Pushed ${branch} to ${remote}/${branch}`, "success")
     }
@@ -226,9 +230,7 @@ export default defineExtension({
       const upstream = head.upstream
       if (upstream === null) return pushSettingUpstream(head.branch)
 
-      const outcome = await run("pushing", () =>
-        ctx.git.push({ remote: upstream.remote, ref: refspec(head.branch, upstream) }),
-      )
+      const outcome = await run(() => ctx.git.push({ remote: upstream.remote, ref: refspec(head.branch, upstream) }))
       if (outcome.kind === "done")
         return ctx.popups.notify(`Pushed ${head.branch} to ${upstreamName(upstream)}`, "success")
       if (outcome.kind !== "failed") return
@@ -249,33 +251,33 @@ export default defineExtension({
     }
 
     async function forcePush(): Promise<void> {
-      const head = ctx.git.state.head
-      if (head.kind !== "onBranch") return refuse(head, "push")
+      // Read the lease and ask for confirmation only when this Command reaches the front.
+      // A fetch ahead of it can change both the loss count and what `with-lease` protects.
+      const outcome = await run(async () => {
+        const head = ctx.git.state.head
+        if (head.kind !== "onBranch") return refuse(head, "push")
 
-      // The Command's `when: tracking` hides this, but a checkout can land between catalog
-      // publication and the key, and the lease is a claim about a ref this branch tracks.
-      const upstream = head.upstream
-      if (upstream === null) {
-        return ctx.popups.notify(`Cannot force-push: ${head.branch} has no upstream`, "warning")
-      }
+        // The Command's `when: tracking` hides this, but a checkout can land between catalog
+        // publication and the key, and the lease is a claim about a ref this branch tracks.
+        const upstream = head.upstream
+        if (upstream === null) {
+          return ctx.popups.notify(`Cannot force-push: ${head.branch} has no upstream`, "warning")
+        }
 
-      const confirmed = await ctx.popups.confirm({
-        title: `Force-push ${head.branch} to ${upstreamName(upstream)}?`,
-        message: forceWarning(upstream),
-        confirmLabel: "Force push",
-        danger: true,
-      })
-      if (!confirmed) return
+        const confirmed = await ctx.popups.confirm({
+          title: `Force-push ${head.branch} to ${upstreamName(upstream)}?`,
+          message: forceWarning(upstream),
+          confirmLabel: "Force push",
+          danger: true,
+        })
+        if (!confirmed) return
 
-      // `with-lease` and never plain `--force`: "overwrite what I last saw", not
-      // "overwrite whatever is there". This Extension offers no way past it.
-      const outcome = await run("force-pushing", () =>
-        ctx.git.push({ remote: upstream.remote, ref: refspec(head.branch, upstream), force: "with-lease" }),
-      )
-      if (outcome.kind === "failed") return surface(outcome.error)
-      if (outcome.kind === "done") {
+        // `with-lease` and never plain `--force`: "overwrite what I last saw", not
+        // "overwrite whatever is there". This Extension offers no way past it.
+        await ctx.git.push({ remote: upstream.remote, ref: refspec(head.branch, upstream), force: "with-lease" })
         ctx.popups.notify(`Force-pushed ${head.branch} to ${upstreamName(upstream)}`, "success")
-      }
+      })
+      if (outcome.kind === "failed") return surface(outcome.error)
     }
 
     async function pull(rebase: boolean): Promise<void> {
@@ -283,14 +285,14 @@ export default defineExtension({
       if (head.kind !== "onBranch") return refuse(head, "pull")
 
       // A missing upstream is left to git, whose own message says it better than a paraphrase.
-      const outcome = await run(rebase ? "pulling (rebase)" : "pulling", () => ctx.git.pull({ rebase }))
+      const outcome = await run(() => ctx.git.pull({ rebase }))
       if (outcome.kind === "failed") return surface(outcome.error)
       if (outcome.kind === "done") ctx.popups.notify(`Pulled ${head.branch}`, "success")
     }
 
     async function fetch(prune: boolean): Promise<void> {
       // No Head check: fetching is meaningful on a detached HEAD and on an unborn repository.
-      const outcome = await run(prune ? "fetching (prune)" : "fetching", () => ctx.git.fetch({ prune }))
+      const outcome = await run(() => ctx.git.fetch({ prune }))
       if (outcome.kind === "failed") return surface(outcome.error)
       if (outcome.kind === "done") ctx.popups.notify(fetchedSummary(), "success")
     }
@@ -314,16 +316,15 @@ export default defineExtension({
     }
 
     async function autoFetch(): Promise<void> {
-      // One latch covers manual sync Commands and the timer, so fetch/pull/push never overlap.
-      if (running === null) {
-        running = "fetching"
-        try {
-          await ctx.git.raw(["fetch", "--all", "--no-write-fetch-head"])
-        } catch {
-          // lazygit's background fetch also fails quietly; the next interval retries.
-        } finally {
-          running = null
-        }
+      // Background work stays opportunistic: it never grows the queue ahead of a Command.
+      if (pendingOperations === 0) {
+        await run(async () => {
+          try {
+            await ctx.git.raw(["fetch", "--all", "--no-write-fetch-head"])
+          } catch {
+            // lazygit's background fetch also fails quietly; the next interval retries.
+          }
+        })
       }
       scheduleAutoFetch()
     }

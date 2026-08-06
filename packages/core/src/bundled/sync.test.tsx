@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test"
+import { afterEach, describe, expect, it, spyOn } from "bun:test"
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -351,6 +351,40 @@ describe("sync.pull and sync.fetch", () => {
     expect(await git(harness.directory, "rev-parse", "main")).toBe(before)
     // The segment's own composition: branch, then only the non-zero counts.
     expect(frame(harness)).toContain("main ↓1")
+  })
+
+  it("queues a pull pressed while an automatic fetch is still running", async () => {
+    const harness = await startRepo({ autoFetch: true })
+    const origin = await addOrigin(harness)
+    const theirs = await cloneOf(origin)
+    await commitIn(theirs, "theirs.txt", "theirs\n")
+    await git(theirs, "push", "--quiet", "origin", "main")
+    const before = await git(harness.directory, "rev-parse", "main")
+
+    const fetchStarted = Promise.withResolvers<void>()
+    const releaseFetch = Promise.withResolvers<void>()
+    const realRaw = harness.kernel.git.raw.bind(harness.kernel.git)
+    spyOn(harness.kernel.git, "raw").mockImplementation(async (args, options) => {
+      if (args.includes("--no-write-fetch-head")) {
+        fetchStarted.resolve()
+        await releaseFetch.promise
+      }
+      return realRaw(args, options)
+    })
+    await renderApp(harness)
+
+    try {
+      await fetchStarted.promise
+      await press(harness, "p")
+
+      expect(toasts(harness).join("\n")).not.toContain("try again when it finishes")
+      expect(await git(harness.directory, "rev-parse", "main")).toBe(before)
+    } finally {
+      releaseFetch.resolve()
+    }
+
+    await waitForToast(harness, "Pulled main")
+    expect(await git(harness.directory, "rev-parse", "main")).toEqual(await git(theirs, "rev-parse", "HEAD"))
   })
 
   it("automatically discovers remote commits while the app is open", async () => {
