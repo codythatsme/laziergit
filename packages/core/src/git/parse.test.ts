@@ -300,6 +300,7 @@ it("reads commits including a subject containing a newline, a root commit, and a
 
 it("loads commits in topological order so graph lanes do not jump ahead of their parents", () => {
   expect(commitArgs(300)).toContain("--topo-order")
+  expect(commitArgs(300, "refs/heads/topic").slice(-3)).toEqual(["--end-of-options", "refs/heads/topic", "--"])
 })
 
 it("splits a stash subject on the branch, not on the first colon in its message", () => {

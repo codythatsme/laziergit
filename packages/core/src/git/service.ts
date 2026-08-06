@@ -4,6 +4,7 @@ import {
   isStaged,
   isUntracked,
   literalPathspec,
+  type Commit,
   type Disposable,
   type GitOutput,
   type GitState,
@@ -189,6 +190,14 @@ export class GitService {
 
   subscribeSelector<T>(selector: (state: GitState) => T, onChange: (value: T, previous: T) => void): Disposable {
     return this.store.subscribeSelector(selector, onChange)
+  }
+
+  /** Reads the same bounded commit shape as the snapshot, but from any branch or other ref. */
+  commits(ref: string): Promise<readonly Commit[]> {
+    const args = commitArgs(this.#config.commitLimit, ref)
+    return this.#run(
+      this.#withRepository(args, (root) => Effect.map(execGit(root, args), (output) => parseCommits(output.stdout))),
+    )
   }
 
   /**

@@ -14,6 +14,7 @@ import {
   pressEscape,
   refreshGit,
   renderApp,
+  runCommand,
   settle,
   waitFor,
   waitForFrame,
@@ -30,6 +31,20 @@ afterEach(() => {
 
 /** The shipped Extension itself, linked into the bundled scope the way `main.tsx` loads it. */
 const branchesExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "branches")
+const commitsExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commits")
+const commitFlowExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commit-flow")
+
+/** Most branch tests do not enter commit history, so keep their dependency lightweight. */
+const commitsStub = `
+  import { defineExtension } from "laziergit"
+
+  export default defineExtension({
+    name: "commits",
+    activate() {
+      return { renderBrowser: () => null }
+    },
+  })
+`
 
 /**
  * Stands in for the diff Extension, which `branches` needs. A stub keeps this file about
@@ -48,7 +63,8 @@ const diffStub = `
       function DiffPane() {
         const current = target.use()
         const ref = current === null ? "" : String(current.ref).slice(0, 7)
-        return <text content={current === null ? "diff none" : "diff " + current.kind + " " + ref} />
+        const path = current === null || current.path === null ? "none" : current.path
+        return <text content={current === null ? "diff none" : "diff " + current.kind + " " + ref + " path=" + path} />
       }
 
       ctx.panes.register({ id: "diff", title: "Diff", component: DiffPane })
@@ -204,23 +220,41 @@ async function commit(harness: Harness, contents: string, message: string, date?
  * unmounts — the one that was showing. Mutations made behind the app's back reach the store
  * through {@link refreshGit}, so the fingerprint poll is parked out of every test's way.
  */
-async function start(harness: Harness, focus: "branches" | "diff" | "tabbed" = "branches"): Promise<void> {
-  const columns =
-    focus === "tabbed"
+async function start(
+  harness: Harness,
+  focus: "branches" | "diff" | "tabbed" = "branches",
+  realCommits = false,
+): Promise<void> {
+  const columns = realCommits
+    ? focus === "tabbed"
+      ? `[[["branches", "commits", "diff"]]]`
+      : focus === "branches"
+        ? `[[["branches", "commits"]], ["diff"]]`
+        : `[["diff"], [["branches", "commits"]]]`
+    : focus === "tabbed"
       ? `[[["branches", "diff"]]]`
       : focus === "branches"
         ? `[["branches"], ["diff"]]`
         : `[["diff"], ["branches"]]`
-  await Promise.all([
+  const setup = [
     symlink(branchesExtension, join(harness.bundled, "branches")),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
     writeFile(
       harness.configFiles.repo,
       `{ "layout": { "columns": ${columns} }, "git": { "refreshIntervalMs": 60000 } }`,
     ),
-  ])
+  ]
+  if (realCommits) {
+    setup.push(
+      symlink(commitsExtension, join(harness.bundled, "commits")),
+      symlink(commitFlowExtension, join(harness.bundled, "commit-flow")),
+    )
+  } else {
+    setup.push(writeFile(join(harness.repo, "commits.ts"), commitsStub))
+  }
+  await Promise.all(setup)
   await renderApp(harness)
-  if (focus === "branches") await press(harness, "1")
+  if (focus === "branches") await runCommand(harness, "branches.focus")
 }
 
 async function openMergeMenuForSecondBranch(harness: Harness, branch: string): Promise<void> {
@@ -235,6 +269,50 @@ async function chooseMergeMode(harness: Harness, offset: number): Promise<void> 
   }
   await press(harness, () => harness.setup.mockInput.pressEnter())
 }
+
+describe("viewing a branch's commits and files", () => {
+  it("drills into the selected branch and returns through both transient views", async () => {
+    const harness = await createHarness({ git: true })
+    await seed(harness)
+    await git(harness, "checkout", "--quiet", "-b", "topic")
+    await writeFile(join(harness.directory, "topic-one.txt"), "one\n")
+    await git(harness, "add", "topic-one.txt")
+    await git(harness, "commit", "--quiet", "--message", "topic first")
+    await writeFile(join(harness.directory, "topic-two.txt"), "two\n")
+    await git(harness, "add", "topic-two.txt")
+    await git(harness, "commit", "--quiet", "--message", "topic second")
+    const topicTip = await git(harness, "rev-parse", "--short", "topic")
+
+    await git(harness, "checkout", "--quiet", "main")
+    await writeFile(join(harness.directory, "main-only.txt"), "main\n")
+    await git(harness, "add", "main-only.txt")
+    await git(harness, "commit", "--quiet", "--message", "main only")
+    await start(harness, "branches", true)
+
+    await press(harness, "j")
+    await waitForFrame(harness, "diff branch topic path=none")
+    await press(harness, "\r")
+
+    await waitForFrame(harness, "topic commits")
+    await waitForFrame(harness, `diff commit ${topicTip} path=none`)
+    const history = frame(harness)
+    expect(history).toContain("topic first")
+    expect(history).toContain("topic second")
+    expect(history).not.toContain("main only")
+
+    await press(harness, "\r")
+    await waitForFrame(harness, "A  topic-two.txt")
+    await waitForFrame(harness, `diff commit ${topicTip} path=topic-two.txt`)
+
+    await pressEscape(harness)
+    await waitForFrame(harness, `diff commit ${topicTip} path=none`)
+    expect(frame(harness)).not.toContain("A  topic-two.txt")
+
+    await pressEscape(harness)
+    await waitForFrame(harness, "diff branch topic path=none")
+    expect(highlighted(harness).some((row) => row.includes("topic"))).toBeTrue()
+  })
+})
 
 describe("operation activity", () => {
   it("does not show loaders for staging or unstaging", async () => {

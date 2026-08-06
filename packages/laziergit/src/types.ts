@@ -1,7 +1,7 @@
 import { createExtensionDefinition } from "@laziergit/runtime-bridge"
 import type * as Effect from "effect/Effect"
 import type * as Stream from "effect/Stream"
-import type { ComponentType } from "react"
+import type { ComponentType, ReactNode } from "react"
 
 export interface Disposable {
   dispose(): void
@@ -382,6 +382,8 @@ export interface Git {
   readonly state: GitState
   subscribe<T>(selector: (state: GitState) => T, onChange: (value: T, previous: T) => void): Disposable
   refresh(): Promise<void>
+  /** Loads the configured history window rooted at an arbitrary ref without changing HEAD. */
+  commits(ref: string): Promise<readonly Commit[]>
   raw(args: readonly string[], options?: RawOptions): Promise<GitOutput>
   checkout(ref: string): Promise<void>
   createBranch(name: string, opts?: { at?: string; checkout?: boolean }): Promise<void>
@@ -606,7 +608,21 @@ export interface RowSource<Row> {
 export type BranchesApi = RowSource<Branch>
 export type RemoteBranchesApi = RowSource<RemoteBranch>
 export type FilesApi = RowSource<FileChange>
-export type CommitsApi = RowSource<Commit>
+
+/** A reusable, read-only commit → changed-files drill-down rendered inside another Pane. */
+export interface CommitBrowserProps {
+  readonly revision: string
+  readonly title: string
+  readonly focused: boolean
+  /** Command and row id prefix. It must belong to the Extension that owns the containing Pane. */
+  readonly idPrefix: string
+  readonly onBack: () => void
+}
+
+export interface CommitsApi extends RowSource<Commit> {
+  /** Render this from a small component owned by the consuming Pane. */
+  readonly renderBrowser: (props: CommitBrowserProps) => ReactNode
+}
 export type StashApi = RowSource<StashEntry>
 
 /**

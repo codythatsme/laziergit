@@ -439,6 +439,7 @@ export function createExtensionContext(
       return attachDisposable(scope, hosts.git.subscribeSelector(selector, onChange))
     },
     refresh: () => supervised(hosts.git.refresh()),
+    commits: (ref) => supervised(hosts.git.commits(ref)),
     raw: (args, options) => supervised(hosts.git.raw(args, options)),
     checkout: (ref) => supervised(hosts.git.checkout(ref)),
     createBranch: (name, options) => supervised(hosts.git.createBranch(name, options)),

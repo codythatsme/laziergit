@@ -21,6 +21,17 @@ installHarnessLifecycle()
 const branchesExtension = resolve(import.meta.dir, "..", "..", "extensions", "branches")
 const remoteBranchesExtension = resolve(import.meta.dir, "..", "..", "extensions", "remote-branches")
 
+const commitsStub = `
+  import { defineExtension } from "laziergit"
+
+  export default defineExtension({
+    name: "commits",
+    activate() {
+      return { renderBrowser: () => null }
+    },
+  })
+`
+
 const filesStub = `
   /** @jsxImportSource @opentui/react */
   import { defineExtension } from "laziergit"
@@ -107,6 +118,7 @@ async function start(harness: Harness): Promise<void> {
   await Promise.all([
     symlink(branchesExtension, join(harness.bundled, "branches")),
     symlink(remoteBranchesExtension, join(harness.bundled, "remote-branches")),
+    writeFile(join(harness.repo, "commits.ts"), commitsStub),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
     writeFile(
       harness.configFiles.repo,
@@ -120,6 +132,7 @@ async function startNumberedLayout(harness: Harness): Promise<void> {
   await Promise.all([
     symlink(branchesExtension, join(harness.bundled, "branches")),
     symlink(remoteBranchesExtension, join(harness.bundled, "remote-branches")),
+    writeFile(join(harness.repo, "commits.ts"), commitsStub),
     writeFile(join(harness.repo, "files.tsx"), filesStub),
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
     writeFile(
