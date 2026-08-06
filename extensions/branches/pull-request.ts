@@ -1,6 +1,6 @@
 import { remoteWebUrl, type Branch, type Remote } from "laziergit"
 
-const pullRequestGraphqlFields = "headRefName headRepositoryOwner { login } state isDraft url createdAt"
+const pullRequestGraphqlFields = "headRefName headRefOid headRepositoryOwner { login } state isDraft url createdAt"
 
 export interface GitHubRepository {
   readonly host: string
@@ -11,6 +11,7 @@ export interface GitHubRepository {
 /** The part of `gh pr list --json` used by the branches pane. */
 export interface PullRequest {
   readonly headRefName: string
+  readonly headRefOid: string | null
   readonly headRepositoryOwner: { readonly login: string } | null
   readonly state: string
   readonly isDraft: boolean
@@ -77,11 +78,37 @@ export function pullRequestQueryArgs(repository: GitHubRepository, branches: rea
   ]
 }
 
+/** Queries only merged PRs when deciding whether a gone local branch is safe to clean. */
+export function mergedPullRequestQueryArgs(repository: GitHubRepository, branch: string): readonly string[] {
+  const query = `query($owner: String!, $repo: String!, $branch: String!, $endCursor: String) { repository(owner: $owner, name: $repo) { pullRequests(first: 100, after: $endCursor, headRefName: $branch, states: [MERGED], orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ${pullRequestGraphqlFields} } pageInfo { hasNextPage endCursor } } } }`
+  return [
+    "api",
+    "graphql",
+    "--paginate",
+    "--slurp",
+    "--hostname",
+    repository.host,
+    "-f",
+    `query=${query}`,
+    "-f",
+    `owner=${repository.owner}`,
+    "-f",
+    `repo=${repository.name}`,
+    "-f",
+    `branch=${branch}`,
+  ]
+}
+
 export function parsePullRequestQuery(stdout: string): readonly PullRequest[] {
-  const response = JSON.parse(stdout) as PullRequestQueryResponse
-  const repository = response.data?.repository
-  if (repository === null || repository === undefined) return []
-  return Object.values(repository).flatMap((connection) => connection?.nodes ?? [])
+  const parsed = JSON.parse(stdout) as PullRequestQueryResponse | readonly PullRequestQueryResponse[]
+  const responses: readonly PullRequestQueryResponse[] = Array.isArray(parsed)
+    ? parsed
+    : [parsed as PullRequestQueryResponse]
+  return responses.flatMap((response) => {
+    const repository = response.data?.repository
+    if (repository === null || repository === undefined) return []
+    return Object.values(repository).flatMap((connection) => connection?.nodes ?? [])
+  })
 }
 
 function remoteOwner(remote: Remote): string | null {
@@ -92,6 +119,15 @@ function remoteOwner(remote: Remote): string | null {
   } catch {
     return null
   }
+}
+
+function ownersByRemote(remotes: readonly Remote[]): ReadonlyMap<string, string> {
+  return new Map(
+    remotes.flatMap((remote): readonly [readonly [string, string]] | readonly [] => {
+      const owner = remoteOwner(remote)
+      return owner === null ? [] : [[remote.name, owner.toLowerCase()]]
+    }),
+  )
 }
 
 function createdAt(pullRequest: PullRequest): number {
@@ -108,12 +144,7 @@ export function pullRequestsByBranch(
   branches: readonly Branch[],
   remotes: readonly Remote[],
 ): ReadonlyMap<string, PullRequest> {
-  const owners = new Map(
-    remotes.flatMap((remote): readonly [readonly [string, string]] | readonly [] => {
-      const owner = remoteOwner(remote)
-      return owner === null ? [] : [[remote.name, owner.toLowerCase()]]
-    }),
-  )
+  const owners = ownersByRemote(remotes)
   const newestByHead = new Map<string, PullRequest>()
   for (const pullRequest of pullRequests) {
     const owner = pullRequest.headRepositoryOwner?.login.toLowerCase()
@@ -133,6 +164,39 @@ export function pullRequestsByBranch(
     if (pullRequest !== undefined) result.set(branch.name, pullRequest)
   }
   return result
+}
+
+/**
+ * Local branches whose upstream disappeared and whose exact tip was merged through a pull
+ * request. Matching the remote owner prevents a PR from another fork with the same branch name
+ * from authorizing deletion.
+ */
+export function cleanableBranches(
+  pullRequests: readonly PullRequest[],
+  branches: readonly Branch[],
+  remotes: readonly Remote[],
+): readonly Branch[] {
+  const owners = ownersByRemote(remotes)
+  const mergedHeads = new Set(
+    pullRequests.flatMap((pullRequest): readonly string[] => {
+      const owner = pullRequest.headRepositoryOwner?.login.toLowerCase()
+      if (
+        owner === undefined ||
+        pullRequest.state.toUpperCase() !== "MERGED" ||
+        typeof pullRequest.headRefOid !== "string"
+      ) {
+        return []
+      }
+      return [`${owner}\0${pullRequest.headRefName}\0${pullRequest.headRefOid}`]
+    }),
+  )
+
+  return branches.filter((branch) => {
+    const upstream = branch.upstream
+    if (branch.isHead || upstream?.gone !== true) return false
+    const owner = owners.get(upstream.remote)
+    return owner !== undefined && mergedHeads.has(`${owner}\0${upstream.branch}\0${branch.oid}`)
+  })
 }
 
 /**

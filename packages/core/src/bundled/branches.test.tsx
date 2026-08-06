@@ -110,6 +110,14 @@ async function addOrigin(harness: Harness): Promise<void> {
 /** A GitHub fetch URL with a local push URL, so git and `gh` can each see the remote they need. */
 async function addGithubOrigin(harness: Harness): Promise<void> {
   await git(harness, "-c", "init.defaultBranch=main", "init", "--bare", "--quiet", "origin.git")
+  // Production still sees the GitHub URL, while git fetches from the local bare repository.
+  // That lets cleanup exercise its real `fetch --all --prune` without touching the network.
+  await git(
+    harness,
+    "config",
+    `url.${join(harness.directory, "origin.git")}.insteadOf`,
+    "git@github.com:acme/tools.git",
+  )
   await git(harness, "remote", "add", "origin", "git@github.com:acme/tools.git")
   await git(harness, "remote", "set-url", "--push", "origin", join(harness.directory, "origin.git"))
 }
@@ -939,7 +947,7 @@ describe("what a row says about its upstream", () => {
     expect(row).not.toContain("✓")
     const lookup = (await gh.calls())[0]
     expect(lookup).toStartWith("api graphql --hostname github.com")
-    expect(lookup).toContain("headRefName headRepositoryOwner { login }")
+    expect(lookup).toContain("headRefName headRefOid headRepositoryOwner { login }")
     expect(lookup).toContain("-f branch0=main")
 
     await press(harness, "o")

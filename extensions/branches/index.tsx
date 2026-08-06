@@ -27,7 +27,9 @@ import stringWidth from "string-width"
 
 import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
 import {
+  cleanableBranches,
   githubRepository,
+  mergedPullRequestQueryArgs,
   parsePullRequestQuery,
   pullRequestQueryArgs,
   pullRequestsByBranch,
@@ -140,6 +142,16 @@ function validateRef(value: string, empty: string): string | null {
   return null
 }
 
+function pullRequestBranchChunks(branches: readonly string[]): readonly (readonly string[])[] {
+  const branchesPerQuery = Math.max(
+    Math.ceil(branches.length / pullRequestQueryConcurrency),
+    pullRequestQueryMinimumSize,
+  )
+  return Array.from({ length: Math.ceil(branches.length / branchesPerQuery) }, (_, index) =>
+    branches.slice(index * branchesPerQuery, (index + 1) * branchesPerQuery),
+  )
+}
+
 type BranchPaneView =
   | { readonly kind: "list"; readonly selectedName: string | null }
   | { readonly kind: "commits"; readonly branchName: string }
@@ -198,13 +210,7 @@ export default defineExtension({
       if (!force && pullRequestFingerprint === fingerprint) return pullRequests.get()
 
       const issued = (pullRequestTicket += 1)
-      const branchesPerQuery = Math.max(
-        Math.ceil(trackedBranches.length / pullRequestQueryConcurrency),
-        pullRequestQueryMinimumSize,
-      )
-      const chunks = Array.from({ length: Math.ceil(trackedBranches.length / branchesPerQuery) }, (_, index) =>
-        trackedBranches.slice(index * branchesPerQuery, (index + 1) * branchesPerQuery),
-      )
+      const chunks = pullRequestBranchChunks(trackedBranches)
       pullRequestLastAttemptAt = Date.now()
       const result = (async (): Promise<ReadonlyMap<string, PullRequest> | null> => {
         try {
@@ -505,6 +511,108 @@ export default defineExtension({
       }
     }
 
+    async function cleanBranches(): Promise<void> {
+      if (!hasRepository(ctx.git.state.head)) {
+        ctx.popups.notify("No repository here to clean", "warning")
+        return
+      }
+      if (githubRepository(ctx.git.state.remotes) === null) {
+        ctx.popups.notify("Cleaning branches requires a GitHub remote", "warning")
+        return
+      }
+
+      try {
+        // A branch only becomes `gone` after its remote-tracking ref is pruned. Refresh that
+        // evidence before proposing any destructive local operation.
+        await ctx.git.raw(["fetch", "--all", "--prune"])
+        const { branches, remotes } = ctx.git.state
+        const gone = branches.filter((branch) => !branch.isHead && branch.upstream?.gone === true)
+        if (gone.length === 0) {
+          ctx.popups.notify("No local branches have a deleted upstream to clean", "info")
+          return
+        }
+
+        const repository = githubRepository(remotes)
+        if (repository === null) {
+          ctx.popups.notify("Cleaning branches requires a GitHub remote", "warning")
+          return
+        }
+        const trackedBranches = [...new Set(gone.map((branch) => branch.upstream?.branch ?? branch.name))]
+        const mergedPullRequests: PullRequest[] = []
+        for (let index = 0; index < trackedBranches.length; index += pullRequestQueryConcurrency) {
+          const outputs = await Promise.all(
+            trackedBranches
+              .slice(index, index + pullRequestQueryConcurrency)
+              .map((branch) => ctx.exec("gh", mergedPullRequestQueryArgs(repository, branch))),
+          )
+          const failed = outputs.find((output) => output.exitCode !== 0)
+          if (failed !== undefined) {
+            throw new Error(failed.stderr.trim() || "GitHub could not inspect merged pull requests")
+          }
+          mergedPullRequests.push(...outputs.flatMap((output) => parsePullRequestQuery(output.stdout)))
+        }
+
+        const candidates = cleanableBranches(mergedPullRequests, branches, remotes)
+        if (candidates.length === 0) {
+          ctx.popups.notify("No deleted-upstream branches have a merged PR at their current head", "info")
+          return
+        }
+
+        const noun = candidates.length === 1 ? "branch" : "branches"
+        const confirmed = await ctx.popups.confirm({
+          title: `Delete ${candidates.length} local ${noun}?`,
+          message: [
+            `Permanently delete the following local ${noun}:`,
+            "",
+            ...candidates.map((branch) => `• ${branch.name}`),
+            "",
+            "Each upstream is gone and a merged pull request has the same head commit.",
+          ].join("\n"),
+          confirmLabel: candidates.length === 1 ? "Delete branch" : `Delete ${candidates.length} branches`,
+          danger: true,
+        })
+        if (!confirmed) return
+
+        const deleted: string[] = []
+        const failures: { readonly name: string; readonly error: unknown }[] = []
+        for (const branch of candidates) {
+          try {
+            const current = await ctx.git.raw(["rev-parse", "--verify", `refs/heads/${branch.name}^{commit}`], {
+              allowFailure: true,
+            })
+            if (current.exitCode !== 0 || current.stdout.trim() !== branch.oid) {
+              throw new Error("branch moved after the confirmation was prepared")
+            }
+            // Merged PRs may have been squash- or rebase-merged, so ordinary `branch -d`
+            // cannot prove them merged into the current HEAD. The exact-oid check above is
+            // the safety proof for this deliberate force deletion.
+            await ctx.git.deleteBranch(branch.name, { force: true })
+            deleted.push(branch.name)
+          } catch (error) {
+            failures.push({ name: branch.name, error })
+          }
+        }
+
+        if (failures.length === 0) {
+          ctx.popups.notify(
+            deleted.length === 1 ? `Deleted local branch ${deleted[0]}` : `Deleted ${deleted.length} local branches`,
+            "success",
+          )
+          return
+        }
+
+        const deletedSummary = deleted.length === 0 ? "No branches were deleted." : `Deleted: ${deleted.join(", ")}.`
+        ctx.popups.notify(
+          `${deletedSummary}\nCould not delete:\n${failures
+            .map(({ name, error }) => `${name}: ${describeGitFailure(error)}`)
+            .join("\n")}`,
+          "error",
+        )
+      } catch (error) {
+        fail(error)
+      }
+    }
+
     async function setUpstream(branch: Branch): Promise<void> {
       const remotes = ctx.git.state.remotes.map((remote) => remote.name)
       const remote = branch.upstream?.remote ?? (remotes.includes("origin") ? "origin" : remotes[0])
@@ -564,6 +672,11 @@ export default defineExtension({
       keys: "space",
       when: (branch) => !branch.isHead,
       run: checkout,
+    })
+    ctx.commands.register({
+      id: "branches.clean",
+      title: "Clean branches",
+      run: cleanBranches,
     })
     ctx.commands.register({
       id: "branches.create",
