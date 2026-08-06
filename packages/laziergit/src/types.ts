@@ -551,6 +551,7 @@ export interface PopupToolkit {
     validate?(value: string): string | null
     onChange?(value: string): void
   }): Promise<string | undefined>
+  /** List picker. A filter appears only when its items overflow the visible choices. */
   select<T>(opts: { title: string; items: readonly SelectItem<T>[]; placeholder?: string }): Promise<T | undefined>
   menu(opts: { title: string; groups: readonly PopupMenuGroup[] }): Promise<void>
   notify(message: string, level?: "info" | "success" | "warning" | "error"): void

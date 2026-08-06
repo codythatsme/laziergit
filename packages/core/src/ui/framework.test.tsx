@@ -17,6 +17,7 @@ import {
   waitForFrame,
   type Harness,
 } from "../test-harness"
+import type { PopupHandle } from "./popup-host"
 
 installHarnessLifecycle()
 
@@ -82,9 +83,11 @@ const alphaSource = `
         run: async () => {
           const picked = await ctx.popups.select({
             title: "Pick one",
+            placeholder: "Filter choices",
             items: [
               { label: "first", value: 1, hint: "one" },
               { label: "second", value: 2 },
+              ...Array.from({ length: 9 }, (_, index) => ({ label: "extra " + (index + 1), value: index + 3 })),
             ],
           })
           ctx.popups.notify(picked === undefined ? "picked nothing" : "picked " + picked)
@@ -435,6 +438,48 @@ describe("popups", () => {
     })
 
     await waitForFrame(harness, "picked 2")
+  })
+
+  it("omits the filter field from a short select", async () => {
+    const harness = await createHarness()
+    await twoPanes(harness)
+
+    let handle: PopupHandle<number | undefined> | undefined
+    await press(harness, () => {
+      handle = harness.kernel.popups.choose("test", {
+        title: "Short options",
+        choices: [{ label: "first" }, { label: "second" }],
+      })
+    })
+    await waitForFrame(harness, "Short options")
+    if (handle === undefined) throw new Error("Short chooser did not open")
+
+    expect(frame(harness)).not.toContain("Filter")
+    expect(harness.setup.renderer.currentFocusedRenderable).not.toBeInstanceOf(InputRenderable)
+
+    await press(harness, () => harness.setup.mockInput.pressArrow("down"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
+    expect(await handle.promise).toBe(1)
+  })
+
+  it("keeps the filter field when the choices would scroll", async () => {
+    const harness = await createHarness()
+    await twoPanes(harness)
+
+    let handle: PopupHandle<number | undefined> | undefined
+    await press(harness, () => {
+      handle = harness.kernel.popups.choose("test", {
+        title: "Long options",
+        choices: Array.from({ length: 11 }, (_, index) => ({ label: `option ${index + 1}` })),
+      })
+    })
+    await waitForFrame(harness, "Filter")
+    if (handle === undefined) throw new Error("Long chooser did not open")
+    const opened = handle
+
+    expect(harness.setup.renderer.currentFocusedRenderable).toBeInstanceOf(InputRenderable)
+    await press(harness, () => opened.dismiss())
+    expect(await opened.promise).toBeUndefined()
   })
 
   it("filters and chooses in one breath, without a render in between", async () => {
