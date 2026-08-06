@@ -747,14 +747,19 @@ describe("conflicts, shown and delegated", () => {
   it("scrolls the inline picker to the selected conflict side", async () => {
     const harness = await createInteractiveFilesHarness()
     await conflict(harness)
+    const preamble = Array.from({ length: 60 }, (_, index) => `preamble ${index + 1}`).join("\n")
     const current = Array.from({ length: 60 }, (_, index) => `current ${index + 1}`).join("\n")
-    await write(harness, "shared.txt", `<<<<<<< HEAD\n${current}\n=======\nselected incoming\n>>>>>>> theirs\n`)
+    await write(
+      harness,
+      "shared.txt",
+      `${preamble}\n<<<<<<< HEAD\n${current}\n=======\nselected incoming\n>>>>>>> theirs\n`,
+    )
 
     await renderApp(harness)
     await focusFiles(harness)
     await press(harness, "\r")
     await waitForFrame(harness, "conflict shared.txt  1/1  current")
-    expect(frame(harness)).toContain("current 1")
+    await waitForFrame(harness, "current 1", { timeoutMs: 1_000 })
     expect(frame(harness)).not.toContain("selected incoming")
 
     await press(harness, () => harness.setup.mockInput.pressArrow("down"))

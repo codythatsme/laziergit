@@ -209,6 +209,8 @@ export interface ScrollView {
   readonly ref: (surface: ScrollSurface | null) => void
   /** Rows the viewport shows, or 0 before the first layout. */
   viewportRows(): number
+  /** Rows laid out in the scrollable content, or 0 before the first content layout. */
+  contentRows(): number
   /** Columns the viewport shows, or 0 before the first layout. */
   viewportColumns(): number
   /** Scroll by whole rows; negative is up. Clamped to the content. */
@@ -243,6 +245,7 @@ export function useScrollView(): ScrollView {
         surface.current = node
       },
       viewportRows: () => surface.current?.viewport.height ?? 0,
+      contentRows: () => surface.current?.scrollHeight ?? 0,
       viewportColumns: () => surface.current?.viewport.width ?? 0,
       scrollBy: (rows) => {
         const node = surface.current

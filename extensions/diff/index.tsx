@@ -549,12 +549,26 @@ export default defineExtension({
       useEffect(() => {
         // Keyed on the patch that lands, not the target that asked for it: the outgoing patch
         // would otherwise be seen jumping to its top before its replacement arrived.
-        scroll.scrollTo("start")
-      }, [shownKey, scroll])
+        if (active.kind === "passive") scroll.scrollTo("start")
+      }, [shownKey, scroll, active.kind])
 
       const interactiveCursor = interactionCursorOf(active)
       useEffect(() => {
-        if (interactiveCursor >= 0) scroll.scrollTo(Math.max(0, interactiveCursor - 2))
+        if (interactiveCursor < 0) return
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const reveal = (): void => {
+          // Enter swaps in a new scrollbox. Its ref exists before OpenTUI's first layout, when
+          // every absolute scroll is clamped to zero; navigation later does not have that race.
+          if (scroll.viewportRows() === 0 || scroll.contentRows() <= interactiveCursor) {
+            timer = setTimeout(reveal, 0)
+            return
+          }
+          scroll.scrollTo(Math.max(0, interactiveCursor - 2))
+        }
+        reveal()
+        return () => {
+          if (timer !== undefined) clearTimeout(timer)
+        }
       }, [interactiveCursor, scroll])
 
       const moveInteraction = (next: Interaction): void => {
