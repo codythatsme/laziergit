@@ -58,9 +58,18 @@ describe("test runner arguments", () => {
       {
         mode: "integration",
         shard: { index: 2, total: 4 },
-        extraArgs: ["--rerun-each", "10", "--seed", "1700475292"],
+        rerunEach: 10,
+        extraArgs: ["--seed", "1700475292"],
       },
     )
+  })
+
+  test("accepts the inline rerun form and removes it from Bun's in-process arguments", () => {
+    expect(parseTestArguments(["integration", "--rerun-each=3", "--randomize"])).toEqual({
+      mode: "integration",
+      rerunEach: 3,
+      extraArgs: ["--randomize"],
+    })
   })
 
   test("accepts the equals form", () => {
@@ -77,5 +86,15 @@ describe("test runner arguments", () => {
 
   test("rejects duplicate shard arguments", () => {
     expect(() => parseTestArguments(["integration", "--shard=1/4", "--shard", "2/4"])).toThrow("Only one --shard")
+  })
+
+  test.each(["", "0", "-1", "1.5", "many"])("rejects invalid rerun count %p", (count) => {
+    expect(() => parseTestArguments(["integration", "--rerun-each", count])).toThrow("Invalid --rerun-each")
+  })
+
+  test("rejects duplicate rerun arguments", () => {
+    expect(() => parseTestArguments(["integration", "--rerun-each=2", "--rerun-each", "3"])).toThrow(
+      "Only one --rerun-each",
+    )
   })
 })

@@ -1198,7 +1198,7 @@ while its cell is focused cycles to the next tab, just like `]`. Nothing an Exte
 earns or claims a positional digit, which is the point: your Pane is reachable the moment a
 Layout places it, and cannot collide with another Extension that guessed the same number. The
 commands are `app.focus.0` … `app.focus.9` and rebindable like any other; their titles name all
-tabs in the cell, so the cheat sheet reads `1 Focus Files`, `2 Focus Local branches / Remote`,
+tabs in the cell, so the cheat sheet reads `1 Focus Files`, `2 Focus Local / Remote`,
 `0 Focus Diff`, and so on.
 
 Register a focus command of your own anyway, without `keys` — the bundled Panes all do
@@ -1443,7 +1443,7 @@ positional jump cannot.
     idPrefix: string;
     /** Singular noun for the cheat-sheet titles: "file" → "Next file". */
     noun: string;
-    /** Neighboring rows kept visible in the direction of cursor travel. */
+    /** Neighboring rows kept visible in the direction of cursor travel. Defaults to 2. */
     scrollOffMargin?: number;
     query?: ListQueryOptions<T>;
   }
