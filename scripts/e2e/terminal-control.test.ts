@@ -104,6 +104,26 @@ async function waitForText(session: Session, text: string | RegExp, timeoutMs = 
   }
 }
 
+async function waitForGitOutput(
+  repo: TestRepo,
+  args: readonly string[],
+  expected: string,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let actual = ""
+  for (;;) {
+    actual = await repo.git(...args)
+    if (actual === expected) return
+    if (Date.now() > deadline) {
+      throw new Error(
+        `git ${args.join(" ")} did not become ${JSON.stringify(expected)}; last saw ${JSON.stringify(actual)}`,
+      )
+    }
+    await Bun.sleep(25)
+  }
+}
+
 async function waitForScreen(
   session: Session,
   description: string,
@@ -395,6 +415,9 @@ describe("laziergit through a real terminal", () => {
       await waitForText(session, " M tracked.txt")
       await session.keyboard.type(" ")
       await waitForText(session, "M  tracked.txt")
+      // The Files pane previews stage immediately. The commit popup validates the real index,
+      // so wait for the operation behind that preview before opening it.
+      await waitForGitOutput(repo, ["diff", "--cached", "--name-only"], "tracked.txt\n")
 
       await session.keyboard.type("c")
       // The popup's own field, which is what says the flow owns the keyboard.
