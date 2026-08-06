@@ -294,6 +294,17 @@ export function parseBranches(stdout: string, headBranch: string | null): readon
 
 // ---- remote branches ---------------------------------------------------------------
 
+/**
+ * A remote-tracking ref has no update timestamp of its own, so the tip commit's committer date
+ * is the useful recency signal. `parseRemoteBranches` preserves this order.
+ */
+export const remoteBranchArgs = [
+  "for-each-ref",
+  "--sort=-committerdate",
+  "--format=%(objectname) %(refname)",
+  "refs/remotes",
+] as const
+
 export function parseRemoteBranches(stdout: string, remotes: readonly Remote[]): readonly RemoteBranch[] {
   const remoteNames = remotes.map((remote) => remote.name).sort((left, right) => right.length - left.length)
   const branches: RemoteBranch[] = []
