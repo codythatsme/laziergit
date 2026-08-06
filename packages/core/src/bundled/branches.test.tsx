@@ -633,9 +633,15 @@ describe("merging a branch into the checked-out branch", () => {
 
     expect(frame(harness)).toContain("View conflicted files")
     expect(frame(harness)).toContain("Abort merge")
+    expect(highlighted(harness).some((row) => row.includes("View conflicted files"))).toBeTrue()
     expect(await git(harness, "diff", "--name-only", "--diff-filter=U")).toBe("work.txt")
 
-    await press(harness, "a")
+    await press(harness, () => harness.setup.mockInput.pressArrow("down"))
+    expect(highlighted(harness).some((row) => row.includes("Abort merge"))).toBeTrue()
+    await press(harness, () => harness.setup.mockInput.pressArrow("up"))
+    expect(highlighted(harness).some((row) => row.includes("View conflicted files"))).toBeTrue()
+    await press(harness, () => harness.setup.mockInput.pressArrow("down"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
     await waitForFrame(harness, "Merge aborted")
     expect(await git(harness, "status", "--porcelain")).toBe("")
     expect(await git(harness, "show", "HEAD:work.txt")).toBe("main")
@@ -651,7 +657,8 @@ describe("merging a branch into the checked-out branch", () => {
     await waitForFrame(harness, "Merge topic stopped with conflicts")
     expect(frame(harness)).toContain("Abort squash merge")
 
-    await press(harness, "a")
+    await press(harness, () => harness.setup.mockInput.pressArrow("down"))
+    await press(harness, () => harness.setup.mockInput.pressEnter())
     await waitForFrame(harness, "Abort the squash merge?")
     await press(harness, "y")
     await waitForFrame(harness, "Squash merge aborted")

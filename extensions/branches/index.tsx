@@ -340,21 +340,15 @@ export default defineExtension({
 
     async function handleMergeConflict(branch: Branch, mode: MergeMode): Promise<void> {
       const squash = mode === "squash" || mode === "squash-commit"
-      await ctx.popups.menu({
+      const choice = await ctx.popups.select({
         title: `Merge ${branch.name} stopped with conflicts`,
-        groups: [
-          {
-            items: [
-              { key: "v", label: "View conflicted files", run: () => ctx.commands.execute("files.focus") },
-              {
-                key: "a",
-                label: squash ? "Abort squash merge…" : "Abort merge",
-                run: () => (squash ? abortSquashMerge() : abortMerge(false)),
-              },
-            ],
-          },
+        items: [
+          { label: "View conflicted files", value: "view" as const },
+          { label: squash ? "Abort squash merge…" : "Abort merge", value: "abort" as const },
         ],
       })
+      if (choice === "view") await ctx.commands.execute("files.focus")
+      else if (choice === "abort") await (squash ? abortSquashMerge() : abortMerge(false))
     }
 
     async function mergeBranch(branch: Branch, mode: MergeMode): Promise<void> {
