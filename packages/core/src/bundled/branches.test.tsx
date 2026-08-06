@@ -512,7 +512,7 @@ describe("branch names", () => {
     expect(await git(harness, "branch", "--show-current")).toBe("main-renamed")
   })
 
-  it("copies the selected branch name with the primary modifier and C", async () => {
+  it("copies the selected branch name with Y", async () => {
     const harness = await createHarness({
       git: true,
       clipboardWriters: [[process.execPath, ["-e", 'if (await Bun.stdin.text() !== "main") process.exit(1)']]],
@@ -520,7 +520,7 @@ describe("branch names", () => {
     await seed(harness)
     await start(harness)
 
-    await press(harness, "c", { ctrl: true })
+    await press(harness, "y")
     await waitForFrame(harness, "Copied main")
   })
 })

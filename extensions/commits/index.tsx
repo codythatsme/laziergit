@@ -530,7 +530,7 @@ export default defineExtension({
       id: "commits.copy-oid",
       source: rows.api,
       title: "Copy the full commit oid",
-      keys: ["mod+c", "y"],
+      keys: "y",
       run: (commit) => attempt(`Copied ${commit.shortOid}`, () => ctx.copy(commit.oid)),
     })
     ctx.commands.register({

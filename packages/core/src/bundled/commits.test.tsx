@@ -316,7 +316,7 @@ describe("creating a branch from a commit", () => {
 })
 
 describe("contextual commit Commands", () => {
-  it("copies the selected commit's full hash with the primary modifier and C", async () => {
+  it("copies the selected commit's full hash with Y", async () => {
     const repo = await openRepo({
       clipboardWriters: [
         [process.execPath, ["-e", "if (!/^[0-9a-f]{40}$/.test(await Bun.stdin.text())) process.exit(1)"]],
@@ -329,7 +329,7 @@ describe("contextual commit Commands", () => {
     await renderApp(repo.harness)
     await press(repo.harness, "2")
     await waitForSelection(repo, "HEAD")
-    await press(repo.harness, "c", { ctrl: true })
+    await press(repo.harness, "y")
 
     await waitForFrame(repo.harness, `Copied ${selected}`)
   })

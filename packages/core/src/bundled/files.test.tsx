@@ -536,7 +536,7 @@ describe("discarding from the files pane", () => {
 })
 
 describe("the files Command catalog", () => {
-  it("copies a file's repository-relative path with the primary modifier and C", async () => {
+  it("copies a file's repository-relative path with Y", async () => {
     const harness = await createFilesHarness(columnsLayout, {
       clipboardWriters: [
         [process.execPath, ["-e", 'if (await Bun.stdin.text() !== "nested/loose.txt") process.exit(1)']],
@@ -548,7 +548,7 @@ describe("the files Command catalog", () => {
     await focusFiles(harness)
     await press(harness, "j")
     await waitForFrame(harness, "nested/loose.txt")
-    await press(harness, "c", { ctrl: true })
+    await press(harness, "y")
 
     await waitForFrame(harness, "Copied nested/loose.txt")
   })

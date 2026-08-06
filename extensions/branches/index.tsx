@@ -700,7 +700,7 @@ export default defineExtension({
       id: "branches.copy-name",
       source: rows.api,
       title: "Copy branch name",
-      keys: "mod+c",
+      keys: "y",
       run: copyBranchName,
     })
     ctx.commands.register({

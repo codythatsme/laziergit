@@ -698,7 +698,7 @@ export default defineExtension({
       useCommand({
         id: "files.copy-path",
         title: "Copy relative file path",
-        keys: "mod+c",
+        keys: "y",
         when: () => selected?.node.kind === "file",
         run: () => {
           const node = selected?.node
