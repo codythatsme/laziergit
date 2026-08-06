@@ -1756,7 +1756,10 @@ are Commands (§1.7), including operations contributed to another Extension's Ro
       onChange?(value: string): void;
     }): Promise<string | undefined>;
 
-    /** Filterable list picker. Resolves the chosen value, or undefined on escape. */
+    /**
+     * List picker. A filter appears only when its items overflow the visible
+     * choices. Resolves the chosen value, or undefined on escape.
+     */
     select<T>(opts: {
       title: string;
       items: readonly SelectItem<T>[];

@@ -1,4 +1,4 @@
-/** One row of a filterable picker. Values stay with the caller; the popup resolves an index. */
+/** One row of a picker. Values stay with the caller; the popup resolves an index. */
 export interface PopupChoice {
   readonly label: string
   readonly hint?: string
@@ -109,6 +109,7 @@ export interface ComposeOptions {
 export interface ChooseOptions {
   readonly title: string
   readonly choices: readonly PopupChoice[]
+  /** Custom hint shown when this picker has enough choices to display its filter. */
   readonly placeholder?: string
   /**
    * Called as the cursor moves, then once with undefined when the popup settles. This makes

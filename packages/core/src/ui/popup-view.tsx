@@ -294,6 +294,8 @@ function filterChoices(popup: ChoosePopup, query: string): readonly FuzzyResult<
 function ChooseView({ popup, theme }: { popup: ChoosePopup; theme: Theme }) {
   const [query, setQuery] = useState("")
   const [cursor, setCursor] = useState(0)
+  // A filter earns its row only when the choices would otherwise scroll.
+  const filterable = popup.choices.length > visibleRows
 
   const matches = useMemo(() => filterChoices(popup, query), [popup, query])
   const clamped = Math.min(cursor, Math.max(0, matches.length - 1))
@@ -306,8 +308,8 @@ function ChooseView({ popup, theme }: { popup: ChoosePopup; theme: Theme }) {
    * The filter and the row the key handlers act on, written by those handlers rather than
    * mirrored during render — see {@link PromptView}'s `latest` for the window this closes. It
    * matters more here: this is the component behind both the command palette and every
-   * `select`, so a stale read runs a different row, and the rows include force-push and hard
-   * reset.
+   * filterable `select`, so a stale read runs a different row, and the rows include force-push
+   * and hard reset.
    */
   const state = useRef({ query: "", cursor: 0 })
 
@@ -340,19 +342,26 @@ function ChooseView({ popup, theme }: { popup: ChoosePopup; theme: Theme }) {
   const window = matches.slice(start, start + visibleRows)
 
   return (
-    <PopupFrame title={popup.title} footer="↑↓ move  ·  enter run  ·  escape cancel" theme={theme} holdsFocus={false}>
-      <input
-        focused
-        width="100%"
-        value={query}
-        placeholder={popup.placeholder ?? "Filter"}
-        keyBindings={textInputKeyBindings}
-        onInput={(next) => {
-          state.current = { query: next, cursor: 0 }
-          setQuery(next)
-          setCursor(0)
-        }}
-      />
+    <PopupFrame
+      title={popup.title}
+      footer="↑↓ move  ·  enter run  ·  escape cancel"
+      theme={theme}
+      holdsFocus={!filterable}
+    >
+      {filterable ? (
+        <input
+          focused
+          width="100%"
+          value={query}
+          placeholder={popup.placeholder ?? "Filter"}
+          keyBindings={textInputKeyBindings}
+          onInput={(next) => {
+            state.current = { query: next, cursor: 0 }
+            setQuery(next)
+            setCursor(0)
+          }}
+        />
+      ) : null}
       {matches.length === 0 ? (
         <text content="no matches" style={{ fg: theme.textMuted }} />
       ) : (
