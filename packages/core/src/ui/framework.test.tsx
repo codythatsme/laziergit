@@ -161,6 +161,14 @@ const leftSegmentSource = `
         pane: "left",
         run: () => undefined,
       })
+      ctx.commands.register({
+        id: "left.more",
+        title: "Do more",
+        hint: "do more",
+        keys: "shift+z",
+        pane: "left",
+        run: () => undefined,
+      })
     },
   })
 `
@@ -282,15 +290,17 @@ describe("focus and keybindings", () => {
 })
 
 describe("popups", () => {
-  it("uses the standard row highlight without a cursor glyph", async () => {
+  it("uses one visible row highlight without a cursor glyph under gruvbox-dark", async () => {
     const harness = await createHarness()
+    await writeFile(harness.configFiles.global, `{ "theme": { "preset": "gruvbox-dark" } }`)
     await twoPanes(harness)
 
     await press(harness, () => void harness.kernel.commands.execute("alpha.pick"))
     await waitForFrame(harness, "first")
 
     expect(frame(harness)).not.toContain("❯")
-    expect(highlighted(harness).some((row) => row.includes("first"))).toBeTrue()
+    expect(highlighted(harness)).toHaveLength(1)
+    expect(highlighted(harness)[0]).toContain("first")
   })
 
   it("hands keyboard focus back to the Pane's own field when a popup closes", async () => {
@@ -538,6 +548,8 @@ describe("contextual Commands, transient menus and status line", () => {
     // One row, shared: core writes the focused Pane's hints along its left and an Extension's
     // own left-aligned segments follow them.
     expect(rendered).toContain("z do it")
+    expect(rendered).toContain("Z do more")
+    expect(rendered).not.toContain("shift+z do more")
     expect(rendered).toContain("left-segment")
     expect(rendered.indexOf("z do it")).toBeLessThan(rendered.indexOf("left-segment"))
   })

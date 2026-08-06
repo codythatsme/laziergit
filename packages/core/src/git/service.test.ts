@@ -93,6 +93,23 @@ it("loads head, branches, and history from a real repository", async () => {
   expect(reports).toEqual([])
 })
 
+it("loads the configured history window from a branch other than HEAD", async () => {
+  const repo = await createSeededRepo()
+  await repo.git("checkout", "--quiet", "-b", "topic")
+  await repo.write("topic.txt", "topic\n")
+  await repo.git("add", "topic.txt")
+  await repo.commit("topic commit")
+  await repo.git("checkout", "--quiet", "main")
+
+  const service = await open(repo.path)
+  service.setConfig({ ...defaultGitConfig, commitLimit: 1 })
+  await service.refresh()
+
+  expect((await service.commits("refs/heads/topic")).map((commit) => commit.subject)).toEqual(["topic commit"])
+  expect(state(service).commits.map((commit) => commit.subject)).toEqual(["first commit"])
+  expect(reports).toEqual([])
+})
+
 it("reads a repository with no commits without failing on `git log`", async () => {
   const repo = await createTestRepo()
   await repo.write("untracked.txt", "x\n")
@@ -296,6 +313,20 @@ it("stages, commits, and refreshes before the caller's await resolves", async ()
   await service.commit("add the feature")
   // The store is already current when the write resolves; no extra refresh is needed.
   expect(state(service).commits.map((commit) => commit.subject)).toEqual(["add the feature", "first commit"])
+  expect(state(service).status.isClean).toBe(true)
+})
+
+it("skips commit hooks when requested", async () => {
+  const repo = await createSeededRepo()
+  const service = await open(repo.path)
+  await repo.write("feature.txt", "feature\n")
+  await service.stage(["feature.txt"])
+  await repo.write(".git/hooks/pre-commit", "#!/bin/sh\necho 'hook must not run' >&2\nexit 1\n")
+  await chmod(join(repo.path, ".git", "hooks", "pre-commit"), 0o755)
+
+  await service.commit("checkpoint", { skipHooks: true })
+
+  expect(state(service).commits.at(0)?.subject).toBe("checkpoint")
   expect(state(service).status.isClean).toBe(true)
 })
 
@@ -828,7 +859,13 @@ it("tracks a commit made outside laziergit within one poll interval", async () =
   await repo.git("add", "external.txt")
   await repo.commit("committed elsewhere")
 
-  await waitFor(() => state(service).commits.length === 2, "the external commit to appear")
+  // The refresh fans its reads out concurrently. A pass that overlaps the external commit can
+  // legitimately see the pre-commit status and the post-commit log, especially on Windows;
+  // the next poll converges on one coherent snapshot.
+  await waitFor(
+    () => state(service).commits.length === 2 && state(service).status.isClean,
+    "the external commit and clean tree to appear",
+  )
   expect(state(service).commits[0]?.subject).toBe("committed elsewhere")
   expect(state(service).status.isClean).toBe(true)
 })

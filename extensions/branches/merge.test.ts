@@ -5,10 +5,10 @@ import { mergeArgs, mergeChoices, squashCommitMessage } from "./merge"
 describe("mergeChoices", () => {
   it("makes the ordinary merge a fast-forward when the selected branch is a descendant", () => {
     expect(mergeChoices(true)).toEqual([
-      { key: "m", label: "Regular merge (fast-forward)", mode: "fast-forward" },
-      { key: "n", label: "Regular merge (with merge commit)", mode: "merge-commit" },
-      { key: "s", label: "Squash merge and leave uncommitted", mode: "squash" },
-      { key: "shift+s", label: "Squash merge and commit", mode: "squash-commit" },
+      { label: "Regular merge (fast-forward)", mode: "fast-forward" },
+      { label: "Regular merge (with merge commit)", mode: "merge-commit" },
+      { label: "Squash merge and leave uncommitted", mode: "squash" },
+      { label: "Squash merge and commit", mode: "squash-commit" },
     ])
   })
 

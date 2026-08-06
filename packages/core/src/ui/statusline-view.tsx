@@ -42,6 +42,11 @@ const queryInputKeyBindings = [
   { name: "delete", super: true, action: "delete-to-line-end" },
 ] satisfies InputKeyBinding[]
 
+function hintKey(key: string): string {
+  const shiftedLetter = /^shift\+([a-z])$/i.exec(key)
+  return shiftedLetter?.[1]?.toUpperCase() ?? key
+}
+
 /**
  * What the focused Pane can do, in the keys that would do it. Only Commands whose author wrote
  * a {@link CommandSpec.hint} appear: `tab`, the palette and `q` are on every screen in every
@@ -57,7 +62,7 @@ function HintBar({ keys }: { keys: ExternalStore<readonly LiveBinding[]> }) {
   // Narrowed by the same pass that filters, so the label below is a string rather than a
   // second check of the field that decided it was there.
   const hints = bindings.flatMap((binding) =>
-    binding.hint === undefined ? [] : [{ id: binding.id, key: binding.key, label: binding.hint }],
+    binding.hint === undefined ? [] : [{ id: binding.id, key: hintKey(binding.key), label: binding.hint }],
   )
 
   return (

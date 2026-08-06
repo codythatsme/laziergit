@@ -34,7 +34,13 @@ import { SlotOwners, type UiSlotRegistry, type UiSlots } from "../ui/slots"
 import { StatuslineHost } from "../ui/statusline-host"
 import { ActivationScope } from "./activation-scope"
 import { CommandHost, type CommandEntry } from "./command-host"
-import { createExtensionContext, type ClipboardWriterSpec, type ContextHosts, type ExtensionApiLookup } from "./context"
+import {
+  createExtensionContext,
+  type ClipboardWriterSpec,
+  type ContextHosts,
+  type ExtensionApiLookup,
+  type ExternalOpener,
+} from "./context"
 import { Diagnostics, normalizeError, type DiagnosticPhase } from "./diagnostics"
 import {
   discoverExtensions,
@@ -115,6 +121,8 @@ export interface ExtensionKernelOptions {
   readonly toastLifetimeMs?: number
   /** Overrides the platform clipboard cascade; useful to embedders with their own writer. */
   readonly clipboardWriters?: readonly ClipboardWriterSpec[]
+  /** Overrides the platform URL launcher; useful to embedders and tests without a desktop. */
+  readonly openExternal?: ExternalOpener
 }
 
 /** Core's own Commands. "app" is a reserved Extension name, so these ids can never collide. */
@@ -187,6 +195,7 @@ export class ExtensionKernel {
   readonly runtime: HostRuntime
   readonly #repoRoot: string
   readonly #clipboardWriters: readonly ClipboardWriterSpec[] | undefined
+  readonly #openExternal: ExternalOpener | undefined
   readonly #directories: ExtensionDirectories
   readonly #themeDirectory: string
   readonly #themeResourcesEnabled: boolean
@@ -257,6 +266,7 @@ export class ExtensionKernel {
     this.#appearance = options.renderer.themeMode ?? "dark"
     this.#onQuit = options.onQuit
     this.#clipboardWriters = options.clipboardWriters
+    this.#openExternal = options.openExternal
     this.notifications = new NotificationHost(options.toastLifetimeMs)
     this.#notifier = createNotifier(this.notifications.publish)
 
@@ -1074,6 +1084,7 @@ export class ExtensionKernel {
       git: this.git,
       notifier: this.#notifier,
       clipboardWriters: this.#clipboardWriters,
+      openExternal: this.#openExternal,
       getExtensionApi: (name) => this.getExtensionApi(name),
     }
 

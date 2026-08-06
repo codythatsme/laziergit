@@ -93,6 +93,13 @@ describe("theme presets", () => {
         if (step < 2) failures.push(`${entry.name}: focused border is only ${step.toFixed(2)}x the unfocused one`)
       }
 
+      // Popups paint their canvas with backgroundPanel and their cursor row with selection.
+      // Keep that row visible even before its text colour change is noticed.
+      const selectionStep = contrast(entry.tokens.selection, entry.tokens.backgroundPanel)
+      if (selectionStep < 1.2) {
+        failures.push(`${entry.name}: selected row is only ${selectionStep.toFixed(2)}x its panel`)
+      }
+
       // The files Pane draws the index column green immediately beside the working-tree column
       // red, so hue alone carries a meaning a red-green deficiency cannot read: the pair has
       // to differ in luminance too.

@@ -21,6 +21,7 @@
       "oxlint": "1.74.0",
       "oxlint-tsgolint": "0.25.0",
       "react": "19.2.0",
+      "string-width": "7.2.0",
       "typescript": "5.9.3"
     }
   },
@@ -33,9 +34,10 @@
     "precommit": "bun run format:check && bun run lint && bun run typecheck && bun run check:tests",
     "prepare": "git config core.hooksPath .githooks",
     "check:tests": "bun scripts/check-tests.ts",
-    "test": "bun scripts/test.ts",
-    "test:unit": "bun scripts/test.ts unit",
+    "test": "bun scripts/test.ts && bun run test:selection",
+    "test:unit": "bun scripts/test.ts unit && bun run test:selection",
     "test:integration": "bun scripts/test.ts integration",
+    "test:selection": "bun test ./scripts/test-selection.test.ts",
     "test:e2e": "bun test ./scripts/e2e",
     "test:runtime": "bun packages/core/src/extension/reload.fixture.ts",
     "typecheck": "bun run --filter '*' typecheck",

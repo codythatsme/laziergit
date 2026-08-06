@@ -9,9 +9,11 @@
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
+    "@opentui/core": "catalog:",
     "@opentui/react": "catalog:",
     "laziergit": "workspace:*",
-    "react": "catalog:"
+    "react": "catalog:",
+    "string-width": "catalog:"
   },
   "devDependencies": {
     "@types/react": "catalog:"

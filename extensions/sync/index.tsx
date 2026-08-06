@@ -3,13 +3,17 @@ import {
   defineExtension,
   describeGitFailure,
   GitError,
+  option,
   remoteWebUrl,
   useGit,
+  useGitActivity,
   useTheme,
   type Head,
   type Theme,
   type UpstreamInfo,
 } from "laziergit"
+
+import { useSpinner } from "./spinner"
 
 type WithoutBranch = Exclude<Head, { kind: "onBranch" }>
 
@@ -112,6 +116,19 @@ function forceWarning(upstream: UpstreamInfo): string {
 export default defineExtension({
   name: "sync",
   description: "Push, pull, and fetch the current branch",
+
+  config: {
+    autoFetch: option.boolean({
+      default: true,
+      description: "Fetch all remotes at startup and periodically while laziergit is open",
+    }),
+    fetchIntervalMs: option.number({
+      default: 60_000,
+      min: 250,
+      max: 3_600_000,
+      description: "How long to wait between automatic fetches",
+    }),
+  },
 
   activate(ctx) {
     // The repository root is constant for the session.
@@ -278,10 +295,48 @@ export default defineExtension({
       if (outcome.kind === "done") ctx.popups.notify(fetchedSummary(), "success")
     }
 
+    /**
+     * lazygit's background fetch is separate from its cheap repository refresh: once at
+     * startup, then one interval after the previous attempt finishes. It fetches every remote,
+     * leaves FETCH_HEAD alone so it cannot disturb a concurrent pull, and treats network or
+     * credential failure as best-effort background work rather than a popup.
+     */
+    let autoFetchTimer: ReturnType<typeof setTimeout> | undefined
+    let autoFetchStopped = false
+
+    function scheduleAutoFetch(): void {
+      if (autoFetchStopped) return
+      autoFetchTimer = setTimeout(() => {
+        autoFetchTimer = undefined
+        void autoFetch()
+      }, ctx.config.fetchIntervalMs)
+      autoFetchTimer.unref?.()
+    }
+
+    async function autoFetch(): Promise<void> {
+      // One latch covers manual sync Commands and the timer, so fetch/pull/push never overlap.
+      if (running === null) {
+        running = "fetching"
+        try {
+          await ctx.git.raw(["fetch", "--all", "--no-write-fetch-head"])
+        } catch {
+          // lazygit's background fetch also fails quietly; the next interval retries.
+        } finally {
+          running = null
+        }
+      }
+      scheduleAutoFetch()
+    }
+
     /** Where HEAD is, and how far it has drifted from its upstream. */
     function SyncSegment() {
       const theme = useTheme()
       const head = useGit((state) => state.head)
+      // Staging belongs to the files Pane. If it overlaps a substantial write, keep showing
+      // the older operation instead of letting a quick stage hide it.
+      const busy =
+        useGitActivity().findLast((entry) => entry.label !== "staging" && entry.label !== "unstaging") ?? null
+      const wave = useSpinner(busy?.label.startsWith("fetching") === true)
 
       const tokens: Token[] = []
       if (head.kind === "detached") {
@@ -291,6 +346,8 @@ export default defineExtension({
       }
 
       tokens.push(...upstreamTokens(head.kind === "onBranch" ? head.upstream : null, theme))
+      if (wave !== null) tokens.push({ key: "activity-spinner", text: wave, color: theme.accent })
+      if (busy !== null) tokens.push({ key: "activity", text: busy.label, color: theme.textMuted })
 
       if (tokens.length === 0) return null
 
@@ -391,5 +448,13 @@ export default defineExtension({
         }
       },
     })
+
+    if (ctx.config.autoFetch) {
+      ctx.onDispose(() => {
+        autoFetchStopped = true
+        if (autoFetchTimer !== undefined) clearTimeout(autoFetchTimer)
+      })
+      void autoFetch()
+    }
   },
 })

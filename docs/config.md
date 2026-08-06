@@ -287,9 +287,10 @@ solid canvas instead.
 
 Every known surface in a shipped preset is held to contrast floors by test, not by eye. Solid
 canvases keep body text at 7:1 and semantic colors at 4.5:1; the transparent default keeps the
-same guarantees on its selected rows and raised panel. Staged-green is also separated from
-unstaged-red in *luminance* as well as hue, because the files Pane draws those two columns
-side by side and hue alone is not readable to everyone.
+same guarantees on its selected rows and raised panel. A selected row also has to separate
+visibly from a raised panel, so menus do not rely on their text-color change alone.
+Staged-green is separated from unstaged-red in *luminance* as well as hue, because the files
+Pane draws those two columns side by side and hue alone is not readable to everyone.
 
 No palette can guarantee contrast against an arbitrary native terminal background:
 `nocturne` expects a dark terminal profile. On a light profile, use `daybreak` with
@@ -358,6 +359,7 @@ own Pane, and `keybindings` above decides what each one is labelled with.
   "extensions": {
     "files": { "view": "tree", "collapseThreshold": 200, "scrollOffMargin": 2 },
     "diff": { "view": "unified", "context": 3 },
+    "sync": { "autoFetch": true, "fetchIntervalMs": 60000 },
     "gh-workflows": { "limit": 30 },
   },
 }
@@ -377,3 +379,5 @@ Options the Bundled Extensions declare:
 | `files.scrollOffMargin` | `2` | Keep this many neighboring files visible in the direction of cursor travel. Set it to `0` to scroll only when the selection reaches the viewport edge |
 | `diff.view` | `"unified"` | Initial diff layout |
 | `diff.context` | `3` | Lines of context around each hunk |
+| `sync.autoFetch` | `true` | Fetch all remotes immediately at startup and periodically while laziergit remains open |
+| `sync.fetchIntervalMs` | `60000` | Milliseconds between automatic fetches. 250–3600000 |

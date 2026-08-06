@@ -11,7 +11,7 @@ import { act } from "react"
 import * as laziergitRuntime from "laziergit"
 
 import { App } from "./app"
-import type { ClipboardWriterSpec } from "./extension/context"
+import type { ClipboardWriterSpec, ExternalOpener } from "./extension/context"
 import { ExtensionKernel } from "./extension/kernel"
 import { gitIsolationEnv } from "./git/test-repo"
 import type { UiSlotRegistry } from "./ui/slots"
@@ -82,6 +82,7 @@ export interface HarnessOptions {
   readonly height?: number
   readonly onQuit?: () => void
   readonly clipboardWriters?: readonly ClipboardWriterSpec[]
+  readonly openExternal?: ExternalOpener
   /** Opt into filesystem Theme discovery/schema publication for tests that exercise it. */
   readonly themes?: boolean
   /**
@@ -233,6 +234,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     pollMs: options.pollMs ?? options.debounceMs,
     onQuit: options.onQuit,
     clipboardWriters: options.clipboardWriters,
+    openExternal: options.openExternal,
     toastLifetimeMs: options.toastLifetimeMs ?? 60_000,
   })
   const harness: Harness = {

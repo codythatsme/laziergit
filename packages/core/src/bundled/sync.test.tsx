@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test"
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { act } from "react"
 
 import { gitIsolationEnv } from "../git/test-repo"
 import {
@@ -48,6 +49,9 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
 interface RepoOptions {
   /** Leave HEAD unborn — `git init` with nothing committed. */
   readonly unborn?: boolean
+  /** Most Command tests isolate themselves from the Extension's startup/periodic fetch. */
+  readonly autoFetch?: boolean
+  readonly fetchIntervalMs?: number
 }
 
 /** A harness running the real `sync` Extension over a repository with one commit. */
@@ -56,7 +60,18 @@ async function startRepo(options: RepoOptions = {}): Promise<Harness> {
   await symlink(syncExtension, join(harness.bundled, "sync"))
   // Mutations made from outside laziergit reach the store through `refreshGit`, so the
   // fingerprint poll is parked out of every test's way.
-  await writeFile(harness.configFiles.repo, `{ "git": { "refreshIntervalMs": 60000 } }`)
+  await writeFile(
+    harness.configFiles.repo,
+    JSON.stringify({
+      git: { refreshIntervalMs: 60000 },
+      extensions: {
+        sync: {
+          autoFetch: options.autoFetch ?? false,
+          fetchIntervalMs: options.fetchIntervalMs ?? 60000,
+        },
+      },
+    }),
+  )
 
   if (options.unborn !== true) {
     await writeFile(join(harness.directory, "seed.txt"), "seed\n")
@@ -338,6 +353,25 @@ describe("sync.pull and sync.fetch", () => {
     expect(frame(harness)).toContain("main ↓1")
   })
 
+  it("automatically discovers remote commits while the app is open", async () => {
+    const harness = await startRepo({ autoFetch: true, fetchIntervalMs: 250 })
+    const origin = await addOrigin(harness)
+    const theirs = await cloneOf(origin)
+
+    await commitIn(theirs, "theirs.txt", "theirs\n")
+    await git(theirs, "push", "--quiet", "origin", "main")
+    await renderApp(harness)
+
+    // lazygit fetches once at startup rather than leaving the first interval stale.
+    await waitForFrame(harness, "main ↓1")
+
+    await commitIn(theirs, "more.txt", "more\n")
+    await git(theirs, "push", "--quiet", "origin", "main")
+
+    // The next scheduled fetch discovers movement that happened after startup.
+    await waitForFrame(harness, "main ↓2")
+  })
+
   it("shows git's message when there is no upstream to pull from", async () => {
     const harness = await startRepo()
     await renderApp(harness)
@@ -405,21 +439,46 @@ describe("the status line segment", () => {
     expect(frame(harness)).toContain("main")
   })
 
-  it("does not put operation activity in the bottom status segment", async () => {
+  it("puts an operation action at the bottom-right without duplicating its animation", async () => {
     const harness = await startRepo()
     await addOrigin(harness)
     await commitIn(harness.directory, "ahead.txt", "one\n")
     await renderApp(harness)
     await waitForFrame(harness, "main ↑1")
 
-    // Activity is global core state. The sync segment deliberately ignores it now: its
-    // bottom-right responsibility is repository context, while the branches Pane owns the
-    // in-place operation treatment.
-    const end = harness.kernel.git.activity.begin("pushing")
+    const end = harness.kernel.git.activity.begin("committing")
     await waitFor(harness, () => harness.kernel.git.activity.getSnapshot().length === 1, "activity to be revealed")
-    expect(frame(harness)).toContain("main ↑1")
-    expect(frame(harness)).not.toContain("pushing")
-    end()
+    await waitForFrame(harness, "main ↑1 committing")
+    const status = frame(harness)
+      .split("\n")
+      .find((line) => line.includes("main ↑1 committing"))
+    if (status === undefined) throw new Error("Expected the bottom status line")
+    expect(status.trimEnd()).toEndWith("committing")
+    expect(status).not.toMatch(/[\u2800-\u28ff]/u)
+
+    act(() => end())
+    await waitForFrame(harness, (screen) => !screen.includes("committing"))
+  })
+
+  it("puts the complete fetch loader at the bottom-right", async () => {
+    const harness = await startRepo()
+    await addOrigin(harness)
+    await renderApp(harness)
+    await waitForFrame(harness, "main")
+
+    const end = harness.kernel.git.activity.begin("fetching")
+    await waitForFrame(harness, (screen) =>
+      screen.split("\n").some((line) => line.includes("main") && /[\u2800-\u28ff]{3} fetching/u.test(line)),
+    )
+    const status = frame(harness)
+      .split("\n")
+      .find((line) => line.includes("main") && line.includes("fetching"))
+    if (status === undefined) throw new Error("Expected the bottom status line")
+    expect(status.trimEnd()).toEndWith("fetching")
+    expect(status).toMatch(/[\u2800-\u28ff]{3} fetching/u)
+
+    act(() => end())
+    await waitForFrame(harness, (screen) => !screen.includes("fetching"))
   })
 
   it("survives a fetch, which used to collapse it for the rest of the session", async () => {

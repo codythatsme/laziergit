@@ -30,6 +30,7 @@ import { bindNotifier, type Notifier } from "./notifier"
 
 export type ExtensionApiLookup = { readonly state: "live"; readonly api: unknown } | { readonly state: "missing" }
 export type ClipboardWriterSpec = readonly [command: string, args: readonly string[]]
+export type ExternalOpener = (url: string) => Promise<void>
 
 export interface ContextHosts {
   readonly diagnostics: Diagnostics
@@ -42,6 +43,7 @@ export interface ContextHosts {
   readonly git: GitService
   readonly notifier: Notifier
   readonly clipboardWriters?: readonly ClipboardWriterSpec[]
+  readonly openExternal?: ExternalOpener
   getExtensionApi(name: string): ExtensionApiLookup
 }
 
@@ -437,6 +439,7 @@ export function createExtensionContext(
       return attachDisposable(scope, hosts.git.subscribeSelector(selector, onChange))
     },
     refresh: () => supervised(hosts.git.refresh()),
+    commits: (ref) => supervised(hosts.git.commits(ref)),
     raw: (args, options) => supervised(hosts.git.raw(args, options)),
     checkout: (ref) => supervised(hosts.git.checkout(ref)),
     createBranch: (name, options) => supervised(hosts.git.createBranch(name, options)),
@@ -479,6 +482,7 @@ export function createExtensionContext(
       return exec(scope, hosts.git.root, command, args, options)
     },
     open(url) {
+      if (hosts.openExternal !== undefined) return hosts.openExternal(url)
       const [command, args] =
         process.platform === "darwin"
           ? ["open", [url]]

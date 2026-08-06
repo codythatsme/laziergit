@@ -1,27 +1,88 @@
 /** @jsxImportSource @opentui/react */
+import type { TextRenderable } from "@opentui/core"
 import {
+  createCell,
   createRowSource,
   defineExtension,
   describeGitFailure,
   GitError,
   isConflicted,
   toneColor,
+  useCommand,
   useGit,
   useGitActivity,
   useListCursor,
   useTheme,
   type Branch,
   type BranchesApi,
+  type CommitBrowserProps,
   type Head,
   type PaneProps,
   type Theme,
+  type Tone,
   type UpstreamInfo,
 } from "laziergit"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
+import stringWidth from "string-width"
 
 import { mergeArgs, mergeChoices, squashCommitMessage, type MergeMode } from "./merge"
-import { pullRequestUrl } from "./pull-request"
+import {
+  githubRepository,
+  parsePullRequestQuery,
+  pullRequestQueryArgs,
+  pullRequestsByBranch,
+  pullRequestUrl,
+  type PullRequest,
+} from "./pull-request"
 import { useSpinner } from "./spinner"
+
+const githubGlyph = ""
+const pullRequestRefreshIntervalMs = 60_000
+const pullRequestQueryConcurrency = 5
+const pullRequestQueryMinimumSize = 10
+const ellipsis = "..."
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+
+/** OpenTUI's built-in truncation preserves both ends. Branches read like paths, so preserve the start. */
+function truncateEnd(value: string, width: number): string {
+  if (width <= 0) return ""
+  if (stringWidth(value) <= width) return value
+  if (width <= ellipsis.length) return ellipsis.slice(0, width)
+
+  const contentWidth = width - ellipsis.length
+  let visible = ""
+  let used = 0
+  for (const { segment } of graphemes.segment(value)) {
+    const segmentWidth = stringWidth(segment)
+    if (used + segmentWidth > contentWidth) break
+    visible += segment
+    used += segmentWidth
+  }
+  return `${visible}${ellipsis}`
+}
+
+function BranchName({ name, color }: { readonly name: string; readonly color: string }) {
+  const text = useRef<TextRenderable>(null)
+
+  const resize = (width: number): void => {
+    const visible = truncateEnd(name, width)
+    if (text.current !== null && text.current.plainText !== visible) text.current.content = visible
+  }
+
+  return (
+    <box
+      flexBasis={stringWidth(name)}
+      flexShrink={1}
+      minWidth={0}
+      overflow="hidden"
+      onSizeChange={function () {
+        resize(this.width)
+      }}
+    >
+      <text ref={text} width="100%" wrapMode="none" content={name} fg={color} />
+    </box>
+  )
+}
 
 function divergence(upstream: UpstreamInfo | null): string {
   if (upstream === null || upstream.gone) return ""
@@ -52,6 +113,25 @@ function canFastForward(branch: Branch): boolean {
   return upstream !== null && !upstream.gone && upstream.behind > 0 && upstream.ahead === 0
 }
 
+function isUpToDate(branch: Branch): boolean {
+  const upstream = branch.upstream
+  return upstream !== null && !upstream.gone && upstream.ahead === 0 && upstream.behind === 0
+}
+
+function pullRequestTone(pullRequest: PullRequest): Tone {
+  if (pullRequest.isDraft) return "muted"
+  switch (pullRequest.state.toUpperCase()) {
+    case "OPEN":
+      return "success"
+    case "MERGED":
+      return "info"
+    case "CLOSED":
+      return "danger"
+    default:
+      return "neutral"
+  }
+}
+
 function validateRef(value: string, empty: string): string | null {
   const trimmed = value.trim()
   if (trimmed.length === 0) return empty
@@ -59,16 +139,102 @@ function validateRef(value: string, empty: string): string | null {
   return null
 }
 
+type BranchPaneView =
+  | { readonly kind: "list"; readonly selectedName: string | null }
+  | { readonly kind: "commits"; readonly branchName: string }
+
 export default defineExtension({
   name: "branches",
   description: "Local branches with their upstream divergence",
-  needs: ["diff"],
+  needs: ["diff", "commits"],
 
   activate(ctx): BranchesApi {
     const rows = createRowSource<Branch>({ pane: "branches", key: (row) => row.name })
     const diff = ctx.extensions.get("diff")
+    const pullRequests = createCell<ReadonlyMap<string, PullRequest>>(new Map())
+    let pullRequestTicket = 0
+    let pullRequestFingerprint = ""
+    let pullRequestLastAttemptAt = 0
+    let pullRequestInFlight:
+      | {
+          readonly fingerprint: string
+          readonly result: Promise<ReadonlyMap<string, PullRequest> | null>
+        }
+      | undefined
+    const renderCommitBrowser = ctx.extensions.get("commits").renderBrowser
+
+    // The shared renderer owns hooks, so it gets a stable component boundary in this Pane.
+    function CommitBrowser(props: CommitBrowserProps) {
+      return renderCommitBrowser(props)
+    }
 
     const fail = (error: unknown): void => ctx.popups.notify(describeGitFailure(error), "error")
+
+    /**
+     * GitHub metadata is optional: a repository without `gh`, authentication, or a GitHub
+     * remote keeps the ordinary git-only branch UI. Identical snapshots share one request;
+     * the ticket prevents an older repository snapshot from replacing a newer one.
+     */
+    async function refreshPullRequests(force = false): Promise<ReadonlyMap<string, PullRequest> | null> {
+      const { branches, remotes } = ctx.git.state
+      const repository = githubRepository(remotes)
+      const trackedBranches = [
+        ...new Set(branches.flatMap((branch) => (branch.upstream === null ? [] : [branch.upstream.branch]))),
+      ]
+      if (repository === null || trackedBranches.length === 0) {
+        const issued = (pullRequestTicket += 1)
+        const empty = new Map<string, PullRequest>()
+        if (issued === pullRequestTicket) pullRequests.set(empty)
+        return empty
+      }
+
+      const fingerprint = JSON.stringify([
+        repository,
+        trackedBranches,
+        remotes.map((remote) => [remote.name, remote.fetchUrl]),
+      ])
+      if (pullRequestInFlight?.fingerprint === fingerprint) return pullRequestInFlight.result
+      if (!force && pullRequestFingerprint === fingerprint) return pullRequests.get()
+
+      const issued = (pullRequestTicket += 1)
+      const branchesPerQuery = Math.max(
+        Math.ceil(trackedBranches.length / pullRequestQueryConcurrency),
+        pullRequestQueryMinimumSize,
+      )
+      const chunks = Array.from({ length: Math.ceil(trackedBranches.length / branchesPerQuery) }, (_, index) =>
+        trackedBranches.slice(index * branchesPerQuery, (index + 1) * branchesPerQuery),
+      )
+      pullRequestLastAttemptAt = Date.now()
+      const result = (async (): Promise<ReadonlyMap<string, PullRequest> | null> => {
+        try {
+          const outputs = await Promise.all(
+            chunks.map((chunk) => ctx.exec("gh", pullRequestQueryArgs(repository, chunk))),
+          )
+          if (outputs.some((output) => output.exitCode !== 0)) return null
+          const prs = outputs.flatMap((output) => parsePullRequestQuery(output.stdout))
+          const mapped = pullRequestsByBranch(prs, branches, remotes)
+          if (issued === pullRequestTicket) {
+            pullRequestFingerprint = fingerprint
+            pullRequests.set(mapped)
+          }
+          return mapped
+        } catch {
+          return null
+        }
+      })()
+      pullRequestInFlight = { fingerprint, result }
+      void result.finally(() => {
+        if (pullRequestInFlight?.result === result) pullRequestInFlight = undefined
+      })
+      return result
+    }
+
+    void refreshPullRequests()
+    ctx.events.on("git.branches.changed", () => void refreshPullRequests())
+    ctx.events.on("git.remotes.changed", () => void refreshPullRequests())
+    ctx.events.on("git.refreshed", () => {
+      if (Date.now() - pullRequestLastAttemptAt >= pullRequestRefreshIntervalMs) void refreshPullRequests(true)
+    })
 
     function currentBranch(): string | null {
       const head = ctx.git.state.head
@@ -236,18 +402,11 @@ export default defineExtension({
         }
 
         const choices = mergeChoices(await canMergeFastForward(branch))
-        await ctx.popups.menu({
+        const mode = await ctx.popups.select({
           title: `Merge ${branch.name} into ${into}`,
-          groups: [
-            {
-              items: choices.map((choice) => ({
-                key: choice.key,
-                label: choice.label,
-                run: () => mergeBranch(branch, choice.mode),
-              })),
-            },
-          ],
+          items: choices.map((choice) => ({ label: choice.label, value: choice.mode })),
         })
+        if (mode !== undefined) await mergeBranch(branch, mode)
       } catch (error) {
         fail(error)
       }
@@ -349,7 +508,8 @@ export default defineExtension({
     // Not gated on the branch having an upstream: a branch can be on the remote without one
     // configured, and an unpushed branch gets a 404 from the host.
     async function openPullRequest(branch: Branch): Promise<void> {
-      const url = pullRequestUrl(ctx.git.state.remotes, branch.name)
+      const existing = pullRequests.get().get(branch.name)
+      const url = existing?.url ?? pullRequestUrl(ctx.git.state.remotes, branch.name)
       if (url === null) return ctx.popups.notify("No web remote to open a pull request on", "warning")
       try {
         await ctx.open(url)
@@ -437,9 +597,10 @@ export default defineExtension({
     })
 
     /**
-     * Substantial repository writes are shown beside the checked-out branch instead of in the
-     * app-wide status line. Kept in a child component so only HEAD subscribes to activity and
-     * owns an animation timer; repositories with hundreds of branches still have one spinner.
+     * Substantial repository writes animate beside the checked-out branch, except fetches,
+     * whose complete loading state belongs in the app-wide status line. The action text lives
+     * there for every operation. Kept in a child component so only HEAD owns an animation timer;
+     * repositories with hundreds of branches still have one spinner.
      */
     function BranchActivity() {
       const theme = useTheme()
@@ -447,25 +608,27 @@ export default defineExtension({
       // operation. Keep an older substantial write visible if one overlaps a stage/unstage.
       const busy =
         useGitActivity().findLast((entry) => entry.label !== "staging" && entry.label !== "unstaging") ?? null
-      const wave = useSpinner(busy !== null)
-      if (busy === null || wave === null) return null
+      const inline = busy !== null && !busy.label.startsWith("fetching")
+      const wave = useSpinner(inline)
+      if (wave === null) return null
 
       return (
         <text wrapMode="none" flexShrink={0}>
           <span fg={theme.accent}>{`  ${wave}`}</span>
-          <span fg={theme.textMuted}>{` ${busy.label}`}</span>
         </text>
       )
     }
 
     function BranchRow({
       branch,
+      pullRequest,
       id,
       selected,
       focused,
       onSelect,
     }: {
       readonly branch: Branch
+      readonly pullRequest: PullRequest | undefined
       readonly id: string
       readonly selected: boolean
       readonly focused: boolean
@@ -476,6 +639,12 @@ export default defineExtension({
       const ahead = divergence(branch.upstream)
       const dim = decoration?.dim === true
       const badge = decoration?.badge
+      const status =
+        pullRequest !== undefined
+          ? { glyph: githubGlyph, tone: pullRequestTone(pullRequest) }
+          : isUpToDate(branch)
+            ? { glyph: "✓", tone: "success" as const }
+            : null
 
       return (
         <box
@@ -486,20 +655,37 @@ export default defineExtension({
           backgroundColor={selected && focused ? theme.selection : undefined}
           onMouseDown={onSelect}
         >
-          <text wrapMode="none" flexShrink={1}>
-            <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "*" : " "}</span>
-            <span fg={nameColor(branch, theme, dim)}>{` ${branch.name}`}</span>
-            {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}
-            {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
-          </text>
+          {/* Keep every status outside the one shrinkable cell. Like LazyGit's width budget,
+              a narrow row spends its last columns on state and takes them from the name. */}
+          <box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+            <text wrapMode="none" flexShrink={0}>
+              <span fg={dim ? theme.textMuted : theme.accent}>{branch.isHead ? "* " : "  "}</span>
+            </text>
+            <BranchName name={branch.name} color={nameColor(branch, theme, dim)} />
+            <text wrapMode="none" flexShrink={0}>
+              {status === null ? null : (
+                <span fg={dim ? theme.textMuted : toneColor(theme, status.tone)}>{` ${status.glyph}`}</span>
+              )}
+              {ahead === "" ? null : <span fg={dim ? theme.textMuted : theme.info}>{`  ${ahead}`}</span>}
+              {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
+            </text>
+          </box>
           {branch.isHead ? <BranchActivity /> : null}
         </box>
       )
     }
 
-    function BranchesPane({ focused }: PaneProps) {
+    function BranchList({
+      focused,
+      selectedName: restoredName,
+      onOpen,
+    }: Pick<PaneProps, "focused"> & {
+      readonly selectedName: string | null
+      readonly onOpen: (branch: Branch) => void
+    }) {
       const theme = useTheme()
       const branches = useGit((state) => state.branches)
+      const branchPullRequests = pullRequests.use()
       const repository = useGit((state) => hasRepository(state.head))
       const cursor = useListCursor({
         items: branches,
@@ -548,6 +734,24 @@ export default defineExtension({
         diff.show({ kind: "branch", ref: selectedName, path: null })
       }, [focused, selectedName])
 
+      useEffect(() => {
+        if (restoredName === null) return
+        const index = visibleBranches.findIndex((branch) => branch.name === restoredName)
+        if (index !== -1) cursor.setIndex(index)
+      }, [restoredName])
+
+      // OpenTUI reports the enter key as `return`, the same spelling the commits Pane uses.
+      useCommand({
+        id: "branches.view-commits",
+        title: "View commits",
+        hint: "commits",
+        keys: "return",
+        when: () => selected !== undefined,
+        run: () => {
+          if (selected !== undefined) onOpen(selected)
+        },
+      })
+
       if (branches.length === 0) {
         const message = repository ? "no branches yet — n creates one" : "no repository here"
         return <text fg={theme.textMuted} content={message} />
@@ -563,12 +767,34 @@ export default defineExtension({
               key={branch.name}
               id={cursor.rowId(rowIndex)}
               branch={branch}
+              pullRequest={branchPullRequests.get(branch.name)}
               selected={rowIndex === selectedIndex}
               focused={focused}
               onSelect={() => cursor.setIndex(rowIndex)}
             />
           ))}
         </scrollbox>
+      )
+    }
+
+    function BranchesPane({ focused }: PaneProps) {
+      const [view, setView] = useState<BranchPaneView>({ kind: "list", selectedName: null })
+
+      return view.kind === "list" ? (
+        <BranchList
+          focused={focused}
+          selectedName={view.selectedName}
+          onOpen={(branch) => setView({ kind: "commits", branchName: branch.name })}
+        />
+      ) : (
+        <CommitBrowser
+          key={view.branchName}
+          revision={`refs/heads/${view.branchName}`}
+          title={view.branchName}
+          focused={focused}
+          idPrefix="branches.history"
+          onBack={() => setView({ kind: "list", selectedName: view.branchName })}
+        />
       )
     }
 

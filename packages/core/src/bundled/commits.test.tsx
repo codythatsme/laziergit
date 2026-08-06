@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { symlink, writeFile } from "node:fs/promises"
+import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
 import { gitIsolationEnv } from "../git/test-repo"
@@ -28,7 +28,7 @@ const commitFlowExtension = resolve(import.meta.dir, "..", "..", "..", "..", "ex
  */
 const ignored = ".gitignore\nbundled/\nglobal/\nrepo/\n*.json\n*.jsonc\n"
 
-/** The commits Pane renders the author, so this fixture overrides the shared identity with a recognisable one. */
+/** The commits Pane renders author initials, so this fixture uses a recognisable two-part name. */
 const isolation: Readonly<Record<string, string>> = {
   ...gitIsolationEnv,
   GIT_AUTHOR_NAME: "Ada Lovelace",
@@ -126,10 +126,10 @@ async function openRepo(options: { readonly config?: string; readonly git?: bool
 }
 
 /** Adds one commit touching its own file, so every commit is an independent change. */
-async function commit(repo: Repo, subject: string): Promise<void> {
+async function commit(repo: Repo, subject: string, author?: string): Promise<void> {
   await writeFile(join(repo.harness.directory, `${subject.replaceAll(" ", "-")}.txt`), `${subject}\n`)
   await repo.run("add", "--all")
-  await repo.run("commit", "--quiet", "--message", subject)
+  await repo.run("commit", "--quiet", ...(author === undefined ? [] : ["--author", author]), "--message", subject)
 }
 
 /** Waits until the highlighted commit has reached the shared RowSource and diff Pane. */
@@ -184,6 +184,25 @@ describe("searching commits", () => {
     expect(rendered).toContain("first commit")
     expect(rendered).toContain("second commit")
     expect(rendered).toContain("third commit")
+  })
+})
+
+describe("identifying commit authors", () => {
+  it("shows lazygit-style initials beside each commit instead of long names", async () => {
+    const repo = await openRepo()
+    await commit(repo, "analytical engine")
+    await commit(repo, "compiler notes", "Grace Hopper <grace@example.com>")
+    const compiler = await repo.shortOid("HEAD")
+    const engine = await repo.shortOid("HEAD~1")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await waitForFrame(repo.harness, `${compiler} GH ○ compiler notes`)
+
+    const rendered = frame(repo.harness)
+    expect(rendered).toContain(`${engine} AL ○ analytical engine`)
+    expect(rendered).not.toContain("Ada Lovelace")
+    expect(rendered).not.toContain("Grace Hopper")
   })
 })
 
@@ -475,10 +494,10 @@ describe("contextual commit Commands", () => {
     // The graph is calculated from the same topo-ordered Commit objects the cursor and diff use:
     // the second parent opens to the right, stays live beside its commit, then joins main again.
     const rendered = frame(repo.harness)
-    expect(rendered).toContain(`◎─╮ ${mergeOid}  merge feature`)
-    expect(rendered).toContain(`│ ○ ${featureOid}  feature work`)
-    expect(rendered).toContain(`○ │ ${mainOid}  main work`)
-    expect(rendered).toContain(`○─╯ ${rootOid}  first commit`)
+    expect(rendered).toContain(`${mergeOid} AL ◎─╮ merge feature`)
+    expect(rendered).toContain(`${featureOid} AL │ ○ feature work`)
+    expect(rendered).toContain(`${mainOid} AL ○ │ main work`)
+    expect(rendered).toContain(`${rootOid} AL ○─╯ first commit`)
 
     const merge = commandIds(repo)
     expect(merge).toContain("commits.checkout")
@@ -628,6 +647,56 @@ describe("contextual commit Commands", () => {
 
     expect(await repo.oid("HEAD")).toBe(originalHead)
     expect(await Bun.file(join(repo.harness.directory, "first-commit.txt")).text()).toBe("unfinished\n")
+  })
+
+  it("ignores a stale REBASE_HEAD when no rebase is active", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+    await writeFile(join(repo.harness.directory, ".git", "REBASE_HEAD"), `${await repo.oid("HEAD")}\n`)
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await waitForSelection(repo, "HEAD")
+    await press(repo.harness, "d")
+    await waitFor(
+      repo.harness,
+      () => {
+        const rendered = frame(repo.harness)
+        return (
+          rendered.includes("will be removed and every newer") ||
+          rendered.includes("Finish or abort the current Git operation")
+        )
+      },
+      "the rewrite readiness decision",
+    )
+
+    expect(frame(repo.harness)).toContain("will be removed and every newer")
+  })
+
+  it("refuses to rewrite while a rebase state directory exists", async () => {
+    const repo = await openRepo()
+    await commit(repo, "first commit")
+    await commit(repo, "second commit")
+
+    await renderApp(repo.harness)
+    await press(repo.harness, "2")
+    await waitForSelection(repo, "HEAD")
+    await mkdir(join(repo.harness.directory, ".git", "rebase-merge"))
+    await press(repo.harness, "d")
+    await waitFor(
+      repo.harness,
+      () => {
+        const rendered = frame(repo.harness)
+        return (
+          rendered.includes("will be removed and every newer") ||
+          rendered.includes("Finish or abort the current Git operation")
+        )
+      },
+      "the rewrite readiness decision",
+    )
+
+    expect(frame(repo.harness)).toContain("Finish or abort the current Git operation")
   })
 
   it("aborts a conflicting drop and restores the original history", async () => {
