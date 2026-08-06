@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { stat } from "node:fs/promises"
 import {
   createRowSource,
   defineExtension,
@@ -28,6 +29,21 @@ function isMerge(commit: Commit): boolean {
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false
+    throw error
+  }
+}
+
+function stripLineEnding(value: string): string {
+  if (value.endsWith("\r\n")) return value.slice(0, -2)
+  return value.endsWith("\n") ? value.slice(0, -1) : value
 }
 
 function validateRef(value: string): string | null {
@@ -283,6 +299,16 @@ export default defineExtension({
       return output.exitCode === 0
     }
 
+    async function gitPathExists(name: string): Promise<boolean> {
+      const output = await ctx.git.raw(["rev-parse", "--path-format=absolute", "--git-path", name])
+      return pathExists(stripLineEnding(output.stdout))
+    }
+
+    async function rebaseInProgress(): Promise<boolean> {
+      const stateDirectories = ["rebase-merge", "rebase-apply"] as const
+      return (await Promise.all(stateDirectories.map(gitPathExists))).some(Boolean)
+    }
+
     async function rewriteReady(commit: Commit): Promise<boolean> {
       if (!canRewrite(commit)) {
         ctx.popups.notify("Only non-merge commits on the checked-out branch can be rewritten", "warning")
@@ -293,8 +319,8 @@ export default defineExtension({
         return false
       }
 
-      const refs = ["REBASE_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] as const
-      if ((await Promise.all(refs.map(refExists))).some(Boolean)) {
+      const refs = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] as const
+      if ((await Promise.all([rebaseInProgress(), ...refs.map(refExists)])).some(Boolean)) {
         ctx.popups.notify("Finish or abort the current Git operation before rewriting commits", "warning")
         return false
       }
@@ -348,7 +374,7 @@ export default defineExtension({
     }
 
     async function reportRewriteFailure(error: unknown, originalHead: string): Promise<void> {
-      const ownsRebase = (await refExists("REBASE_HEAD")) || (await headOid()) !== originalHead
+      const ownsRebase = (await rebaseInProgress()) || (await headOid()) !== originalHead
       if (!ownsRebase) {
         report(error)
         return
