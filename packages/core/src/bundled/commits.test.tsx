@@ -21,6 +21,7 @@ installHarnessLifecycle()
 /** The shipped Extension itself, symlinked into the harness's bundled scope the way `main.tsx` loads it. */
 const commitsExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commits")
 const commitFlowExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "commit-flow")
+const operationsExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "operations")
 
 /**
  * The harness directory is the repository, the Extension home, and where the kernel writes
@@ -122,6 +123,7 @@ async function openRepo(
     writeFile(join(harness.repo, "diff.tsx"), diffStub),
     symlink(commitFlowExtension, join(harness.bundled, "commit-flow")),
     symlink(commitsExtension, join(harness.bundled, "commits")),
+    symlink(operationsExtension, join(harness.bundled, "operations")),
   ])
 
   return {
@@ -679,7 +681,7 @@ describe("contextual commit Commands", () => {
     expect(frame(repo.harness)).toContain("Finish or abort the current Git operation")
   })
 
-  it("aborts a conflicting drop and restores the original history", async () => {
+  it("leaves a conflicting drop open and restores it through the operation menu", async () => {
     const repo = await openRepo()
     const path = join(repo.harness.directory, "shared.txt")
     await writeFile(path, "base\n")
@@ -698,7 +700,16 @@ describe("contextual commit Commands", () => {
     await press(repo.harness, "d")
     await waitForFrame(repo.harness, "will be removed and every newer")
     await press(repo.harness, "y")
-    await waitForFrame(repo.harness, "Rewrite failed; original history restored")
+    await waitForFrame(repo.harness, "Rewrite stopped with conflicts")
+
+    expect(repo.harness.kernel.git.getSnapshot().operation.effective).toBe("rebase")
+    await press(repo.harness, "m")
+    await waitForFrame(repo.harness, "Rebase options")
+    expect(frame(repo.harness)).toContain("skip")
+    await press(repo.harness, "a")
+    await waitForFrame(repo.harness, "Abort rebase?")
+    await press(repo.harness, "y")
+    await waitForFrame(repo.harness, "rebase aborted")
 
     expect(await repo.oid("HEAD")).toBe(originalHead)
     expect(await repo.run("log", "--format=%s")).toBe("third commit\nsecond commit\nfirst commit\n")

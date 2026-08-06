@@ -185,9 +185,12 @@ export function useKeyCapture(active: boolean): void {
  */
 export interface ScrollSurface {
   scrollTop: number
+  scrollLeft: number
   /** Total height of the content, in rows. */
   readonly scrollHeight: number
-  readonly viewport: { readonly height: number }
+  /** Total width of the content, in columns. */
+  readonly scrollWidth: number
+  readonly viewport: { readonly height: number; readonly width: number }
   /**
    * Scroll the descendant carrying `childId` just far enough to be visible — OpenTUI's own
    * `scrollIntoView({ block: "nearest" })`, measured where the element was actually laid out.
@@ -206,10 +209,16 @@ export interface ScrollView {
   readonly ref: (surface: ScrollSurface | null) => void
   /** Rows the viewport shows, or 0 before the first layout. */
   viewportRows(): number
+  /** Columns the viewport shows, or 0 before the first layout. */
+  viewportColumns(): number
   /** Scroll by whole rows; negative is up. Clamped to the content. */
   scrollBy(rows: number): void
+  /** Scroll horizontally by whole columns; negative is left. */
+  scrollByColumns(columns: number): void
   /** Scroll to an absolute row, or to either end. Clamped to the content. */
   scrollTo(row: number | "start" | "end"): void
+  /** Scroll to an absolute column, or to either horizontal edge. */
+  scrollToColumn(column: number | "start" | "end"): void
 }
 
 /**
@@ -234,15 +243,25 @@ export function useScrollView(): ScrollView {
         surface.current = node
       },
       viewportRows: () => surface.current?.viewport.height ?? 0,
+      viewportColumns: () => surface.current?.viewport.width ?? 0,
       scrollBy: (rows) => {
         const node = surface.current
         if (node) node.scrollTop = node.scrollTop + Math.trunc(rows)
+      },
+      scrollByColumns: (columns) => {
+        const node = surface.current
+        if (node) node.scrollLeft = node.scrollLeft + Math.trunc(columns)
       },
       scrollTo: (row) => {
         const node = surface.current
         if (!node) return
         // `scrollHeight` for "end", not `scrollHeight - viewportRows`: the setter clamps.
         node.scrollTop = row === "start" ? 0 : row === "end" ? node.scrollHeight : Math.trunc(row)
+      },
+      scrollToColumn: (column) => {
+        const node = surface.current
+        if (!node) return
+        node.scrollLeft = column === "start" ? 0 : column === "end" ? node.scrollWidth : Math.trunc(column)
       },
     }),
     [],

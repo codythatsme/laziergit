@@ -244,6 +244,7 @@ export class ExtensionKernel {
   #activatedSections = ""
   #watchScan: Promise<void> | undefined
   #reloadTail: Promise<void> = Promise.resolve()
+  #interactiveTail: Promise<void> = Promise.resolve()
   #stopPromise: Promise<void> | undefined
   #stopped = false
   #schemaContributions: readonly {
@@ -538,6 +539,11 @@ export class ExtensionKernel {
     // The mapped type makes a new GitState slice a compile error until it has an event.
     const emitters: { readonly [K in keyof GitState]: () => void } = {
       head: () => this.#emitCoreEvent("git.head.changed", { current: current.head, previous: previous.head }),
+      operation: () =>
+        this.#emitCoreEvent("git.operation.changed", {
+          current: current.operation,
+          previous: previous.operation,
+        }),
       branches: () =>
         this.#emitCoreEvent("git.branches.changed", { current: current.branches, previous: previous.branches }),
       remoteBranches: () =>
@@ -1085,6 +1091,28 @@ export class ExtensionKernel {
       notifier: this.#notifier,
       clipboardWriters: this.#clipboardWriters,
       openExternal: this.#openExternal,
+      interactive: (command, args, options) => {
+        const run = this.#interactiveTail.then(async () => {
+          this.#renderer.suspend()
+          try {
+            const child = Bun.spawn([command, ...args], {
+              cwd: options.cwd ?? this.#repoRoot,
+              env: { ...process.env, ...options.env },
+              stdin: "inherit",
+              stdout: "inherit",
+              stderr: "inherit",
+            })
+            return await child.exited
+          } finally {
+            this.#renderer.resume()
+          }
+        })
+        this.#interactiveTail = run.then(
+          () => undefined,
+          () => undefined,
+        )
+        return run
+      },
       getExtensionApi: (name) => this.getExtensionApi(name),
     }
 

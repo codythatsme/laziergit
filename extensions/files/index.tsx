@@ -127,6 +127,10 @@ function inRepository(head: Head): boolean {
   return head.kind !== "noRepository"
 }
 
+function containsConflictMarkers(contents: string): boolean {
+  return /^<{7,}(?: |\r?$)/m.test(contents) && /^>{7,}(?: |\r?$)/m.test(contents)
+}
+
 /**
  * What discarding a row has to undo. `ctx.git.discard` is `git restore --worktree` (plus
  * `clean` for an untracked path), so it restores *from the index* — staged content has to
@@ -234,9 +238,27 @@ export default defineExtension({
     const fold = createCell<FoldState>(noFolds)
     const viewMode = createCell<"tree" | "flat">(ctx.config.view)
     const previewFiles = createCell<readonly FileChange[] | null>(null)
+    let previousConflictCount = ctx.git.state.status.files.filter(isConflicted).length
+    const conflictFilter = createCell(previousConflictCount > 0)
     const threshold = ctx.config.collapseThreshold
     const scrollOffMargin = ctx.config.scrollOffMargin
     let previewsInFlight = 0
+    let conflictFilterAutomatic = previousConflictCount > 0
+
+    ctx.git.subscribe(
+      (state) => state.status,
+      (status) => {
+        const count = status.files.filter(isConflicted).length
+        if (previousConflictCount === 0 && count > 0) {
+          conflictFilterAutomatic = true
+          conflictFilter.set(true)
+        } else if (count === 0 && conflictFilterAutomatic) {
+          conflictFilterAutomatic = false
+          conflictFilter.set(false)
+        }
+        previousConflictCount = count
+      },
+    )
 
     /**
      * Lazygit makes this same trade-off: staging is common enough that the known status pairs
@@ -351,7 +373,30 @@ export default defineExtension({
      * file is how git records a resolution.
      */
     async function toggleFile(change: FileChange): Promise<void> {
-      if (isUnstaged(change) || isUntracked(change) || isConflicted(change)) await stage([change.path])
+      if (isConflicted(change)) {
+        try {
+          const contents = await Bun.file(`${ctx.git.root}/${change.path}`).text()
+          const resolvedText =
+            change.ours === "modified" &&
+            change.theirs === "modified" &&
+            !contents.includes("\0") &&
+            !containsConflictMarkers(contents)
+          if (resolvedText) {
+            await stage([change.path])
+            return
+          }
+        } catch {
+          // A deleted/binary/non-text conflict reaches the explicit unsupported warning below.
+        }
+        if (diff.openConflict === undefined) {
+          ctx.popups.notify(
+            "This conflict is not an unresolved text file; non-text resolution is not supported yet",
+            "warning",
+          )
+          return
+        }
+        await diff.openConflict(change.path)
+      } else if (isUnstaged(change) || isUntracked(change)) await stage([change.path])
       else await unstage(change)
     }
 
@@ -597,7 +642,9 @@ export default defineExtension({
     function FilesPane({ focused }: PaneProps) {
       const theme = useTheme()
       const storedFiles = useGit((state) => state.status.files)
-      const files = previewFiles.use() ?? storedFiles
+      const allFiles = previewFiles.use() ?? storedFiles
+      const conflictsOnly = conflictFilter.use()
+      const files = useMemo(() => (conflictsOnly ? allFiles.filter(isConflicted) : allFiles), [allFiles, conflictsOnly])
       const repository = useGit((state) => inRepository(state.head))
       const view = viewMode.use()
       const folds = fold.use()
@@ -722,12 +769,52 @@ export default defineExtension({
       // `"enter"` would register, appear in the cheat sheet, and never fire.
       useCommand({
         id: "files.toggle-collapse",
-        title: "Expand / collapse folder",
+        title: "Open file staging or expand/collapse folder",
+        hint: "open",
         keys: "return",
-        run: () => {
+        run: async () => {
           const node = selected?.node
-          if (node === undefined || node.kind !== "directory") return
-          setFolded(node, !isFolded(node, folds, threshold))
+          if (node === undefined) return
+          if (node.kind === "directory") {
+            setFolded(node, !isFolded(node, folds, threshold))
+            return
+          }
+          if (node.change.kind === "conflicted") {
+            if (diff.openConflict === undefined) {
+              ctx.popups.notify("The active diff extension cannot resolve text conflicts", "warning")
+              return
+            }
+            await diff.openConflict(node.change.path)
+            return
+          }
+          if (diff.openStaging === undefined) {
+            ctx.popups.notify("The active diff extension cannot stage individual hunks", "warning")
+            return
+          }
+          await diff.openStaging(node.change.path)
+        },
+      })
+      useCommand({
+        id: "files.resolve-whole-file",
+        title: "Resolve the whole conflicted file",
+        keys: "shift+m",
+        when: () => selected?.node.kind === "file" && selected.node.change.kind === "conflicted",
+        run: async () => {
+          const node = selected?.node
+          if (node?.kind !== "file" || node.change.kind !== "conflicted" || diff.openConflict === undefined) return
+          await diff.openConflict(node.change.path)
+          await ctx.commands.execute("diff.whole-file-conflict")
+        },
+      })
+      useCommand({
+        id: "files.conflict-filter",
+        title: "Show only conflicted files",
+        hint: "conflicts",
+        keys: "shift+f",
+        when: () => conflictFilter.get() || allFiles.some(isConflicted),
+        run: () => {
+          conflictFilterAutomatic = false
+          conflictFilter.set(!conflictFilter.get())
         },
       })
       useCommand({
@@ -754,7 +841,9 @@ export default defineExtension({
       if (!repository) return <text fg={theme.textMuted} content="no repository here" />
 
       // Measured on the file count, not the row count: they differ once something is folded.
-      if (files.length === 0) return <text fg={theme.textMuted} content="working tree clean" />
+      if (files.length === 0) {
+        return <text fg={theme.textMuted} content={conflictsOnly ? "no conflicted files" : "working tree clean"} />
+      }
       if (rows.length === 0) return <text fg={theme.textMuted} content="no matching files" />
 
       return (
@@ -803,6 +892,17 @@ export default defineExtension({
       id: "files.focus",
       title: "Focus the files pane",
       run: () => pane.focus(),
+    })
+    ctx.commands.register({
+      id: "files.focus-conflict",
+      title: "Focus the next conflicted file",
+      run: () => {
+        if (ctx.git.state.status.files.some(isConflicted)) {
+          conflictFilterAutomatic = true
+          conflictFilter.set(true)
+        }
+        pane.focus()
+      },
     })
 
     return host.api

@@ -146,6 +146,20 @@ async function createFilesHarness(
   return harness
 }
 
+async function createInteractiveFilesHarness(): Promise<Harness> {
+  const harness = await createHarness({ git: true, width: 120, height: 36 })
+  await Promise.all([
+    symlink(join(bundledExtensionDirectory, "diff"), join(harness.bundled, "diff")),
+    symlink(join(bundledExtensionDirectory, "files"), join(harness.bundled, "files")),
+    symlink(join(bundledExtensionDirectory, "operations"), join(harness.bundled, "operations")),
+    writeFile(harness.configFiles.repo, configOf(columnsLayout)),
+    write(harness, ".gitignore", "bundled/\nglobal/\nrepo/\n*.json\n*.jsonc\n"),
+  ])
+  await git(harness, "add", ".gitignore")
+  await git(harness, "commit", "--quiet", "--message", "seed")
+  return harness
+}
+
 /** One commit, so the fixture has a HEAD to diff a modification against. */
 async function commitTracked(harness: Harness, ...paths: readonly string[]): Promise<void> {
   await git(harness, "add", ...paths)
@@ -627,8 +641,8 @@ describe("the files Command catalog", () => {
 })
 
 describe("conflicts, shown and delegated", () => {
-  /** An ordinary both-modified conflict: one file, two branches, one merge. */
-  async function conflict(harness: Harness): Promise<void> {
+  /** Two diverged branches ready for an ordinary both-modified conflict. */
+  async function prepareConflict(harness: Harness): Promise<void> {
     await write(harness, "shared.txt", "base\n")
     await commitTracked(harness, "shared.txt")
     await git(harness, "checkout", "--quiet", "-b", "theirs")
@@ -637,6 +651,11 @@ describe("conflicts, shown and delegated", () => {
     await git(harness, "checkout", "--quiet", "main")
     await write(harness, "shared.txt", "ours\n")
     await git(harness, "commit", "--quiet", "--all", "--message", "ours")
+  }
+
+  /** An ordinary both-modified conflict: one file, two branches, one merge. */
+  async function conflict(harness: Harness): Promise<void> {
+    await prepareConflict(harness)
     // Expected to fail. The conflict is the point, so the exit code is not checked.
     await run(harness.directory, ["merge", "theirs"])
   }
@@ -698,6 +717,73 @@ describe("conflicts, shown and delegated", () => {
     expect(harness.kernel.popups.top).toBeUndefined()
     expect(frame(harness)).toContain("UU shared.txt")
   })
+
+  it("filters to conflicts, opens the inline picker, and auto-stages the resolved file", async () => {
+    const harness = await createInteractiveFilesHarness()
+    await conflict(harness)
+    await write(harness, "unrelated.txt", "not part of the conflict\n")
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    expect(frame(harness)).toContain("UU shared.txt")
+    expect(frame(harness)).not.toContain("unrelated.txt")
+
+    await press(harness, "\r")
+    await waitForFrame(harness, "conflict shared.txt  1/1")
+    await press(harness, " ")
+    await waitFor(
+      harness,
+      () => harness.kernel.git.getSnapshot().status.files.every((file) => file.kind !== "conflicted"),
+      "the resolved text conflict to be auto-staged",
+    )
+    await act(async () => harness.kernel.events.drain())
+    await settle(harness)
+
+    expect(await git(harness, "ls-files", "--unmerged", "--", "shared.txt")).toBe("")
+    expect(frame(harness)).toContain("unrelated.txt")
+    expect(await Bun.file(join(harness.directory, "shared.txt")).text()).toBe("ours\n")
+  }, 30_000)
+
+  it("opens the contextual merge menu with m and aborts safely", async () => {
+    const harness = await createInteractiveFilesHarness()
+    await conflict(harness)
+
+    await renderApp(harness)
+    await focusFiles(harness)
+    await press(harness, "m")
+    await waitForFrame(harness, "Merge options")
+    expect(frame(harness)).toContain("continue")
+    expect(frame(harness)).toContain("abort")
+    expect(frame(harness)).not.toContain("skip")
+
+    await press(harness, "a")
+    await waitForFrame(harness, "Abort merge?")
+    await press(harness, "y")
+    await waitFor(harness, () => harness.kernel.git.getSnapshot().operation.effective === null, "the merge to abort")
+    expect(await git(harness, "status", "--porcelain")).toBe("")
+  }, 30_000)
+
+  it("offers to continue after resolving an operation started in this session", async () => {
+    const harness = await createInteractiveFilesHarness()
+    await prepareConflict(harness)
+    await renderApp(harness)
+
+    await act(async () => {
+      const result = await harness.kernel.git.raw(["merge", "theirs"], { allowFailure: true })
+      expect(result.exitCode).not.toBe(0)
+    })
+    await waitForFrame(harness, "UU shared.txt")
+    await focusFiles(harness)
+    await press(harness, "\r")
+    await waitForFrame(harness, "conflict shared.txt  1/1")
+    await press(harness, " ")
+    await waitForFrame(harness, "All conflicts resolved")
+    await press(harness, "y")
+    await waitFor(harness, () => harness.kernel.git.getSnapshot().operation.effective === null, "merge continue")
+
+    expect(await git(harness, "status", "--porcelain")).toBe("")
+    expect(await git(harness, "log", "-1", "--format=%s")).toContain("Merge branch 'theirs'")
+  }, 30_000)
 })
 
 describe("what the files pane publishes", () => {

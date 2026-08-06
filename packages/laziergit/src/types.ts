@@ -76,6 +76,8 @@ export interface ExtensionContext<
   readonly effect: EffectEscape<TName>
   readonly signal: AbortSignal
   exec(command: string, args?: readonly string[], options?: ExecOptions): Promise<ExecOutput>
+  /** Suspend the TUI and give a child the terminal, for editors and interactive Git tools. */
+  interactive(command: string, args?: readonly string[], options?: InteractiveOptions): Promise<number>
   open(url: string): Promise<void>
   copy(text: string): Promise<void>
   onDispose(fn: () => void | Promise<void>): void
@@ -92,6 +94,11 @@ export interface ExecOutput {
   readonly stdout: string
   readonly stderr: string
   readonly exitCode: number
+}
+
+export interface InteractiveOptions {
+  cwd?: string
+  env?: Record<string, string>
 }
 
 export type ConfigValue = string | number | boolean | readonly string[]
@@ -187,6 +194,8 @@ export interface GitActivity {
 
 export interface GitState {
   readonly head: Head
+  /** Merge/sequencer state detected from this worktree's Git administrative directory. */
+  readonly operation: GitOperation
   readonly branches: readonly Branch[]
   /** Cached remote-tracking branches, most-recently-committed first. */
   readonly remoteBranches: readonly RemoteBranch[]
@@ -195,6 +204,23 @@ export interface GitState {
   readonly status: WorkingTreeStatus
   readonly commits: readonly Commit[]
   readonly stash: readonly StashEntry[]
+}
+
+export type GitOperationKind = "merge" | "rebase" | "cherryPick" | "revert"
+
+/**
+ * Repository operations can be nested: a revert or cherry-pick may stop inside a rebase.
+ * Keep every observed flag and use {@link effective} for the command `m` should control.
+ */
+export interface GitOperation {
+  readonly merging: boolean
+  readonly rebasing: boolean
+  readonly cherryPicking: boolean
+  readonly reverting: boolean
+  /** Revert, cherry-pick, merge, then rebase — the same precedence Git's sequencers need. */
+  readonly effective: GitOperationKind | null
+  /** Session metadata: this LazierGit process observed one of its writes begin the operation. */
+  readonly initiatedHere: boolean
 }
 
 /**
@@ -383,6 +409,8 @@ export interface Git {
   readonly state: GitState
   subscribe<T>(selector: (state: GitState) => T, onChange: (value: T, previous: T) => void): Disposable
   refresh(): Promise<void>
+  /** Wait for Git work already in flight, including each write's state refresh. */
+  waitForIdle(): Promise<void>
   /** Loads the configured history window rooted at an arbitrary ref without changing HEAD. */
   commits(ref: string): Promise<readonly Commit[]>
   raw(args: readonly string[], options?: RawOptions): Promise<GitOutput>
@@ -639,6 +667,10 @@ export interface DiffApi {
   current(): DiffTarget | null
   /** Point the diff Pane at a target, or at `null` to say there is nothing to show. */
   show(target: DiffTarget | null): void
+  /** Focus the Diff Pane as a marker-side picker for one textual conflict. */
+  openConflict?(path: string): Promise<void>
+  /** Focus the Diff Pane as a line/hunk staging editor for one ordinary changed file. */
+  openStaging?(path: string): Promise<void>
 }
 
 export type CommitFlowResult = "committed" | "abandoned"

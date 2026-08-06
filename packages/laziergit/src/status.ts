@@ -18,6 +18,6 @@ export function isUntracked(change: FileChange): boolean {
 }
 
 /** An unmerged path: the merge left both sides recorded and neither chosen. */
-export function isConflicted(change: FileChange): boolean {
+export function isConflicted(change: FileChange): change is Extract<FileChange, { kind: "conflicted" }> {
   return change.kind === "conflicted"
 }

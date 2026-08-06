@@ -1,5 +1,7 @@
 import type { GitState, WorkingTreeStatus } from "laziergit"
 
+import { noOperation } from "./operation"
+
 const noFiles = Object.freeze([])
 
 /**
@@ -9,6 +11,7 @@ const noFiles = Object.freeze([])
  */
 export const emptyGitState: GitState = Object.freeze({
   head: Object.freeze({ kind: "noRepository" }),
+  operation: noOperation,
   branches: Object.freeze([]),
   remoteBranches: Object.freeze([]),
   remotes: Object.freeze([]),
@@ -25,6 +28,7 @@ export const emptyGitState: GitState = Object.freeze({
  */
 const sliceNames: { readonly [K in keyof GitState]: K } = {
   head: "head",
+  operation: "operation",
   branches: "branches",
   remoteBranches: "remoteBranches",
   remotes: "remotes",
@@ -97,6 +101,7 @@ function reuseStatus(previous: WorkingTreeStatus, next: WorkingTreeStatus): Work
  */
 export function reconcileGitState(previous: GitState, next: GitState): GitState {
   const head = reuseValue(previous.head, next.head)
+  const operation = reuseValue(previous.operation, next.operation)
   const branches = reuseList(previous.branches, next.branches)
   const remoteBranches = reuseList(previous.remoteBranches, next.remoteBranches)
   const remotes = reuseList(previous.remotes, next.remotes)
@@ -107,6 +112,7 @@ export function reconcileGitState(previous: GitState, next: GitState): GitState 
 
   const unchanged =
     Object.is(head, previous.head) &&
+    Object.is(operation, previous.operation) &&
     Object.is(branches, previous.branches) &&
     Object.is(remoteBranches, previous.remoteBranches) &&
     Object.is(remotes, previous.remotes) &&
@@ -115,5 +121,7 @@ export function reconcileGitState(previous: GitState, next: GitState): GitState 
     Object.is(commits, previous.commits) &&
     Object.is(stash, previous.stash)
 
-  return unchanged ? previous : Object.freeze({ head, branches, remoteBranches, remotes, tags, status, commits, stash })
+  return unchanged
+    ? previous
+    : Object.freeze({ head, operation, branches, remoteBranches, remotes, tags, status, commits, stash })
 }

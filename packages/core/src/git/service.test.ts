@@ -76,6 +76,17 @@ function onBranch(head: Head): Extract<Head, { kind: "onBranch" }> {
   return head
 }
 
+async function prepareConflictingTopic(repo: Awaited<ReturnType<typeof createSeededRepo>>): Promise<void> {
+  await repo.git("checkout", "--quiet", "-b", "topic")
+  await repo.write("seed.txt", "topic\n")
+  await repo.git("add", "seed.txt")
+  await repo.commit("topic change")
+  await repo.git("checkout", "--quiet", "main")
+  await repo.write("seed.txt", "main\n")
+  await repo.git("add", "seed.txt")
+  await repo.commit("main change")
+}
+
 // ---- reads --------------------------------------------------------------------------
 
 it("loads head, branches, and history from a real repository", async () => {
@@ -91,6 +102,71 @@ it("loads head, branches, and history from a real repository", async () => {
   expect(state(service).branches[0]?.isHead).toBe(true)
   expect(state(service).status.isClean).toBe(true)
   expect(reports).toEqual([])
+})
+
+it("detects and owns a conflicted merge started through the service", async () => {
+  const repo = await createSeededRepo()
+  await prepareConflictingTopic(repo)
+  const service = await open(repo.path)
+
+  const result = await service.raw(["merge", "topic"], { allowFailure: true })
+  expect(result.exitCode).not.toBe(0)
+  expect(state(service).operation).toEqual({
+    merging: true,
+    rebasing: false,
+    cherryPicking: false,
+    reverting: false,
+    effective: "merge",
+    initiatedHere: true,
+  })
+  expect(conflictedPaths(service)).toEqual(["seed.txt"])
+
+  await service.raw(["merge", "--abort"])
+  expect(state(service).operation.effective).toBeNull()
+  expect(state(service).operation.initiatedHere).toBe(false)
+})
+
+it("forgets operation ownership after the operation finishes outside the service", async () => {
+  const repo = await createSeededRepo()
+  await prepareConflictingTopic(repo)
+  const service = await open(repo.path)
+
+  await service.raw(["merge", "topic"], { allowFailure: true })
+  expect(state(service).operation.initiatedHere).toBe(true)
+  await repo.git("merge", "--abort")
+  await service.refresh()
+  expect(state(service).operation.effective).toBeNull()
+
+  await repo.git("merge", "topic").catch(() => undefined)
+  await service.refresh()
+  expect(state(service).operation).toMatchObject({ effective: "merge", initiatedHere: false })
+})
+
+it("does not claim an operation that was already active when the service opened", async () => {
+  const repo = await createSeededRepo()
+  await prepareConflictingTopic(repo)
+  await repo.git("merge", "topic").catch(() => undefined)
+
+  const service = await open(repo.path)
+  expect(state(service).operation).toMatchObject({ effective: "merge", initiatedHere: false })
+  expect(conflictedPaths(service)).toEqual(["seed.txt"])
+})
+
+it("reads operation sentinels from a linked worktree's own git directory", async () => {
+  const repo = await createSeededRepo()
+  await prepareConflictingTopic(repo)
+  const linked = `${repo.path}-linked`
+  try {
+    await repo.git("worktree", "add", "--quiet", "-b", "linked", linked, "main")
+    const service = await open(linked)
+    const result = await service.raw(["merge", "topic"], { allowFailure: true })
+
+    expect(result.exitCode).not.toBe(0)
+    expect(state(service).operation).toMatchObject({ effective: "merge", initiatedHere: true })
+    expect(conflictedPaths(service)).toEqual(["seed.txt"])
+  } finally {
+    await rm(linked, { recursive: true, force: true })
+  }
 })
 
 it("loads the configured history window from a branch other than HEAD", async () => {
