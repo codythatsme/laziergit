@@ -708,8 +708,6 @@ describe("contextual commit Commands", () => {
     expect(frame(repo.harness)).toContain("skip")
     await press(repo.harness, () => repo.harness.setup.mockInput.pressArrow("down"))
     await press(repo.harness, () => repo.harness.setup.mockInput.pressEnter())
-    await waitForFrame(repo.harness, "Abort rebase?")
-    await press(repo.harness, "y")
     await waitForFrame(repo.harness, "rebase aborted")
 
     expect(await repo.oid("HEAD")).toBe(originalHead)

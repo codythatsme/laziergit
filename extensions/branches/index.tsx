@@ -267,17 +267,7 @@ export default defineExtension({
       throw new GitError(args, result)
     }
 
-    async function abortMerge(confirm: boolean): Promise<void> {
-      if (confirm) {
-        const accepted = await ctx.popups.confirm({
-          title: "Abort the current merge?",
-          message: "Restore the index and working tree to their pre-merge state.",
-          confirmLabel: "Abort merge",
-          danger: true,
-        })
-        if (!accepted) return
-      }
-
+    async function abortMerge(): Promise<void> {
       try {
         await ctx.git.raw(["merge", "--abort"])
         ctx.popups.notify("Merge aborted", "success")
@@ -287,14 +277,6 @@ export default defineExtension({
     }
 
     async function abortSquashMerge(): Promise<void> {
-      const accepted = await ctx.popups.confirm({
-        title: "Abort the squash merge?",
-        message: "Restore the index and working tree to their pre-merge state.",
-        confirmLabel: "Abort squash",
-        danger: true,
-      })
-      if (!accepted) return
-
       try {
         await ctx.git.raw(["reset", "--merge", "ORIG_HEAD"])
         ctx.popups.notify("Squash merge aborted", "success")
@@ -330,7 +312,7 @@ export default defineExtension({
           {
             items: [
               { key: "c", label: "Continue merge", run: continueMerge },
-              { key: "a", label: "Abort merge…", run: () => abortMerge(true) },
+              { key: "a", label: "Abort merge", run: abortMerge },
               { key: "v", label: "View files", run: () => ctx.commands.execute("files.focus") },
             ],
           },
@@ -344,11 +326,11 @@ export default defineExtension({
         title: `Merge ${branch.name} stopped with conflicts`,
         items: [
           { label: "View conflicted files", value: "view" as const },
-          { label: squash ? "Abort squash merge…" : "Abort merge", value: "abort" as const },
+          { label: squash ? "Abort squash merge" : "Abort merge", value: "abort" as const },
         ],
       })
       if (choice === "view") await ctx.commands.execute("files.focus")
-      else if (choice === "abort") await (squash ? abortSquashMerge() : abortMerge(false))
+      else if (choice === "abort") await (squash ? abortSquashMerge() : abortMerge())
     }
 
     async function mergeBranch(branch: Branch, mode: MergeMode): Promise<void> {

@@ -118,18 +118,6 @@ export default defineExtension({
       }
     }
 
-    async function abort(): Promise<void> {
-      const kind = currentKind()
-      if (kind === null) return
-      const confirmed = await ctx.popups.confirm({
-        title: `Abort ${labels[kind]}?`,
-        message: `Discard the in-progress ${labels[kind]} and restore its starting state.`,
-        confirmLabel: "abort",
-        danger: true,
-      })
-      if (confirmed) await runChoice("abort")
-    }
-
     async function viewConflicts(): Promise<void> {
       try {
         await ctx.commands.execute("files.focus-conflict")
@@ -143,7 +131,7 @@ export default defineExtension({
       if (kind === null) return
       const items = [
         { label: "continue", value: "continue" as const },
-        { label: "abort…", value: "abort" as const },
+        { label: "abort", value: "abort" as const },
         ...(kind === "merge" ? [] : [{ label: "skip", value: "skip" as const }]),
         ...(unresolved() === 0 ? [] : [{ label: "view conflicts", value: "view" as const }]),
       ]
@@ -152,7 +140,7 @@ export default defineExtension({
         items,
       })
       if (choice === "continue" || choice === "skip") await runChoice(choice)
-      else if (choice === "abort") await abort()
+      else if (choice === "abort") await runChoice("abort")
       else if (choice === "view") await viewConflicts()
     }
 

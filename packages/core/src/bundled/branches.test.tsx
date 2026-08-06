@@ -659,8 +659,6 @@ describe("merging a branch into the checked-out branch", () => {
 
     await press(harness, () => harness.setup.mockInput.pressArrow("down"))
     await press(harness, () => harness.setup.mockInput.pressEnter())
-    await waitForFrame(harness, "Abort the squash merge?")
-    await press(harness, "y")
     await waitForFrame(harness, "Squash merge aborted")
     expect(await git(harness, "status", "--porcelain")).toBe("")
     expect(await git(harness, "show", "HEAD:work.txt")).toBe("main")
