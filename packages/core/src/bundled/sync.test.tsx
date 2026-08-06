@@ -403,9 +403,15 @@ describe("sync.pull and sync.fetch", () => {
     const harness = await startRepo({ autoFetch: true, fetchIntervalMs: 250 })
     const origin = await addOrigin(harness)
     const theirs = await cloneOf(origin)
+    const releaseScheduledFetch = Promise.withResolvers<void>()
     const discoveredSecondCommit = Promise.withResolvers<void>()
     const realRaw = harness.kernel.git.raw.bind(harness.kernel.git)
+    let automaticFetches = 0
     spyOn(harness.kernel.git, "raw").mockImplementation(async (args, options) => {
+      if (args.includes("--no-write-fetch-head")) {
+        automaticFetches += 1
+        if (automaticFetches === 2) await releaseScheduledFetch.promise
+      }
       const output = await realRaw(args, options)
       const head = harness.kernel.git.getSnapshot().head
       if (args.includes("--no-write-fetch-head") && head.kind === "onBranch" && head.upstream?.behind === 2) {
@@ -416,16 +422,19 @@ describe("sync.pull and sync.fetch", () => {
 
     await commitIn(theirs, "theirs.txt", "theirs\n")
     await git(theirs, "push", "--quiet", "origin", "main")
+    await commitIn(theirs, "more.txt", "more\n")
     await renderApp(harness)
 
     // lazygit fetches once at startup rather than leaving the first interval stale.
     await waitForFrame(harness, "main ↓1")
 
-    await commitIn(theirs, "more.txt", "more\n")
     await git(theirs, "push", "--quiet", "origin", "main")
 
     // The next scheduled fetch discovers movement that happened after startup.
-    await act(async () => discoveredSecondCommit.promise)
+    await act(async () => {
+      releaseScheduledFetch.resolve()
+      await discoveredSecondCommit.promise
+    })
     await waitForFrame(harness, "main ↓2")
   })
 
