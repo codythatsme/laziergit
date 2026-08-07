@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/react */
 import { stat } from "node:fs/promises"
 import {
+  createCell,
   createRowSource,
   defineExtension,
   describeGitFailure,
   isConflicted,
   isStaged,
+  isUntracked,
   isUnstaged,
   remoteWebUrl,
   toneColor,
@@ -16,6 +18,7 @@ import {
   type Commit,
   type CommitBrowserProps,
   type CommitsApi,
+  type GitOperationKind,
   type Head,
   type PaneProps,
   type Theme,
@@ -24,6 +27,15 @@ import { useEffect, useMemo, useState } from "react"
 
 import { authorColor, authorInitials } from "./authors"
 import { renderCommitGraph, type CommitGraphRow, type CommitGraphTone } from "./graph"
+
+declare module "laziergit" {
+  interface EventMap {
+    "operations.completed": {
+      readonly kind: GitOperationKind
+      readonly resolution: "continue" | "abort" | "skip"
+    }
+  }
+}
 
 function isMerge(commit: Commit): boolean {
   return commit.parents.length > 1
@@ -78,6 +90,14 @@ type CommitHistoryLoad =
 type CommitPaneView =
   | { readonly kind: "list"; readonly selectedOid: string | null }
   | { readonly kind: "files"; readonly commit: Commit }
+
+interface AutoStash {
+  readonly oid: string
+}
+
+interface PendingCherryPick {
+  readonly autoStash: AutoStash | null
+}
 
 /** Why there is no log to draw. All three read as zero rows and mean different things. */
 type EmptyReason = "noRepository" | "unborn" | "loaded"
@@ -183,10 +203,149 @@ export default defineExtension({
     const diff = ctx.extensions.get("diff")
     const commitFlow = ctx.extensions.get("commit-flow")
     const rows = createRowSource<Commit>({ pane: "commits", key: (row) => row.oid })
+    const cherryPickQueue = createCell<readonly Commit[]>([])
+    let pendingCherryPick: PendingCherryPick | null = null
 
     function report(error: unknown): void {
       ctx.popups.notify(describeGitFailure(error), "error")
     }
+
+    function queueCommit(commit: Commit): void {
+      const current = cherryPickQueue.get()
+      if (current.some((candidate) => candidate.oid === commit.oid)) {
+        ctx.popups.notify(`${commit.shortOid} is already queued`, "info")
+      } else {
+        cherryPickQueue.set([...current, commit])
+        ctx.popups.notify(`Queued ${commit.shortOid} for cherry-pick`, "success")
+      }
+      cherryPickPane.reveal()
+    }
+
+    function removeQueuedCommit(commit: Commit): void {
+      cherryPickQueue.set(cherryPickQueue.get().filter((candidate) => candidate.oid !== commit.oid))
+    }
+
+    function autoStashNeeded(): boolean {
+      return ctx.git.state.status.files.some((file) => isStaged(file) || isUnstaged(file) || isUntracked(file))
+    }
+
+    async function saveAutoStash(): Promise<AutoStash | null> {
+      if (!autoStashNeeded()) return null
+      const includeUntracked = ctx.git.state.status.files.some(isUntracked)
+      await ctx.git.stash.save({ message: "[laziergit] auto-stash before cherry-pick", includeUntracked })
+      const entry = ctx.git.state.stash[0]
+      if (entry === undefined) throw new Error("Git did not create the cherry-pick auto-stash")
+      return { oid: entry.oid }
+    }
+
+    async function restoreAutoStash(autoStash: AutoStash | null): Promise<boolean> {
+      if (autoStash === null) return true
+      const entry = ctx.git.state.stash.find((candidate) => candidate.oid === autoStash.oid)
+      if (entry === undefined) {
+        ctx.popups.notify("The cherry-pick auto-stash is no longer in the stash list", "warning")
+        return false
+      }
+      try {
+        await ctx.git.stash.pop(entry.index)
+        return true
+      } catch (error) {
+        ctx.popups.notify(
+          `Cherry-pick finished, but restoring its auto-stash failed: ${describeGitFailure(error)}`,
+          "error",
+        )
+        return false
+      }
+    }
+
+    async function focusConflicts(): Promise<void> {
+      try {
+        await ctx.commands.execute("files.focus-conflict")
+      } catch {
+        try {
+          await ctx.commands.execute("files.focus")
+        } catch {
+          // The operations status and menu remain available when the files Extension is absent.
+        }
+      }
+    }
+
+    function destinationLabel(): string | null {
+      const head = ctx.git.state.head
+      if (head.kind === "onBranch") return head.branch
+      return head.kind === "detached" ? "detached HEAD" : null
+    }
+
+    async function pasteCherryPicks(): Promise<void> {
+      const queued = cherryPickQueue.get()
+      if (queued.length === 0 || pendingCherryPick !== null) return
+      const destination = destinationLabel()
+      if (destination === null) {
+        ctx.popups.notify("Cherry-picking needs an existing commit checked out", "warning")
+        return
+      }
+      if (ctx.git.state.operation.effective !== null) {
+        ctx.popups.notify("Finish or abort the current Git operation before cherry-picking", "warning")
+        return
+      }
+      if (ctx.git.state.status.files.some(isConflicted)) {
+        ctx.popups.notify("Resolve the current conflicts before cherry-picking", "warning")
+        return
+      }
+
+      const confirmed = await ctx.popups.confirm({
+        title: "Cherry-pick queued commits?",
+        message: `${plural(queued.length, "commit")} will be applied to ${destination} in the order shown.`,
+        confirmLabel: "cherry-pick",
+      })
+      if (!confirmed) return
+
+      let autoStash: AutoStash | null = null
+      try {
+        autoStash = await saveAutoStash()
+      } catch (error) {
+        report(error)
+        return
+      }
+
+      pendingCherryPick = { autoStash }
+      const args = [
+        "cherry-pick",
+        "--allow-empty",
+        "--keep-redundant-commits",
+        ...(queued.some(isMerge) ? ["-m", "1"] : []),
+        ...queued.map((commit) => commit.oid),
+      ]
+      try {
+        await ctx.git.raw(args)
+      } catch (error) {
+        if (ctx.git.state.operation.effective === "cherryPick") {
+          ctx.popups.notify(
+            "Cherry-pick stopped with conflicts. Resolve them, then press m to continue or abort.",
+            "warning",
+          )
+          await focusConflicts()
+          return
+        }
+        pendingCherryPick = null
+        await restoreAutoStash(autoStash)
+        report(error)
+        return
+      }
+
+      pendingCherryPick = null
+      cherryPickQueue.set([])
+      if (await restoreAutoStash(autoStash)) {
+        ctx.popups.notify(`Cherry-picked ${plural(queued.length, "commit")}`, "success")
+      }
+    }
+
+    ctx.events.on("operations.completed", async ({ kind, resolution }) => {
+      if (kind !== "cherryPick" || pendingCherryPick === null) return
+      const pending = pendingCherryPick
+      pendingCherryPick = null
+      if (resolution !== "abort") cherryPickQueue.set([])
+      await restoreAutoStash(pending.autoStash)
+    })
 
     async function attempt(done: string, action: () => Promise<unknown>): Promise<void> {
       try {
@@ -618,6 +777,7 @@ export default defineExtension({
       id,
       selected,
       focused,
+      queued,
       onSelect,
     }: {
       readonly commit: Commit
@@ -625,16 +785,16 @@ export default defineExtension({
       readonly id: string
       readonly selected: boolean
       readonly focused: boolean
+      readonly queued: boolean
       readonly onSelect: () => void
     }) {
       const theme = useTheme()
       const decoration = rows.useDecoration(commit)
       const dim = decoration?.dim === true
       const badge = decoration?.badge
-
       return (
         <text id={id} wrapMode="none" bg={selected && focused ? theme.selection : undefined} onMouseDown={onSelect}>
-          <span fg={dim ? theme.textMuted : theme.accent}>{`${commit.shortOid} `}</span>
+          <span fg={dim ? theme.textMuted : queued ? theme.info : theme.accent}>{`${commit.shortOid} `}</span>
           <span fg={dim ? theme.textMuted : authorColor(commit.author.name)}>
             {`${authorInitials(commit.author.name)} `}
           </span>
@@ -644,6 +804,7 @@ export default defineExtension({
             </span>
           ))}
           <span fg={dim ? theme.textMuted : theme.text}>{commit.subject}</span>
+          {queued ? <span fg={theme.info}> queued</span> : null}
           {badge === undefined ? null : <span fg={toneColor(theme, decoration?.tone)}>{`  ${badge}`}</span>}
         </text>
       )
@@ -678,6 +839,8 @@ export default defineExtension({
       })
       const selected = cursor.selected
       const graph = useMemo(() => renderCommitGraph(commits, selected?.oid), [commits, selected?.oid])
+      const queued = cherryPickQueue.use()
+      const queuedOids = useMemo(() => new Set(queued.map((commit) => commit.oid)), [queued])
 
       useEffect(() => {
         if (selectedOid === null) return
@@ -707,6 +870,24 @@ export default defineExtension({
           if (selected !== undefined) onOpen(selected)
         },
       })
+      useCommand({
+        id: `${idPrefix}.queue-cherry-pick`,
+        title: "Queue commit for cherry-pick",
+        hint: "queue",
+        keys: "shift+c",
+        when: () => pendingCherryPick === null,
+        run: () => {
+          if (selected !== undefined) queueCommit(selected)
+        },
+      })
+      useCommand({
+        id: `${idPrefix}.paste-cherry-picks`,
+        title: "Paste queued cherry-picks",
+        hint: "paste",
+        keys: "shift+v",
+        when: () => queued.length > 0 && pendingCherryPick === null,
+        run: pasteCherryPicks,
+      })
 
       if (commits.length === 0) {
         return <text fg={theme.textMuted} content={emptyMessage} />
@@ -730,6 +911,7 @@ export default defineExtension({
                 graph={graph[index] ?? []}
                 selected={index === cursor.index}
                 focused={focused}
+                queued={queuedOids.has(commit.oid)}
                 onSelect={() => cursor.setIndex(index)}
               />
             ))}
@@ -958,11 +1140,82 @@ export default defineExtension({
       )
     }
 
+    function CherryPickPane({ focused }: PaneProps) {
+      const theme = useTheme()
+      const queued = cherryPickQueue.use()
+      const cursor = useListCursor({
+        items: queued,
+        idPrefix: "commits.cherry-pick",
+        noun: "queued commit",
+        query: {
+          mode: "filter",
+          fields: (commit) => [commit.oid, commit.shortOid, commit.subject, commit.author.name],
+        },
+      })
+      const selected = cursor.selected
+
+      useEffect(() => {
+        if (!focused || selected === undefined) return
+        diff.show({ kind: "commit", ref: selected.oid, path: null })
+      }, [focused, selected])
+
+      useCommand({
+        id: "commits.cherry-pick.drop",
+        title: "Drop queued cherry-pick",
+        hint: "drop",
+        keys: "d",
+        when: () => selected !== undefined && pendingCherryPick === null,
+        run: () => {
+          if (selected !== undefined) removeQueuedCommit(selected)
+        },
+      })
+      useCommand({
+        id: "commits.cherry-pick.paste",
+        title: "Paste queued cherry-picks",
+        hint: "paste",
+        keys: "shift+v",
+        when: () => queued.length > 0 && pendingCherryPick === null,
+        run: pasteCherryPicks,
+      })
+
+      if (queued.length === 0) {
+        return <text fg={theme.textMuted}>no commits queued — C in a commit list adds one</text>
+      }
+      if (cursor.items.length === 0) return <text fg={theme.textMuted}>no matching queued commits</text>
+
+      return (
+        <box flexDirection="column" flexGrow={1} flexBasis={0}>
+          <text fg={theme.textMuted}> paste order</text>
+          <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
+            {cursor.items.map((commit, index) => (
+              <text
+                key={commit.oid}
+                id={cursor.rowId(index)}
+                wrapMode="none"
+                bg={index === cursor.index && focused ? theme.selection : undefined}
+                onMouseDown={() => cursor.setIndex(index)}
+              >
+                <span fg={theme.textMuted}>{`${queued.indexOf(commit) + 1}. `}</span>
+                <span fg={theme.info}>{`${commit.shortOid} `}</span>
+                <span fg={theme.text}>{commit.subject}</span>
+              </text>
+            ))}
+          </scrollbox>
+        </box>
+      )
+    }
+
     const pane = ctx.panes.register({
       id: "commits",
       title: "Commits",
       component: CommitsPane,
       placement: { column: 0, order: 40 },
+    })
+    const cherryPickPane = ctx.panes.register({
+      id: "commits.cherry-pick",
+      title: "Cherry Pick",
+      component: CherryPickPane,
+      placement: { tabWith: "stash" },
     })
 
     // Keyless: core binds `1`–`9` positionally over the Layout.
@@ -970,6 +1223,11 @@ export default defineExtension({
       id: "commits.focus",
       title: "Focus commits",
       run: () => pane.focus(),
+    })
+    ctx.commands.register({
+      id: "commits.cherry-pick.focus",
+      title: "Focus cherry-pick queue",
+      run: () => cherryPickPane.focus(),
     })
 
     return { ...rows.api, renderBrowser: CommitBrowser }

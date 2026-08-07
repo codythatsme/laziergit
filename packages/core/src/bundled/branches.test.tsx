@@ -247,10 +247,10 @@ async function start(
 ): Promise<void> {
   const columns = realCommits
     ? focus === "tabbed"
-      ? `[[["branches", "commits", "diff"]]]`
+      ? `[[["branches", "commits", "commits.cherry-pick", "diff"]]]`
       : focus === "branches"
-        ? `[[["branches", "commits"]], ["diff"]]`
-        : `[["diff"], [["branches", "commits"]]]`
+        ? `[[["branches", "commits", "commits.cherry-pick"]], ["diff"]]`
+        : `[["diff"], [["branches", "commits", "commits.cherry-pick"]]]`
     : focus === "tabbed"
       ? `[[["branches", "diff"]]]`
       : focus === "branches"

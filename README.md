@@ -23,7 +23,7 @@ laziergit          # from inside any git repository
 
 - **files** — working-tree status as a path tree, file-level stage/unstage/discard
 - **branches** — checkout, create, delete, divergence at a glance
-- **commits** — log, plus targeted squash/reword/drop on the current branch
+- **commits** — log, targeted squash/reword/drop, and a session cherry-pick queue beside Stash
 - **stash** — save, apply, pop, drop
 - **diff** — patch view that follows your cursor across panes
 - **commit-flow** — summary/description commit popup with amend
@@ -31,6 +31,7 @@ laziergit          # from inside any git repository
 - **gh-workflows** — GitHub Actions runs for the current or all branches: drill into jobs and logs, rerun, cancel (needs the `gh` CLI)
 
 Lists filter with `/`, the palette runs any command, `?` shows the focused pane's keys, and everything is rebindable.
+In a commit list, `C` adds the selected commit to the queue and reveals its tab; `V` applies the queue in the order shown. Focus the queue and press `d` to remove an accidental entry.
 
 ## Writing an extension
 

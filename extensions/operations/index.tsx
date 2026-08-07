@@ -12,6 +12,15 @@ import {
   type GitOperationKind,
 } from "laziergit"
 
+declare module "laziergit" {
+  interface EventMap {
+    "operations.completed": {
+      readonly kind: GitOperationKind
+      readonly resolution: "continue" | "abort" | "skip"
+    }
+  }
+}
+
 const labels: Readonly<Record<GitOperationKind, string>> = {
   merge: "merge",
   rebase: "rebase",
@@ -77,6 +86,12 @@ export default defineExtension({
       return conflictCount(ctx.git.state.operation, ctx.git.state.status.files)
     }
 
+    function publishCompletion(kind: GitOperationKind, resolution: "continue" | "abort" | "skip"): void {
+      if (ctx.git.state.operation.effective === null) {
+        ctx.events.emit("operations.completed", { kind, resolution })
+      }
+    }
+
     async function runChoice(
       choice: "continue" | "abort" | "skip",
       expected?: { readonly kind: GitOperationKind; readonly revision: number },
@@ -102,11 +117,13 @@ export default defineExtension({
           `${labels[kind]} ${choice === "abort" ? "aborted" : choice === "skip" ? "advanced" : "continued"}`,
           "success",
         )
+        publishCompletion(kind, choice)
       } catch (error) {
         if (choice === "continue" && error instanceof GitError && isEmptyStep(error) && kind !== "merge") {
           try {
             await ctx.git.raw([command, "--skip"], { env: continueEnv })
             ctx.popups.notify(`Skipped empty ${labels[kind]} step`, "success")
+            publishCompletion(kind, "skip")
             return
           } catch (skipError) {
             fail(`Skip ${labels[kind]}`, skipError)
