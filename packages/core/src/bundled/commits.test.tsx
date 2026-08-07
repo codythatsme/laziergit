@@ -96,7 +96,7 @@ const diffStub = `
  * Every mutation these tests make goes through laziergit, so the fingerprint poll is parked.
  */
 function layout(): string {
-  return `{ "layout": { "columns": [["diff"], ["commits"]] }, "git": { "refreshIntervalMs": 60000 } }`
+  return `{ "layout": { "columns": [["diff"], [["commits", "commits.cherry-pick"]]] }, "git": { "refreshIntervalMs": 60000 } }`
 }
 
 interface Repo {
