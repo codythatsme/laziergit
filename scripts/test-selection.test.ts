@@ -8,6 +8,8 @@ import {
   stressTestFileWeights,
 } from "./test-selection"
 
+const workflowStressShardCount = 7
+
 describe("test file sharding", () => {
   test("is deterministic regardless of discovery order", () => {
     const files = ["delta.test.ts", "alpha.test.ts", "charlie.test.ts", "bravo.test.ts"]
@@ -24,7 +26,7 @@ describe("test file sharding", () => {
   test("assigns every integration file to exactly one shard", () => {
     const files = discoverTestFiles()
     const integrationFiles = selectTestFiles(files, "integration")
-    const shards = assignFilesToShards(integrationFiles, 4, stressTestFileWeights)
+    const shards = assignFilesToShards(integrationFiles, workflowStressShardCount, stressTestFileWeights)
     const assigned = shards.flat().toSorted()
 
     expect(assigned).toEqual(integrationFiles)
@@ -33,13 +35,14 @@ describe("test file sharding", () => {
 
   test("keeps the measured stress allocation meaningfully balanced", () => {
     const files = selectTestFiles(discoverTestFiles(), "integration")
-    const shards = assignFilesToShards(files, 4, stressTestFileWeights)
+    const shards = assignFilesToShards(files, workflowStressShardCount, stressTestFileWeights)
     const weights = shards.map((shard) =>
       shard.reduce((total, file) => total + (stressTestFileWeights[file] ?? defaultTestFileWeight), 0),
     )
     const idealWeight = weights.reduce((total, weight) => total + weight, 0) / weights.length
+    const indivisibleFileFloor = Math.max(...files.map((file) => stressTestFileWeights[file] ?? defaultTestFileWeight))
 
-    expect(Math.max(...weights)).toBeLessThanOrEqual(idealWeight * 1.05)
+    expect(Math.max(...weights)).toBeLessThanOrEqual(Math.max(idealWeight, indivisibleFileFloor) * 1.05)
   })
 
   test("spreads newly added unweighted files evenly and never drops them", () => {
