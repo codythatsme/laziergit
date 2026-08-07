@@ -14,6 +14,7 @@ import type {
   PaneRegistry,
   PopupToolkit,
   Statusline,
+  InteractiveOptions,
 } from "laziergit"
 
 import type { GitService } from "../git/service"
@@ -44,6 +45,7 @@ export interface ContextHosts {
   readonly notifier: Notifier
   readonly clipboardWriters?: readonly ClipboardWriterSpec[]
   readonly openExternal?: ExternalOpener
+  readonly interactive?: (command: string, args: readonly string[], options: InteractiveOptions) => Promise<number>
   getExtensionApi(name: string): ExtensionApiLookup
 }
 
@@ -439,6 +441,7 @@ export function createExtensionContext(
       return attachDisposable(scope, hosts.git.subscribeSelector(selector, onChange))
     },
     refresh: () => supervised(hosts.git.refresh()),
+    waitForIdle: () => supervised(hosts.git.waitForIdle()),
     commits: (ref) => supervised(hosts.git.commits(ref)),
     raw: (args, options) => supervised(hosts.git.raw(args, options)),
     checkout: (ref) => supervised(hosts.git.checkout(ref)),
@@ -480,6 +483,11 @@ export function createExtensionContext(
     signal: scope.signal,
     exec(command, args = [], options = {}) {
       return exec(scope, hosts.git.root, command, args, options)
+    },
+    interactive(command, args = [], options = {}) {
+      if (hosts.interactive === undefined)
+        return Promise.reject(new Error("Interactive terminal processes are unavailable"))
+      return scope.supervise(hosts.interactive(command, args, { ...options, cwd: options.cwd ?? hosts.git.root }))
     },
     open(url) {
       if (hosts.openExternal !== undefined) return hosts.openExternal(url)

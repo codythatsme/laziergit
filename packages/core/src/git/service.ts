@@ -36,6 +36,7 @@ import {
   tagArgs,
 } from "./parse"
 import { openRepository, type Repository } from "./repository"
+import { operationFingerprint, readOperation } from "./operation"
 import { GitStore } from "./store"
 
 /**
@@ -144,8 +145,8 @@ function isMutating(args: readonly string[]): boolean {
  * fetches; `stash`, because dropping any entry but the top one rewrites only the stash reflog
  * and leaves `refs/stash` identical; `config` for a new remote or upstream.
  */
-function fingerprintOf(status: string, refs: string, stash: string, config: string): string {
-  return [status, refs, stash, config].join("\u0000\u0000")
+function fingerprintOf(status: string, refs: string, stash: string, config: string, operation: string): string {
+  return [status, refs, stash, config, operation].join("\u0000\u0000")
 }
 
 /**
@@ -175,6 +176,7 @@ export class GitService {
   #pollTimer: ReturnType<typeof setInterval> | undefined
   #polling = false
   #stopped = false
+  #operationInitiatedHere = false
 
   constructor(options: GitServiceOptions) {
     this.#repoRoot = options.repoRoot
@@ -264,6 +266,9 @@ export class GitService {
         Effect.retry(this.#readState(repository), { schedule: Schedule.spaced("50 millis"), times: 3 }),
       )
       if (this.#stopped) return
+      // An operation can finish outside laziergit (for example, from another terminal).
+      // Forget the session-local ownership before a later external operation appears.
+      if (read.state.operation.effective === null) this.#operationInitiatedHere = false
       // From the same pass that produced the snapshot, so the next poll tick is quiet unless
       // the repository really moved.
       this.#fingerprint = read.fingerprint
@@ -289,6 +294,7 @@ export class GitService {
         remoteBranches: execGit(root, remoteBranchArgs),
         // Not used to build the snapshot — it is the other half of the poll fingerprint.
         refs: execGitAllowingEmpty(root, refSnapshotArgs, 1),
+        operation: Effect.promise(() => readOperation(repository.gitDir)),
       },
       { concurrency: "unbounded" },
     )
@@ -325,9 +331,14 @@ export class GitService {
           outputs.refs.stdout,
           outputs.stash.stdout,
           outputs.config.stdout,
+          operationFingerprint(outputs.operation),
         ),
         state: {
           head,
+          operation: {
+            ...outputs.operation,
+            initiatedHere: outputs.operation.effective !== null && this.#operationInitiatedHere,
+          },
           branches,
           remoteBranches: parseRemoteBranches(outputs.remoteBranches.stdout, remotes),
           remotes,
@@ -359,7 +370,7 @@ export class GitService {
   }
 
   /**
-   * Reads exactly what {@link fingerprintOf} compares. All four suppress optional locks, so
+   * Reads exactly what {@link fingerprintOf} compares. All reads suppress optional locks, so
    * the poll neither contends with the user's own `git` nor dirties the index and triggers
    * itself on the next tick.
    */
@@ -368,7 +379,7 @@ export class GitService {
     if (!repository || this.#stopped || this.#polling) return
     this.#polling = true
     try {
-      const [status, refs, stash, config] = await this.#run(
+      const [status, refs, stash, config, operation] = await this.#run(
         Effect.all(
           [
             execGit(repository.root, statusArgs),
@@ -377,11 +388,16 @@ export class GitService {
             execGitAllowingEmpty(repository.root, refSnapshotArgs, 1),
             execGit(repository.root, stashArgs),
             execGitAllowingEmpty(repository.root, configArgs, 1),
+            Effect.promise(() => readOperation(repository.gitDir)),
           ],
           { concurrency: "unbounded" },
         ),
       )
-      if (fingerprintOf(status.stdout, refs.stdout, stash.stdout, config.stdout) === this.#fingerprint) return
+      if (
+        fingerprintOf(status.stdout, refs.stdout, stash.stdout, config.stdout, operationFingerprint(operation)) ===
+        this.#fingerprint
+      )
+        return
       await this.refresh()
     } catch (error) {
       this.#report("polling for changes", error)
@@ -469,9 +485,18 @@ export class GitService {
    * `restore` landed all move the repository while rejecting.
    */
   #refreshed<A>(effect: Effect.Effect<A, GitError>): Effect.Effect<A, GitError> {
+    const before = this.store.getSnapshot().operation.effective
     return Effect.ensuring(
       effect,
-      Effect.promise(() => this.refresh()),
+      Effect.promise(async () => {
+        const repository = this.#repository
+        if (repository !== null) {
+          const operation = await readOperation(repository.gitDir)
+          if (operation.effective === null) this.#operationInitiatedHere = false
+          else if (before === null || before !== operation.effective) this.#operationInitiatedHere = true
+        }
+        await this.refresh()
+      }),
     )
   }
 
@@ -701,6 +726,11 @@ export class GitService {
 
   // ---- shutdown --------------------------------------------------------------------
 
+  /** Waits for the Git work visible at call time without stopping future work. */
+  async waitForIdle(): Promise<void> {
+    await Promise.allSettled([this.#refreshing, ...this.#inflight])
+  }
+
   /**
    * Waits for git work already in flight. Extensions' promises are parked by the time this
    * runs, but the writes behind them are not, and the process must not exit mid-`git commit`.
@@ -708,7 +738,7 @@ export class GitService {
   async drain(): Promise<void> {
     this.#stopped = true
     this.#disarmPoll()
-    await Promise.allSettled([this.#opened, this.#syncQueue, this.#refreshing, ...this.#inflight])
+    await Promise.allSettled([this.#opened, this.#syncQueue, this.waitForIdle()])
     // After the wait: until the writes settle they really are in flight.
     this.activity.clear()
   }

@@ -161,6 +161,9 @@ export default defineExtension({
     /** Opens the editor and resolves when it closes, whichever way it closes. */
     async function open(options: OpenOptions): Promise<CommitFlowResult> {
       const amend = options.amend === true
+      // Files previews a stage immediately; an equally immediate `c` must wait for that write
+      // and its refresh before the editor snapshots and validates the staged count.
+      if (!amend && !ctx.git.state.status.files.some(isStaged)) await ctx.git.waitForIdle?.()
       if (amend && !hasCommit(ctx.git.state.head)) {
         ctx.popups.notify("No commit to amend yet", "warning")
         return "abandoned"

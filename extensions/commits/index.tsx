@@ -4,6 +4,7 @@ import {
   createRowSource,
   defineExtension,
   describeGitFailure,
+  isConflicted,
   isStaged,
   isUnstaged,
   remoteWebUrl,
@@ -380,6 +381,10 @@ export default defineExtension({
     }
 
     async function reportRewriteFailure(error: unknown, originalHead: string): Promise<void> {
+      if ((await rebaseInProgress()) && ctx.git.state.status.files.some(isConflicted)) {
+        ctx.popups.notify(`Rewrite stopped with conflicts. Resolve them, then press m to continue or abort.`, "warning")
+        return
+      }
       const ownsRebase = (await rebaseInProgress()) || (await headOid()) !== originalHead
       if (!ownsRebase) {
         report(error)
@@ -587,13 +592,18 @@ export default defineExtension({
         await runRewrite(commit, "drop", `Dropped ${commit.shortOid}`)
       },
     })
-    ctx.commands.register({
+    const mixedResetCommand = ctx.commands.register({
       id: "commits.reset-mixed",
       source: rows.api,
       title: "Reset mixed to this commit",
       keys: "m",
+      when: () => ctx.git.state.operation.effective === null,
       run: (commit) => runReset(commit, "mixed"),
     })
+    ctx.git.subscribe(
+      (state) => state.operation,
+      () => mixedResetCommand.refresh(),
+    )
     ctx.commands.register({
       id: "commits.reset-hard",
       source: rows.api,

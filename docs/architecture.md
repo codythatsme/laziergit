@@ -69,8 +69,6 @@ Both depend on `packages/runtime-bridge`, which exists because React contexts ha
 
 Everything here becomes an extension or a config surface later — the architecture makes deferral cheap.
 
-- Hunk/line staging (`ctx.git.raw(["apply", "--cached"], { stdin })` is the sanctioned escape hatch until a helper earns its place)
-- lazygit-grade conflict resolution (pick-ours / pick-theirs / pick-both); v1 shows conflicts and delegates to the editor or `git mergetool`
 - Credential prompting for auth-requiring remotes (v1 fails fast rather than hanging)
 - A full interactive-rebase editor (todo reordering, fixup, edit/break, conflict continuation); cherry-pick, bisect, worktrees, submodules, reflog, custom patch editing
 - Layout refinements: column weight and cell height for hint-placed panes, configurable startup focus

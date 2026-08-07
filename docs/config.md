@@ -359,6 +359,7 @@ own Pane, and `keybindings` above decides what each one is labelled with.
   "extensions": {
     "files": { "view": "tree", "collapseThreshold": 200, "scrollOffMargin": 2 },
     "diff": { "view": "unified", "context": 3 },
+    "operations": { "autoStageResolvedConflicts": true },
     "sync": { "autoFetch": true, "fetchIntervalMs": 60000 },
     "gh-workflows": { "limit": 30 },
   },
@@ -379,5 +380,6 @@ Options the Bundled Extensions declare:
 | `files.scrollOffMargin` | `2` | Keep this many neighboring files visible in the direction of cursor travel. Set it to `0` to scroll only when the selection reaches the viewport edge |
 | `diff.view` | `"unified"` | Initial diff layout |
 | `diff.context` | `3` | Lines of context around each hunk |
+| `operations.autoStageResolvedConflicts` | `true` | Stage previously observed text conflicts when their markers disappear and offer to continue operations started by this LazierGit process |
 | `sync.autoFetch` | `true` | Fetch all remotes immediately at startup and periodically while laziergit remains open |
 | `sync.fetchIntervalMs` | `60000` | Milliseconds between automatic fetches. 250–3600000 |

@@ -88,6 +88,18 @@
         "@types/react": "catalog:",
       },
     },
+    "extensions/operations": {
+      "name": "@laziergit/extension-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opentui/react": "catalog:",
+        "laziergit": "workspace:*",
+        "react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/react": "catalog:",
+      },
+    },
     "extensions/remote-branches": {
       "name": "@laziergit/extension-remote-branches",
       "version": "0.0.0",
@@ -218,6 +230,8 @@
     "@laziergit/extension-files": ["@laziergit/extension-files@workspace:extensions/files"],
 
     "@laziergit/extension-gh-workflows": ["@laziergit/extension-gh-workflows@workspace:extensions/gh-workflows"],
+
+    "@laziergit/extension-operations": ["@laziergit/extension-operations@workspace:extensions/operations"],
 
     "@laziergit/extension-remote-branches": ["@laziergit/extension-remote-branches@workspace:extensions/remote-branches"],
 

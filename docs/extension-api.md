@@ -21,7 +21,7 @@ same shape, shipped inside the distribution rather than these directories.)
 | Area | Surface |
 |---|---|
 | Entry point | `defineExtension()` — one function, six fields |
-| `ctx` | ten members — `config` · `git` · `events` · `commands` · `panes` · `popups` · `statusline` · `extensions` · `effect` · `signal` — plus four methods: `exec()`, `open()`, `copy()`, `onDispose()` |
+| `ctx` | ten members — `config` · `git` · `events` · `commands` · `panes` · `popups` · `statusline` · `extensions` · `effect` · `signal` — plus five methods: `exec()`, `interactive()`, `open()`, `copy()`, `onDispose()` |
 | React hooks | `useGit`, `useGitActivity`, `useEvent`, `useCommand`, `useTheme`, and the pane-building `useListCursor`, `useScrollView`, `useKeyCapture` — 8 hooks (plus `createCell` for activate → component data) |
 | Pure helpers | `option` (config), `toneColor` + `createRowSource` (row decorations and contextual Commands), `literalPathspec` (pathspec safety), `describeGitFailure` (what to show when git says no), `remoteWebUrl` (a remote's browsable page) — plain functions, no runtime |
 | Augmentable registries | `ExtensionApis`, `EventMap` — 2 interfaces, one pattern |
@@ -396,6 +396,13 @@ declare module "laziergit" {
     exec(command: string, args?: readonly string[], options?: ExecOptions): Promise<ExecOutput>;
 
     /**
+     * Suspend the TUI and give a child the terminal's inherited stdin/stdout/stderr.
+     * Calls are serialized, cwd defaults to the repo root, and the renderer resumes on
+     * every exit. Use this for editors and interactive Git tools; use exec() for pipes.
+     */
+    interactive(command: string, args?: readonly string[], options?: InteractiveOptions): Promise<number>;
+
+    /**
      * Open a URL (or file path) with the user's default handler — the
      * cross-platform "open in browser" (`open` / `xdg-open` / `start`,
      * resolved per platform so extensions never hardcode one).
@@ -441,6 +448,11 @@ declare module "laziergit" {
     readonly stdout: string;
     readonly stderr: string;
     readonly exitCode: number;
+  }
+
+  export interface InteractiveOptions {
+    cwd?: string;
+    env?: Record<string, string>;
   }
 ```
 
@@ -551,7 +563,7 @@ tagged with the extension name, and routed to the log file / debug pane.
   /**
    * Snapshot of everything laziergit knows about the repository. Core refreshes
    * it after every write issued through `ctx.git`, on a cheap ~2s repo-fingerprint
-   * poll (four lock-free reads — `status --porcelain=v2`, `show-ref --head`,
+   * poll (four lock-free git reads plus worktree-local operation sentinels — `status --porcelain=v2`, `show-ref --head`,
    * `stash list`, and `config --get-regexp '^(remote|branch)\.'`; no fs-watching,
    * see §5.12 for why each is needed), and on focus regain. Always present — core loads it before extensions
    * activate. Unchanged slices keep referential identity across refreshes,
@@ -563,6 +575,7 @@ tagged with the extension name, and routed to the log file / debug pane.
    */
   export interface GitState {
     readonly head: Head;
+    readonly operation: GitOperation;
     /** Local branches, HEAD first, then most-recently-committed first. */
     readonly branches: readonly Branch[];
     /** Cached remote-tracking branches, most-recently-committed first. */
@@ -573,6 +586,19 @@ tagged with the extension name, and routed to the log file / debug pane.
     /** Recent history of HEAD (windowed; page deeper via `git.raw(["log", ...])`). */
     readonly commits: readonly Commit[];
     readonly stash: readonly StashEntry[];
+  }
+
+  export type GitOperationKind = "merge" | "rebase" | "cherryPick" | "revert";
+
+  /** Independent sentinel flags plus the operation the global `m` menu controls. */
+  export interface GitOperation {
+    readonly merging: boolean;
+    readonly rebasing: boolean;
+    readonly cherryPicking: boolean;
+    readonly reverting: boolean;
+    readonly effective: GitOperationKind | null;
+    /** Session-local: this process observed one of its writes begin this operation. */
+    readonly initiatedHere: boolean;
   }
 
   /**
@@ -725,7 +751,21 @@ tagged with the extension name, and routed to the log file / debug pane.
   export function isStaged(change: FileChange): boolean;
   export function isUnstaged(change: FileChange): boolean;
   export function isUntracked(change: FileChange): boolean;
-  export function isConflicted(change: FileChange): boolean;
+  export function isConflicted(
+    change: FileChange,
+  ): change is Extract<FileChange, { kind: "conflicted" }>;
+
+  export type ConflictMarkerKind = "start" | "ancestor" | "separator" | "end";
+
+  export interface ConflictMarker {
+    readonly kind: ConflictMarkerKind;
+    readonly size: number;
+  }
+
+  /** Classify one complete line using Git's marker grammar. */
+  export function parseConflictMarker(line: string): ConflictMarker | null;
+  /** True for any Git conflict marker, including an unmatched or malformed one. */
+  export function containsConflictMarker(contents: string): boolean;
 
   export interface StashEntry {
     /** Position in the stash list (stash@{index}). */
@@ -843,6 +883,9 @@ tagged with the extension name, and routed to the log file / debug pane.
 
     /** Force a store refresh (e.g. after `exec`-ing something that touched the repo). */
     refresh(): Promise<void>;
+
+    /** Wait for Git work already in flight, including each write's state refresh. */
+    waitForIdle(): Promise<void>;
 
     /**
      * Run git with explicit argv (never through a shell). The escape hatch for
@@ -1563,10 +1606,18 @@ positional jump cannot.
      * measurement an extension cannot compute, and what page-wise motions need.
      */
     viewportRows(): number;
+    /** Rows laid out in the scrollable content, or 0 before the first content layout. */
+    contentRows(): number;
+    /** Columns the viewport shows, or 0 before the first layout. */
+    viewportColumns(): number;
     /** Scroll by whole rows; negative is up. Clamped to the content. */
     scrollBy(rows: number): void;
+    /** Scroll by whole columns; negative is left. Clamped to the content. */
+    scrollByColumns(columns: number): void;
     /** Scroll to an absolute row, or to either end. Clamped to the content. */
     scrollTo(row: number | "start" | "end"): void;
+    /** Scroll to an absolute column, or to either horizontal edge. */
+    scrollToColumn(column: number | "start" | "end"): void;
   }
 
   /**
@@ -1577,9 +1628,12 @@ positional jump cannot.
    */
   export interface ScrollSurface {
     scrollTop: number;
+    scrollLeft: number;
     /** Total height of the content, in rows. */
     readonly scrollHeight: number;
-    readonly viewport: { readonly height: number };
+    /** Total width of the content, in columns. */
+    readonly scrollWidth: number;
+    readonly viewport: { readonly height: number; readonly width: number };
     /**
      * Scroll the descendant carrying `childId` just far enough to be visible, or
      * do nothing if it already is — OpenTUI's own
@@ -2005,6 +2059,10 @@ are Commands (§1.7), including operations contributed to another Extension's Ro
      * resolves.
      */
     show(target: DiffTarget | null): void;
+    /** Optional capability of the bundled diff extension: focus its text-conflict picker. */
+    openConflict?(path: string): Promise<void>;
+    /** Optional capability of the bundled diff extension: focus line/hunk/range staging. */
+    openStaging?(path: string): Promise<void>;
   }
 
   /** How a commit flow ended, for a caller that composed the message. */
@@ -2886,12 +2944,11 @@ renderer still handles ctrl+C independently of the kernel, so the process itself
   smallest surface wins over one hypothetical extension; revisit with a real queueing design.
 - **`ctx.log`** — `console.*` is captured by the host, tagged with the extension name, and
   routed to the log file / debug pane.
-- **A patch-level staging helper** (`stageHunk` / `stagePatch`) — v1 staging is file-level, so
-  `stage`/`unstage`/`discard` take paths and nothing else. Hunk and line staging are post-v1,
-  and `raw` already carries them: `RawOptions.stdin` exists precisely so
-  `git.raw(["apply", "--cached"], { stdin: patch })` works today. A helper can be added once a
-  real patch-building UI has shown what shape it wants; guessing now would ship a signature
-  the first honest consumer has to fight.
+- **A public patch-level staging helper** (`stageHunk` / `stagePatch`) — the bundled Diff
+  extension now builds line/hunk/range patches internally, while the public `stage`/`unstage`/
+  `discard` helpers remain file-level. Third-party patch UIs use `RawOptions.stdin` with
+  `git.raw(["apply", "--cached"], { stdin: patch })`; one internal consumer is not yet enough
+  reason to freeze its patch-session model into the public API.
 - **Credential prompting** — every git invocation runs with `GIT_TERMINAL_PROMPT=0`, so a
   remote that wants a username or password fails immediately with git's own message instead of
   blocking forever on a prompt nobody can answer: laziergit owns the terminal, and git's stdio
@@ -3058,12 +3115,17 @@ One remains, deliberately:
   the public row type to a file-or-directory union—would make every third-party provider and
   Command handle a case it never asked for. The wider row type belongs with its first consumer.
 
-**Conflicts in v1: show and delegate.** The bundled `files` extension draws conflicted paths
-with git's own `UU` / `AA` / `DU` pair wherever they sit in the tree, marks every directory
-above them `!`, and exposes direct Commands for opening and staging the resolved path,
-and otherwise stays out of the way — resolution happens in the user's editor or `git
-mergetool`. It is deliberately less than lazygit, which renders a pick-ours / pick-theirs /
-pick-both hunk picker; that is post-v1 (see the roadmap in architecture.md) and is the work that will want the
-patch-level staging surface §5.11 leaves out. Nothing here
-is privileged: a third-party Extension can register a conflicts Pane or contribute contextual
-Commands against the exported Files RowSource on exactly the API the bundled features use.
+**Text conflicts are an interactive Diff mode.** Files automatically filters to conflicted
+paths, Enter opens the marker-aware picker, and the Diff Pane selects current, ancestor,
+incoming, or both content with navigation and session-local undo. Whole-file current/incoming/
+union and external mergetool choices live behind `M`; resolved text is auto-staged and an
+operation started in this process offers to continue. Non-text, binary, and submodule conflict
+choosers are intentionally still deferred. Nothing here is privileged: the bundled extensions
+use the same Git, Command, popup, interactive-process, and exported API surfaces as third-party
+Extensions.
+
+The picker follows LazyGit's keyboard model: `j`/`k` chooses a side, `h`/`l` chooses a conflict,
+Space accepts it, `b` accepts current then incoming, `z` undoes, `e` edits, `o` opens, `H`/`L`
+scrolls horizontally, and Escape returns to Files. Ordinary text changes use the same Diff Pane
+for line/hunk/range staging with Space, `a`, and `v`; Tab switches staged/unstaged content and
+`d` discards or unstages the selection.

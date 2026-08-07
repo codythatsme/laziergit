@@ -8,9 +8,11 @@ import { dirname } from "node:path"
  */
 export interface Repository {
   readonly root: string
+  /** Absolute per-worktree Git directory; distinct for linked worktrees. */
+  readonly gitDir: string
 }
 
-const revParseArgs = ["rev-parse", "--path-format=absolute", "--show-toplevel"] as const
+const revParseArgs = ["rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir"] as const
 
 interface RevParseOutput {
   readonly stdout: string
@@ -33,8 +35,8 @@ async function revParse(cwd: string, env: Record<string, string>): Promise<RevPa
 
 function readRepository(output: RevParseOutput): Repository | null {
   if (output.exitCode !== 0) return null
-  const [root] = output.stdout.split("\n")
-  return root ? { root } : null
+  const [root, gitDir] = output.stdout.split("\n")
+  return root && gitDir ? { root, gitDir } : null
 }
 
 async function sameDirectory(left: string, right: string): Promise<boolean> {

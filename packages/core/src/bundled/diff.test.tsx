@@ -1,6 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test"
-import { symlink, writeFile } from "node:fs/promises"
+import { rm, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { act } from "react"
 
 import { fetchFor } from "../../../../extensions/diff/fetch"
 import { gitIsolationEnv } from "../git/test-repo"
@@ -8,8 +9,11 @@ import {
   createHarness,
   frame,
   installHarnessLifecycle,
+  press,
   renderApp,
   runCommand,
+  settle,
+  waitFor,
   waitForFrame,
   type Harness,
 } from "../test-harness"
@@ -62,6 +66,21 @@ const driverSource = `
         run: () => diff.show({ kind: "staged", path: "tracked.txt" }),
       })
       ctx.commands.register({
+        id: "driver.open-staging",
+        title: "Open interactive staging",
+        run: () => diff.openStaging?.("tracked.txt"),
+      })
+      ctx.commands.register({
+        id: "driver.open-new-staging",
+        title: "Open interactive staging for a new file",
+        run: () => diff.openStaging?.("new.txt"),
+      })
+      ctx.commands.register({
+        id: "driver.open-conflict",
+        title: "Open conflict picker",
+        run: () => diff.openConflict?.("tracked.txt"),
+      })
+      ctx.commands.register({
         id: "driver.head-commit",
         title: "Diff the HEAD commit",
         run: () => diff.show({ kind: "commit", ref: head(), path: null }),
@@ -108,6 +127,22 @@ async function git(harness: Harness, ...args: readonly string[]): Promise<string
   // A broken fixture is not a test result, so it fails here rather than as a puzzling argv.
   if (exitCode !== 0) throw new Error(`git ${args.join(" ")} exited ${exitCode}: ${stderr.trim()}`)
   return stdout
+}
+
+async function gitAllowFailure(harness: Harness, ...args: readonly string[]): Promise<number> {
+  const child = Bun.spawn([realGit(), ...args], {
+    cwd: harness.directory,
+    env: { ...process.env, ...gitIsolationEnv },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [, , exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  return exitCode
 }
 
 interface DiffHarness {
@@ -356,5 +391,184 @@ describe("moving from one target to the next", () => {
 
     await waitForFrame(diff.harness, "+ brand")
     expect(frame(diff.harness)).not.toContain("+ TWO")
+  }, 30_000)
+})
+
+describe("interactive diff workflows", () => {
+  it("stages a selected range without staging a later change", async () => {
+    const diff = await createDiffHarness()
+    await writeFile(join(diff.harness.directory, "tracked.txt"), "ONE\ntwo\nTHREE\n")
+    await diff.show("driver.open-staging")
+    await waitForFrame(diff.harness, "unstaged tracked.txt  [line]")
+
+    await runCommand(diff.harness, "diff.toggle-view")
+    await runCommand(diff.harness, "diff.scroll-down")
+    await runCommand(diff.harness, "diff.choose")
+
+    const cached = await git(diff.harness, "diff", "--cached", "--", "tracked.txt")
+    expect(cached).toContain("+ONE")
+    expect(cached).not.toContain("THREE")
+    expect(await git(diff.harness, "diff", "--", "tracked.txt")).toContain("THREE")
+  }, 30_000)
+
+  it("stages one line from a deleted file without staging the whole deletion", async () => {
+    const diff = await createDiffHarness()
+    await rm(join(diff.harness.directory, "tracked.txt"))
+    await diff.show("driver.open-staging")
+    await waitForFrame(diff.harness, "unstaged tracked.txt  [line]")
+    await runCommand(diff.harness, "diff.choose")
+
+    expect(await git(diff.harness, "show", ":tracked.txt")).toBe("two\nthree\n")
+    expect(await git(diff.harness, "diff", "--name-only", "--", "tracked.txt")).toBe("tracked.txt\n")
+  }, 30_000)
+
+  it("unstages one line from a staged deletion without restoring the working-tree file", async () => {
+    const diff = await createDiffHarness()
+    const path = join(diff.harness.directory, "tracked.txt")
+    await rm(path)
+    await git(diff.harness, "add", "tracked.txt")
+    await diff.show("driver.open-staging")
+    await waitForFrame(diff.harness, "staged tracked.txt  [line]")
+    await runCommand(diff.harness, "diff.staging-discard")
+
+    expect(await git(diff.harness, "show", ":tracked.txt")).toBe("one\n")
+    expect(await Bun.file(path).exists()).toBeFalse()
+  }, 30_000)
+
+  it("discards one line from an unstaged deletion without restoring unselected lines", async () => {
+    const diff = await createDiffHarness()
+    const path = join(diff.harness.directory, "tracked.txt")
+    await rm(path)
+    await diff.show("driver.open-staging")
+    await waitForFrame(diff.harness, "unstaged tracked.txt  [line]")
+
+    await press(diff.harness, "d")
+    await waitForFrame(diff.harness, "Discard selected changes?")
+    await press(diff.harness, "y")
+    await waitFor(
+      diff.harness,
+      async () => (await Bun.file(path).exists()) && (await Bun.file(path).text()) === "one\n",
+      "the selected deleted line to be restored",
+    )
+    await waitForFrame(
+      diff.harness,
+      (screen) => screen.includes("-two") && !screen.includes("-one") && !screen.includes("Discard selected changes?"),
+    )
+
+    expect(await git(diff.harness, "diff", "--", "tracked.txt")).toContain("-two")
+    expect(await git(diff.harness, "diff", "--", "tracked.txt")).toContain("-three")
+  }, 30_000)
+
+  it("unstages one line from a newly added file without removing the rest of it", async () => {
+    const diff = await createDiffHarness()
+    await writeFile(join(diff.harness.directory, "new.txt"), "first\nsecond\n")
+    await git(diff.harness, "add", "new.txt")
+    await diff.show("driver.open-new-staging")
+    await waitForFrame(diff.harness, "staged new.txt  [line]")
+    await runCommand(diff.harness, "diff.choose")
+
+    expect(await git(diff.harness, "show", ":new.txt")).toBe("second\n")
+    expect(await Bun.file(join(diff.harness.directory, "new.txt")).text()).toBe("first\nsecond\n")
+  }, 30_000)
+
+  it("serializes rapid hunk staging against the refreshed patch", async () => {
+    const diff = await createDiffHarness()
+    const original = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") + "\n"
+    const changed = original.replace("line 1\n", "LINE ONE\n").replace("line 12\n", "LINE TWELVE\n")
+    await writeFile(join(diff.harness.directory, "tracked.txt"), original)
+    await git(diff.harness, "add", "tracked.txt")
+    await git(diff.harness, "commit", "--quiet", "--message", "long fixture")
+    await writeFile(join(diff.harness.directory, "tracked.txt"), changed)
+    await diff.show("driver.open-staging")
+    await waitForFrame(diff.harness, "unstaged tracked.txt  [line]")
+    await runCommand(diff.harness, "diff.staging-mode")
+
+    await act(async () => {
+      await Promise.all([
+        diff.harness.kernel.commands.execute("diff.choose"),
+        diff.harness.kernel.commands.execute("diff.choose"),
+      ])
+    })
+    await act(async () => diff.harness.kernel.events.drain())
+    await settle(diff.harness)
+
+    const cached = await git(diff.harness, "diff", "--cached", "--", "tracked.txt")
+    expect(cached).toContain("LINE ONE")
+    expect(cached).toContain("LINE TWELVE")
+    expect(await git(diff.harness, "diff", "--", "tracked.txt")).toBe("")
+  }, 30_000)
+
+  it("picks and undoes marker-delimited conflict sides", async () => {
+    const diff = await createDiffHarness()
+    const conflict = `<<<<<<< HEAD\ncurrent one\n=======\nincoming one\n>>>>>>> topic\nmiddle\n<<<<<<< HEAD\ncurrent two\n=======\nincoming two\n>>>>>>> topic\n`
+    await writeFile(join(diff.harness.directory, "tracked.txt"), conflict)
+    await diff.show("driver.open-conflict")
+    await waitForFrame(diff.harness, "conflict tracked.txt  1/2")
+
+    await runCommand(diff.harness, "diff.next-block")
+    await waitForFrame(diff.harness, "conflict tracked.txt  2/2")
+    await act(async () => diff.harness.kernel.git.refresh())
+    await act(async () => diff.harness.kernel.events.drain())
+    await settle(diff.harness)
+    expect(frame(diff.harness)).toContain("conflict tracked.txt  2/2")
+
+    await runCommand(diff.harness, "diff.choose")
+    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toContain("incoming one")
+    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).not.toContain("incoming two")
+
+    await act(async () => diff.harness.kernel.git.refresh())
+    await act(async () => diff.harness.kernel.events.drain())
+    await settle(diff.harness)
+
+    await runCommand(diff.harness, "diff.undo-conflict")
+    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toBe(conflict)
+  }, 30_000)
+
+  it("resolves the last block of a real merge without staging marker text", async () => {
+    const diff = await createDiffHarness()
+    await git(diff.harness, "checkout", "--quiet", "-b", "topic")
+    await writeFile(join(diff.harness.directory, "tracked.txt"), "topic\n")
+    await git(diff.harness, "add", "tracked.txt")
+    await git(diff.harness, "commit", "--quiet", "--message", "topic")
+    await git(diff.harness, "checkout", "--quiet", "main")
+    await writeFile(join(diff.harness.directory, "tracked.txt"), "main\n")
+    await git(diff.harness, "add", "tracked.txt")
+    await git(diff.harness, "commit", "--quiet", "--message", "main")
+    expect(await gitAllowFailure(diff.harness, "merge", "topic")).not.toBe(0)
+
+    await diff.show("driver.open-conflict")
+    await waitForFrame(diff.harness, "conflict tracked.txt  1/1")
+    await runCommand(diff.harness, "diff.choose")
+    await waitForFrame(diff.harness, "working tree tracked.txt")
+    await act(async () => diff.harness.kernel.events.drain())
+    await settle(diff.harness)
+
+    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toBe("main\n")
+    expect(await git(diff.harness, "diff", "--name-only", "--diff-filter=U")).toBe("tracked.txt\n")
+  }, 30_000)
+
+  it("applies an incoming whole-file three-way strategy and stages it", async () => {
+    const diff = await createDiffHarness()
+    await git(diff.harness, "checkout", "--quiet", "-b", "topic")
+    await writeFile(join(diff.harness.directory, "tracked.txt"), "topic\n")
+    await git(diff.harness, "add", "tracked.txt")
+    await git(diff.harness, "commit", "--quiet", "--message", "topic")
+    await git(diff.harness, "checkout", "--quiet", "main")
+    await writeFile(join(diff.harness.directory, "tracked.txt"), "main\n")
+    await git(diff.harness, "add", "tracked.txt")
+    await git(diff.harness, "commit", "--quiet", "--message", "main")
+    expect(await gitAllowFailure(diff.harness, "merge", "topic")).not.toBe(0)
+
+    await diff.show("driver.open-conflict")
+    await waitForFrame(diff.harness, "conflict tracked.txt  1/1")
+    await press(diff.harness, "M")
+    await waitForFrame(diff.harness, "Resolve whole file")
+    await press(diff.harness, "i")
+    await waitForFrame(diff.harness, "working tree tracked.txt")
+    await act(async () => diff.harness.kernel.events.drain())
+    await settle(diff.harness)
+
+    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toBe("topic\n")
+    expect(await git(diff.harness, "ls-files", "--unmerged", "--", "tracked.txt")).toBe("")
   }, 30_000)
 })
