@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from "bun:test"
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { act } from "react"
+import type { ScrollSurface } from "laziergit"
 
 import {
   createHarness,
@@ -104,17 +105,25 @@ const rowsSource = `
 
 const scrollingRowsSource = `
   /** @jsxImportSource @opentui/react */
-  import { defineExtension, useListCursor, type PaneProps } from "laziergit"
+  import { defineExtension, useCommand, useListCursor, type PaneProps } from "laziergit"
+  import { useState } from "react"
 
-  const items = Array.from({ length: 30 }, (_, index) => "row-" + String(index).padStart(2, "0"))
+  const allItems = Array.from({ length: 30 }, (_, index) => "row-" + String(index).padStart(2, "0"))
 
   export default defineExtension({
     name: "scrolling-rows",
     activate(ctx) {
       function RowsPane({ focused }: PaneProps) {
+        const [items, setItems] = useState(allItems)
         const cursor = useListCursor({ items, idPrefix: "scrolling-rows", noun: "row" })
+        useCommand({
+          id: "scrolling-rows.shrink",
+          title: "Shrink",
+          keys: "s",
+          run: () => setItems(allItems.slice(0, 2)),
+        })
         return (
-          <scrollbox ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
+          <scrollbox id="scrolling-rows.scroll" ref={cursor.scrollRef} focusable={false} flexGrow={1} flexBasis={0}>
             {items.map((row, index) => (
               <text
                 key={row}
@@ -216,12 +225,19 @@ async function withExtensions(harness: Harness, sources: Record<string, string>,
   await renderApp(harness)
 }
 
+async function renderScrollingRows(harness: Harness): Promise<{
+  readonly names: readonly string[]
+  readonly initiallyVisibleLast: number
+}> {
+  await withExtensions(harness, { "scrolling-rows.tsx": scrollingRowsSource })
+  const names = Array.from({ length: 30 }, (_, index) => `row-${String(index).padStart(2, "0")}`)
+  return { names, initiallyVisibleLast: names.findLastIndex((name) => frame(harness).includes(name)) }
+}
+
 describe("useListCursor", () => {
   it("keeps two upcoming rows visible by default in every scrolling list", async () => {
     const harness = await createHarness({ height: 12 })
-    await withExtensions(harness, { "scrolling-rows.tsx": scrollingRowsSource })
-    const names = Array.from({ length: 30 }, (_, index) => `row-${String(index).padStart(2, "0")}`)
-    const initiallyVisibleLast = names.findLastIndex((name) => frame(harness).includes(name))
+    const { names, initiallyVisibleLast } = await renderScrollingRows(harness)
     expect(initiallyVisibleLast).toBeGreaterThan(2)
     expect(initiallyVisibleLast).toBeLessThan(names.length - 2)
 
@@ -249,9 +265,7 @@ describe("useListCursor", () => {
 
   it("waits for keyboard movement before applying the scroll-off margin after a click", async () => {
     const harness = await createHarness({ height: 12 })
-    await withExtensions(harness, { "scrolling-rows.tsx": scrollingRowsSource })
-    const names = Array.from({ length: 30 }, (_, index) => `row-${String(index).padStart(2, "0")}`)
-    const initiallyVisibleLast = names.findLastIndex((name) => frame(harness).includes(name))
+    const { names, initiallyVisibleLast } = await renderScrollingRows(harness)
     const clickedName = names[initiallyVisibleLast]
     const clicked = harness.setup.renderer.root.findDescendantById(`scrolling-rows.row.${initiallyVisibleLast}`)
     if (!clickedName || !clicked) throw new Error("bottom visible row did not render")
@@ -269,6 +283,27 @@ describe("useListCursor", () => {
 
     expect(frame(harness)).not.toContain(names[0] as string)
     expect(frame(harness)).toContain(names[initiallyVisibleLast + 2] as string)
+  })
+
+  it("does not reuse a keyboard scroll-off request when the list later clamps", async () => {
+    const harness = await createHarness({ height: 12 })
+    await renderScrollingRows(harness)
+
+    await press(harness, "j")
+    await press(harness, "j")
+    await press(harness, "j")
+    await waitForFrame(harness, "> row-03")
+
+    const scroll = harness.setup.renderer.root.findDescendantById("scrolling-rows.scroll")
+    if (!scroll) throw new Error("scrolling rows surface did not render")
+    const reveal = spyOn(scroll as unknown as ScrollSurface, "scrollChildIntoView")
+
+    await press(harness, "s")
+    await waitForFrame(harness, "> row-01")
+
+    expect(reveal).not.toHaveBeenCalledWith("scrolling-rows.row.0")
+    expect(reveal).toHaveBeenCalledWith("scrolling-rows.row.1")
+    reveal.mockRestore()
   })
 
   it("clamps to a shrinking list without resurrecting the old position", async () => {
