@@ -629,9 +629,13 @@ export default defineExtension({
     // Not gated on the branch having an upstream: a branch can be on the remote without one
     // configured, and an unpushed branch gets a 404 from the host.
     async function openPullRequest(branch: Branch): Promise<void> {
-      const existing = pullRequests.get().get(branch.name)
-      const url =
-        existing?.state.toUpperCase() === "OPEN" ? existing.url : pullRequestUrl(ctx.git.state.remotes, branch.name)
+      let existing = pullRequests.get().get(branch.name)
+      if (existing?.state.toUpperCase() === "OPEN") {
+        const refreshed = await refreshPullRequests(true)
+        if (refreshed !== null) existing = refreshed.get(branch.name)
+      }
+      const createUrl = pullRequestUrl(ctx.git.state.remotes, branch.name)
+      const url = existing?.state.toUpperCase() === "CLOSED" ? createUrl : (existing?.url ?? createUrl)
       if (url === null) return ctx.popups.notify("No web remote to open a pull request on", "warning")
       try {
         await ctx.open(url)
