@@ -318,7 +318,10 @@ export interface ListCursor<T> {
   readonly index: number
   readonly selected: T | undefined
   readonly query: ListQuery | undefined
-  /** Move the cursor (clicking a row, or jumping to a row your Extension just created). */
+  /**
+   * Move the cursor (clicking a row, or jumping to a row your Extension just created). The
+   * target is revealed without the keyboard navigation scroll-off margin.
+   */
   setIndex(index: number): void
   /**
    * Callback ref for the Pane's `<scrollbox>`: attach it, put {@link rowId} on each row, and
@@ -361,6 +364,11 @@ interface QueryState {
 
 const emptyQueryState: QueryState = { applied: "", draft: "", editing: false, searchPosition: 0 }
 
+interface CursorRequest {
+  readonly index: number
+  readonly scrollOff: boolean
+}
+
 function firstMatchAfter(matches: readonly number[], index: number): number {
   const after = matches.findIndex((candidate) => candidate > index)
   return after === -1 ? 0 : after
@@ -385,7 +393,7 @@ export function useListCursor<T>({
 }: ListCursorOptions<T>): ListCursor<T> {
   const runtime = useRuntime()
   const pane = useEnclosingPane("useListCursor")
-  const [requested, setRequested] = useState(0)
+  const [requested, setRequested] = useState<CursorRequest>({ index: 0, scrollOff: false })
   const [queryState, setQueryState] = useState<QueryState>(emptyQueryState)
   const surface = useRef<ScrollSurface | null>(null)
   const mode = queryOptions?.mode
@@ -410,23 +418,27 @@ export function useListCursor<T>({
   )
   const last = visibleItems.length - 1
   // Clamped on read, so the render where the list shrank already draws a valid cursor.
-  const index = last < 0 ? 0 : Math.min(Math.max(requested, 0), last)
+  const index = last < 0 ? 0 : Math.min(Math.max(requested.index, 0), last)
   const revealedIndex = useRef(index)
   const searchPosition =
     searchIndices.length === 0 ? 0 : Math.min(Math.max(queryState.searchPosition, 0), searchIndices.length - 1)
   const currentSearchMatch = searchIndices[searchPosition]
 
   const request = useCallback((next: number) => {
-    setRequested(next)
+    setRequested({ index: next, scrollOff: false })
+  }, [])
+
+  const move = useCallback((next: number) => {
+    setRequested({ index: next, scrollOff: true })
   }, [])
 
   // ...and written back, or the clamp would resurrect the old position once the list grew
-  // again. Revealing rides along here because this effect runs on exactly the renders that can
-  // move the cursor out of the viewport: a keypress, and a clamp. A scroll-off margin reveals
-  // the neighboring row first, then the selection; the second call is normally a no-op, but
-  // guarantees a very tall custom row cannot push the actual cursor out of view.
+  // again. Every selection is revealed, but only one-row keyboard movement uses the look-ahead
+  // margin. Lazygit likewise keeps click selection separate from its up/down scroll-off checks.
+  // A margin reveal shows the neighboring row first, then the selection; the second call is
+  // normally a no-op, but guarantees a very tall custom row cannot push the cursor out of view.
   useEffect(() => {
-    if (requested !== index) request(index)
+    if (requested.index !== index) setRequested({ index, scrollOff: false })
     const node = surface.current
     const before = revealedIndex.current
     revealedIndex.current = index
@@ -434,8 +446,8 @@ export function useListCursor<T>({
 
     const configuredMargin = Number.isFinite(scrollOffMargin) ? Math.max(0, Math.trunc(scrollOffMargin)) : 0
     const viewportRows = Math.max(0, Math.trunc(node.viewport.height))
-    const movingDown = index > before
-    const movingUp = index < before
+    const movingDown = requested.scrollOff && index > before
+    const movingUp = requested.scrollOff && index < before
     // Lazygit caps its margin at half the viewport. Besides keeping the cursor visible, that
     // makes an intentionally huge configured value behave like a centred cursor.
     const marginCap = movingDown ? Math.floor((viewportRows - 1) / 2) : Math.floor(viewportRows / 2)
@@ -443,7 +455,7 @@ export function useListCursor<T>({
     const revealIndex = movingDown ? Math.min(index + margin, last) : movingUp ? Math.max(index - margin, 0) : index
     if (revealIndex !== index) node.scrollChildIntoView(`${idPrefix}.row.${revealIndex}`)
     node.scrollChildIntoView(`${idPrefix}.row.${index}`)
-  }, [requested, index, idPrefix, last, request, scrollOffMargin])
+  }, [requested.index, requested.scrollOff, index, idPrefix, last, scrollOffMargin])
 
   const latest = useRef({
     items,
@@ -669,14 +681,14 @@ export function useListCursor<T>({
     title: `Next ${noun}`,
     keys: ["j", "down"],
     hidden: true,
-    run: () => request(Math.min(index + 1, Math.max(last, 0))),
+    run: () => move(Math.min(index + 1, Math.max(last, 0))),
   })
   useCommand({
     id: `${idPrefix}.cursor.up`,
     title: `Previous ${noun}`,
     keys: ["k", "up"],
     hidden: true,
-    run: () => request(Math.max(index - 1, 0)),
+    run: () => move(Math.max(index - 1, 0)),
   })
   useCommand({
     id: `${idPrefix}.cursor.first`,

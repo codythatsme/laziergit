@@ -120,6 +120,7 @@ const scrollingRowsSource = `
                 key={row}
                 id={cursor.rowId(index)}
                 content={(focused && index === cursor.index ? "> " : "  ") + row}
+                onMouseDown={() => cursor.setIndex(index)}
               />
             ))}
           </scrollbox>
@@ -244,6 +245,30 @@ describe("useListCursor", () => {
     await settle(harness)
 
     expect(frame(harness)).toContain("cursor=2 selected=three")
+  })
+
+  it("waits for keyboard movement before applying the scroll-off margin after a click", async () => {
+    const harness = await createHarness({ height: 12 })
+    await withExtensions(harness, { "scrolling-rows.tsx": scrollingRowsSource })
+    const names = Array.from({ length: 30 }, (_, index) => `row-${String(index).padStart(2, "0")}`)
+    const initiallyVisibleLast = names.findLastIndex((name) => frame(harness).includes(name))
+    const clickedName = names[initiallyVisibleLast]
+    const clicked = harness.setup.renderer.root.findDescendantById(`scrolling-rows.row.${initiallyVisibleLast}`)
+    if (!clickedName || !clicked) throw new Error("bottom visible row did not render")
+
+    await act(async () => {
+      await harness.setup.mockMouse.click(clicked.x, clicked.y)
+    })
+    await settle(harness)
+
+    expect(frame(harness)).toContain(`> ${clickedName}`)
+    expect(frame(harness)).toContain(names[0] as string)
+
+    await press(harness, "j")
+    await waitForFrame(harness, `> ${names[initiallyVisibleLast + 1]}`)
+
+    expect(frame(harness)).not.toContain(names[0] as string)
+    expect(frame(harness)).toContain(names[initiallyVisibleLast + 2] as string)
   })
 
   it("clamps to a shrinking list without resurrecting the old position", async () => {
