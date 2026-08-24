@@ -964,6 +964,32 @@ describe("what a row says about its upstream", () => {
     await waitFor(harness, () => opener.opened() === url, "the pull request URL to reach the opener")
   }, 30_000)
 
+  it("opens a new pull request when the branch's previous pull request is closed", async () => {
+    const opener = recordOpens()
+    const harness = await createHarness({ git: true, openExternal: opener.open })
+    await seed(harness)
+    await addGithubOrigin(harness)
+    await git(harness, "push", "--quiet", "--set-upstream", "origin", "main")
+    const gh = await installGh(harness)
+    await gh.setPullRequests([
+      {
+        headRefName: "main",
+        headRepositoryOwner: { login: "acme" },
+        state: "CLOSED",
+        isDraft: false,
+        url: "https://github.com/acme/tools/pull/41",
+        createdAt: "2026-08-03T00:00:00Z",
+      },
+    ])
+
+    await start(harness)
+    await waitForFrame(harness, "* main ")
+    await press(harness, "o")
+
+    await waitFor(harness, () => opener.opened() !== "", "a pull request URL to reach the opener")
+    expect(opener.opened()).toBe("https://github.com/acme/tools/compare/main?expand=1")
+  }, 30_000)
+
   it("opens the create page without waiting for a slow pull request refresh", async () => {
     const opener = recordOpens()
     const harness = await createHarness({ git: true, openExternal: opener.open })

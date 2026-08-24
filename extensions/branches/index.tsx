@@ -630,7 +630,8 @@ export default defineExtension({
     // configured, and an unpushed branch gets a 404 from the host.
     async function openPullRequest(branch: Branch): Promise<void> {
       const existing = pullRequests.get().get(branch.name)
-      const url = existing?.url ?? pullRequestUrl(ctx.git.state.remotes, branch.name)
+      const url =
+        existing?.state.toUpperCase() === "OPEN" ? existing.url : pullRequestUrl(ctx.git.state.remotes, branch.name)
       if (url === null) return ctx.popups.notify("No web remote to open a pull request on", "warning")
       try {
         await ctx.open(url)
