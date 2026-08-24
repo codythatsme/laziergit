@@ -364,11 +364,6 @@ interface QueryState {
 
 const emptyQueryState: QueryState = { applied: "", draft: "", editing: false, searchPosition: 0 }
 
-interface CursorRequest {
-  readonly index: number
-  readonly scrollOff: boolean
-}
-
 function firstMatchAfter(matches: readonly number[], index: number): number {
   const after = matches.findIndex((candidate) => candidate > index)
   return after === -1 ? 0 : after
@@ -393,9 +388,10 @@ export function useListCursor<T>({
 }: ListCursorOptions<T>): ListCursor<T> {
   const runtime = useRuntime()
   const pane = useEnclosingPane("useListCursor")
-  const [requested, setRequested] = useState<CursorRequest>({ index: 0, scrollOff: false })
+  const [requested, setRequested] = useState(0)
   const [queryState, setQueryState] = useState<QueryState>(emptyQueryState)
   const surface = useRef<ScrollSurface | null>(null)
+  const scrollOffRequest = useRef(false)
   const mode = queryOptions?.mode
   const fields = queryOptions?.fields
   const filterIndices = useMemo(
@@ -418,30 +414,34 @@ export function useListCursor<T>({
   )
   const last = visibleItems.length - 1
   // Clamped on read, so the render where the list shrank already draws a valid cursor.
-  const index = last < 0 ? 0 : Math.min(Math.max(requested.index, 0), last)
+  const index = last < 0 ? 0 : Math.min(Math.max(requested, 0), last)
   const revealedIndex = useRef(index)
-  const revealedRequest = useRef(requested)
   const searchPosition =
     searchIndices.length === 0 ? 0 : Math.min(Math.max(queryState.searchPosition, 0), searchIndices.length - 1)
   const currentSearchMatch = searchIndices[searchPosition]
 
   const requestSelection = useCallback((next: number) => {
-    setRequested({ index: next, scrollOff: false })
+    scrollOffRequest.current = false
+    setRequested(next)
   }, [])
 
-  const requestKeyboardStep = useCallback((next: number) => {
-    setRequested({ index: next, scrollOff: true })
-  }, [])
+  const requestKeyboardStep = useCallback(
+    (next: number) => {
+      scrollOffRequest.current = next !== index
+      setRequested(next)
+    },
+    [index],
+  )
 
   // Clamp write-back prevents resurrection; only a fresh keyboard step gets look-ahead.
   // Direct selections and later clamps use nearest reveal, matching lazygit's separate paths.
   useEffect(() => {
-    if (requested.index !== index) requestSelection(index)
+    if (requested !== index) requestSelection(index)
     const node = surface.current
     const before = revealedIndex.current
-    const useScrollOff = revealedRequest.current !== requested && requested.scrollOff
+    const useScrollOff = scrollOffRequest.current
     revealedIndex.current = index
-    revealedRequest.current = requested
+    scrollOffRequest.current = false
     if (!node) return
 
     const configuredMargin = Number.isFinite(scrollOffMargin) ? Math.max(0, Math.trunc(scrollOffMargin)) : 0
