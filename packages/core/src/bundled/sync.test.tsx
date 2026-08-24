@@ -286,6 +286,29 @@ describe("sync.push", () => {
     expect(await git(origin, "rev-parse", "main")).toEqual(await git(theirs, "rev-parse", "HEAD"))
   })
 
+  it("pins the lease to the remote tip named by the warning", async () => {
+    const harness = await startRepo()
+    const origin = await addOrigin(harness)
+    await commitIn(harness.directory, "discarded.txt", "discarded\n")
+    await git(harness.directory, "push", "--quiet", "origin", "main")
+    await git(harness.directory, "reset", "--hard", "HEAD^")
+    const theirs = await cloneOf(origin)
+    await renderApp(harness)
+
+    await waitForFrame(harness, "↓1")
+    await press(harness, "P")
+    await waitForFrame(harness, "1 commit on origin/main will be destroyed.")
+
+    await commitIn(theirs, "new-after-warning.txt", "new\n")
+    await git(theirs, "push", "--quiet", "origin", "main")
+    await act(async () => harness.kernel.git.raw(["fetch", "--all", "--no-write-fetch-head"]))
+
+    await press(harness, "y")
+    await waitForToast(harness, "stale info")
+
+    expect(await git(origin, "rev-parse", "main")).toEqual(await git(theirs, "rev-parse", "HEAD"))
+  })
+
   it("does not publish push or pull on a detached HEAD", async () => {
     const harness = await startRepo()
     await addOrigin(harness)

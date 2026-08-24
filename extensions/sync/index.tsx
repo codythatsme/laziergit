@@ -110,7 +110,7 @@ function forceWarning(upstream: UpstreamInfo): string {
     upstream.behind === 0
       ? `${target} held nothing new at the last fetch.`
       : `${upstream.behind} commit${upstream.behind === 1 ? "" : "s"} on ${target} will be destroyed.`
-  return `${loss}\n--force-with-lease refuses if the remote moved since the last fetch.`
+  return `${loss}\n--force-with-lease refuses if ${target} changed after this warning opened.`
 }
 
 export default defineExtension({
@@ -234,7 +234,8 @@ export default defineExtension({
     }
 
     async function forcePush(): Promise<void> {
-      const head = ctx.git.state.head
+      const state = ctx.git.state
+      const head = state.head
       if (head.kind !== "onBranch") return refuse(head, "push")
 
       // The Command's `when: tracking` hides this, but a checkout can land between catalog
@@ -243,6 +244,9 @@ export default defineExtension({
       if (upstream === null) {
         return ctx.popups.notify(`Cannot force-push: ${head.branch} has no upstream`, "warning")
       }
+      const expectedOid =
+        state.remoteBranches.find((branch) => branch.remote === upstream.remote && branch.name === upstream.branch)
+          ?.oid ?? ""
 
       const confirmed = await ctx.popups.confirm({
         title: `Force-push ${head.branch} to ${upstreamName(upstream)}?`,
@@ -255,7 +259,11 @@ export default defineExtension({
       // `with-lease` and never plain `--force`: "overwrite what I last saw", not
       // "overwrite whatever is there". This Extension offers no way past it.
       const outcome = await attemptGitOperation(() =>
-        ctx.git.push({ remote: upstream.remote, ref: refspec(head.branch, upstream), force: "with-lease" }),
+        ctx.git.push({
+          remote: upstream.remote,
+          ref: refspec(head.branch, upstream),
+          force: { ref: `refs/heads/${upstream.branch}`, expectedOid },
+        }),
       )
       if (outcome.kind === "failed") return surface(outcome.error)
       if (outcome.kind === "done") {

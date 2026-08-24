@@ -114,6 +114,7 @@ it("names an operation after what it does, not after its subcommand", () => {
   const cases: readonly (readonly [readonly string[], string])[] = [
     [["push", "main:main"], "pushing"],
     [["push", "--force-with-lease", "origin", "main:main"], "force-pushing"],
+    [["push", "--force-with-lease=refs/heads/main:abc123", "origin", "main:main"], "force-pushing"],
     [["push", "--set-upstream", "origin", "topic"], "pushing"],
     [["push", "--delete", "--", "origin", "topic"], "deleting remote branch"],
     [["pull"], "pulling"],
