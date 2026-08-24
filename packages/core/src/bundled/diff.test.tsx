@@ -417,6 +417,7 @@ describe("interactive diff workflows", () => {
     await diff.show("driver.open-staging")
     await waitForFrame(diff.harness, "unstaged tracked.txt  [line]")
     await runCommand(diff.harness, "diff.choose")
+    await waitForFrame(diff.harness, (screen) => screen.includes("-two") && !screen.includes("-one"))
 
     expect(await git(diff.harness, "show", ":tracked.txt")).toBe("two\nthree\n")
     expect(await git(diff.harness, "diff", "--name-only", "--", "tracked.txt")).toBe("tracked.txt\n")
