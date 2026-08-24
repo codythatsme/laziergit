@@ -199,27 +199,22 @@ describe("sync.push", () => {
     expect(await git(origin, "rev-parse", "other")).toBe(otherBefore)
   })
 
-  it("surfaces git's own rejection and offers a force push that names the cost", async () => {
+  it("offers a known force push immediately without waiting for git to reject a normal push", async () => {
     const harness = await startRepo()
     const origin = await addOrigin(harness)
-    // The remote gains two commits this repository knows about (its tracking ref moves with
-    // the push), so the lease still holds and the force is allowed to land.
-    await git(harness.directory, "checkout", "--quiet", "-b", "elsewhere")
-    await commitIn(harness.directory, "theirs.txt", "theirs\n")
-    await commitIn(harness.directory, "theirs-two.txt", "theirs\n")
-    await git(harness.directory, "push", "--quiet", "origin", "elsewhere:main")
-    await git(harness.directory, "checkout", "--quiet", "main")
-    await commitIn(harness.directory, "ours.txt", "ours\n")
+    await commitIn(harness.directory, "discarded.txt", "discarded\n")
+    await git(harness.directory, "push", "--quiet", "origin", "main")
+    await git(harness.directory, "reset", "--hard", "HEAD^")
     await renderApp(harness)
 
+    await waitForFrame(harness, "↓1")
     await press(harness, "P")
     await waitForFrame(harness, "Force-push main to origin/main?")
-    // git's account of the refusal is on screen underneath the confirm, verbatim.
-    expect(toasts(harness).join("\n")).toContain("[rejected]")
+    // The known divergence routes straight to this confirmation; no failed push or error toast
+    // makes the user wait before the warning appears.
+    expect(toasts(harness)).toEqual([])
     expect(frame(harness)).toContain("--force-with-lease")
-    // The lease will pass here, because these commits were fetched, so nothing else on screen
-    // says work is about to be lost.
-    expect(frame(harness)).toContain("2 commits on origin/main will be destroyed.")
+    expect(frame(harness)).toContain("1 commit on origin/main will be destroyed.")
 
     await press(harness, "y")
     await waitForToast(harness, "Force-pushed main to origin/main")

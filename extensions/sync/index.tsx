@@ -208,6 +208,10 @@ export default defineExtension({
       const upstream = head.upstream
       if (upstream === null) return pushSettingUpstream(head.branch)
 
+      // Match lazygit's fast path: when the loaded remote-tracking ref already proves a
+      // normal push cannot fast-forward, show the force warning before spawning git.
+      if (upstream.behind > 0) return forcePush()
+
       const outcome = await attemptGitOperation(() =>
         ctx.git.push({ remote: upstream.remote, ref: refspec(head.branch, upstream) }),
       )
