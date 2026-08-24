@@ -21,9 +21,11 @@ installHarnessLifecycle()
 
 const pullRequestsExtension = resolve(import.meta.dir, "..", "..", "..", "..", "extensions", "pull-requests")
 const originalPath = process.env.PATH
+const originalSetInterval = globalThis.setInterval
 
 afterEach(() => {
   process.env.PATH = originalPath
+  globalThis.setInterval = originalSetInterval
 })
 
 const branchesSource = `
@@ -33,7 +35,12 @@ const branchesSource = `
   export default defineExtension({
     name: "branches",
     activate(ctx) {
-      ctx.panes.register({ id: "branches", title: "Local", component: () => <text content="local branches" /> })
+      const pane = ctx.panes.register({
+        id: "branches",
+        title: "Local",
+        component: () => <text content="local branches" />,
+      })
+      ctx.commands.register({ id: "branches.focus", title: "Focus local branches", run: () => pane.focus() })
     },
   })
 `
@@ -41,6 +48,8 @@ const branchesSource = `
 interface GhStub {
   setPullRequests(pullRequests: readonly unknown[]): Promise<void>
   fail(message: string): Promise<void>
+  warn(message: string): Promise<void>
+  failCheckout(message: string): Promise<void>
   calls(): Promise<readonly string[]>
 }
 
@@ -48,6 +57,8 @@ async function installGh(harness: Harness): Promise<GhStub> {
   const bin = join(harness.directory, "bin")
   const response = join(bin, "response.json")
   const failure = join(bin, "failure.txt")
+  const warning = join(bin, "warning.txt")
+  const checkoutFailure = join(bin, "checkout-failure.txt")
   const log = join(bin, "gh.log")
   await mkdir(bin, { recursive: true })
 
@@ -56,9 +67,16 @@ async function installGh(harness: Harness): Promise<GhStub> {
     `printf '%s\\n' "$*" >> "${log}"`,
     'if [ "$1 $2" = "api graphql" ]; then',
     `  if [ -f "${failure}" ]; then cat "${failure}" >&2; exit 1; fi`,
-    `  exec cat "${response}"`,
+    `  cat "${response}"`,
+    `  if [ -f "${warning}" ]; then cat "${warning}" >&2; exit 1; fi`,
+    "  exit 0",
     "fi",
     'if [ "$1 $2" = "pr checkout" ]; then',
+    `  if [ -f "${checkoutFailure}" ]; then`,
+    "    git checkout --quiet feature/new",
+    `    cat "${checkoutFailure}" >&2`,
+    "    exit 1",
+    "  fi",
     "  git checkout --quiet -b feature/new",
     "  exit $?",
     "fi",
@@ -80,6 +98,8 @@ async function installGh(harness: Harness): Promise<GhStub> {
       await writeFile(response, JSON.stringify([queryResponse(pullRequests)]))
     },
     fail: (message) => writeFile(failure, message),
+    warn: (message) => writeFile(warning, message),
+    failCheckout: (message) => writeFile(checkoutFailure, message),
     calls: async () => ((await Bun.file(log).exists()) ? (await Bun.file(log).text()).trim().split("\n") : []),
   }
 }
@@ -87,10 +107,11 @@ async function installGh(harness: Harness): Promise<GhStub> {
 function queryResponse(pullRequests: readonly unknown[]) {
   return {
     data: {
-      viewer: { login: "claudia" },
-      repository: {
+      viewer: {
+        login: "claudia",
         pullRequests: { nodes: pullRequests, pageInfo: { hasNextPage: false, endCursor: null } },
       },
+      repository: { nameWithOwner: "base/project" },
     },
   }
 }
@@ -103,7 +124,7 @@ function pullRequest(number: number, title: string, extra: Record<string, unknow
     headRefName: `feature/${number}`,
     isDraft: false,
     updatedAt: "2026-08-24T10:00:00Z",
-    author: { login: "claudia" },
+    baseRepository: { nameWithOwner: "base/project" },
     ...extra,
   }
 }
@@ -163,9 +184,9 @@ describe.skipIf(process.platform === "win32")("pull requests pane", () => {
     const { harness, gh } = await pullRequestsHarness()
     await gh.setPullRequests([
       pullRequest(10, "Older pull request", { updatedAt: "2026-08-20T10:00:00Z" }),
-      pullRequest(12, "Someone else's", {
+      pullRequest(12, "Another repository", {
         updatedAt: "2026-08-24T11:00:00Z",
-        author: { login: "someone-else" },
+        baseRepository: { nameWithOwner: "elsewhere/project" },
       }),
       pullRequest(11, "Draft pull request", {
         headRefName: "feature/draft",
@@ -174,6 +195,9 @@ describe.skipIf(process.platform === "win32")("pull requests pane", () => {
       }),
     ])
     await start(harness)
+    // An absence assertion must outlast startup reconciliation to prove the hidden tab stays lazy.
+    // eslint-disable-next-line no-restricted-properties
+    await Bun.sleep(500)
     expect(await gh.calls()).toEqual([])
     await runCommand(harness, "pull-requests.focus")
 
@@ -183,7 +207,7 @@ describe.skipIf(process.platform === "win32")("pull requests pane", () => {
     expect(listed).toContain("feature/draft")
     expect(listed).toContain("#10 Older pull request")
     expect(listed).toContain("feature/10")
-    expect(listed).not.toContain("Someone else's")
+    expect(listed).not.toContain("Another repository")
     expect(listed.indexOf("Draft pull request")).toBeLessThan(listed.indexOf("Older pull request"))
     expect(highlighted(harness).some((row) => row.includes("#11 Draft pull request"))).toBe(true)
 
@@ -227,6 +251,28 @@ describe.skipIf(process.platform === "win32")("pull requests pane", () => {
     expect(checkout).not.toContain("--force")
   }, 30_000)
 
+  it("restores the original branch when gh switches to a divergent pull request branch and fails", async () => {
+    const { harness, gh } = await pullRequestsHarness()
+    await git(harness, "checkout", "--quiet", "-b", "feature/new")
+    await writeFile(join(harness.directory, "feature.txt"), "feature\n")
+    await git(harness, "add", "feature.txt")
+    await git(harness, "commit", "--quiet", "--message", "feature")
+    await git(harness, "checkout", "--quiet", "main")
+    await writeFile(join(harness.directory, "main.txt"), "main\n")
+    await git(harness, "add", "main.txt")
+    await git(harness, "commit", "--quiet", "--message", "main")
+    await gh.setPullRequests([pullRequest(42, "Divergent pull request", { headRefName: "feature/new" })])
+    await gh.failCheckout("fatal: feature/new cannot be fast-forwarded")
+    await start(harness)
+    await runCommand(harness, "pull-requests.focus")
+    await waitForFrame(harness, "Divergent pull request")
+
+    await press(harness, " ")
+    await waitForFrame(harness, "fatal: feature/new cannot be fast-forwarded")
+    expect(await git(harness, "branch", "--show-current")).toBe("main")
+    expect(await git(harness, "status", "--porcelain")).toBe("")
+  }, 30_000)
+
   it("keeps the last successful list visible when a manual refresh fails", async () => {
     const { harness, gh } = await pullRequestsHarness()
     await gh.setPullRequests([pullRequest(7, "Still useful while stale")])
@@ -238,6 +284,35 @@ describe.skipIf(process.platform === "win32")("pull requests pane", () => {
     await press(harness, "r")
     await waitForFrame(harness, "gh: authenticate with gh auth login")
     expect(frame(harness)).toContain("Still useful while stale")
+  }, 30_000)
+
+  it("uses complete query data when gh also reports an unrelated GraphQL error", async () => {
+    const { harness, gh } = await pullRequestsHarness()
+    await gh.setPullRequests([pullRequest(8, "Accessible pull request")])
+    await gh.warn("Resource protected by organization SAML enforcement")
+    await start(harness)
+    await runCommand(harness, "pull-requests.focus")
+
+    await waitForFrame(harness, "Accessible pull request")
+    expect(frame(harness)).not.toContain("SAML enforcement")
+  }, 30_000)
+
+  it("polls while visible and stops polling when another tab is shown", async () => {
+    globalThis.setInterval = ((handler: () => void, delay?: number) =>
+      originalSetInterval(handler, delay === 60_000 ? 25 : delay)) as typeof setInterval
+    const { harness, gh } = await pullRequestsHarness()
+    await gh.setPullRequests([pullRequest(7, "Polling pull request")])
+    await start(harness)
+    await runCommand(harness, "pull-requests.focus")
+    await waitFor(harness, async () => (await gh.calls()).length >= 2, "a visible-tab poll")
+
+    await runCommand(harness, "branches.focus")
+    await waitForFrame(harness, "local branches")
+    const callsWhileVisible = (await gh.calls()).length
+    // Elapsed time is the subject: several accelerated poll ticks must pass after unmount.
+    // eslint-disable-next-line no-restricted-properties
+    await Bun.sleep(100)
+    expect(await gh.calls()).toHaveLength(callsWhileVisible)
   }, 30_000)
 
   it("registers the tab only after a browsable remote appears", async () => {

@@ -15,14 +15,14 @@ function remote(fetchUrl: string, name = "origin"): Remote {
 
 const repository: PullRequestRepository = { host: "github.example.com", owner: "base", name: "project" }
 
-function response(
-  nodes: readonly unknown[],
-  viewer = "claudia",
-): { readonly data: { readonly viewer: { readonly login: string }; readonly repository: unknown } } {
+function response(nodes: readonly unknown[], viewer = "claudia", hasNextPage = false) {
   return {
     data: {
-      viewer: { login: viewer },
-      repository: { pullRequests: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } },
+      viewer: {
+        login: viewer,
+        pullRequests: { nodes, pageInfo: { hasNextPage, endCursor: hasNextPage ? "cursor" : null } },
+      },
+      repository: { nameWithOwner: "base/project" },
     },
   }
 }
@@ -35,7 +35,7 @@ function pullRequest(number: number, updatedAt: string, extra: Record<string, un
     headRefName: `feature/${number}`,
     isDraft: false,
     updatedAt,
-    author: { login: "claudia" },
+    baseRepository: { nameWithOwner: "base/project" },
     ...extra,
   }
 }
@@ -61,6 +61,10 @@ it("falls back to origin only when upstream is absent", () => {
   ).toBeNull()
 })
 
+it("does not treat an arbitrarily named remote as the pull request repository", () => {
+  expect(pullRequestRepository([remote("git@github.com:base/project.git", "fork")])).toBeNull()
+})
+
 it("builds an exhaustive, update-ordered GraphQL request for the selected host", () => {
   const args = pullRequestQueryArgs(repository)
   const command = args.join(" ")
@@ -69,18 +73,26 @@ it("builds an exhaustive, update-ordered GraphQL request for the selected host",
   expect(command).toContain("pullRequests(first: 100, after: $endCursor, states: [OPEN]")
   expect(command).toContain("orderBy: {field: UPDATED_AT, direction: DESC}")
   expect(command).toContain("pageInfo { hasNextPage endCursor }")
+  expect(command).toContain("viewer { login pullRequests")
+  expect(command).toContain("baseRepository { nameWithOwner }")
+  expect(command).toContain("repository(owner: $owner, name: $repo) { nameWithOwner }")
+  expect(command).not.toContain("repository(owner: $owner, name: $repo) { pullRequests")
   expect(command).toContain("-f owner=base -f repo=project")
   expect(repositoryArgument(repository)).toBe("github.example.com/base/project")
 })
 
-it("combines every page, keeps drafts, filters to the viewer, and sorts by update", () => {
+it("combines every viewer page, keeps drafts, filters to the base repository, and sorts by update", () => {
   const olderDraft = pullRequest(1, "2026-08-20T01:00:00Z", { isDraft: true })
   const newest = pullRequest(2, "2026-08-23T01:00:00Z")
-  const anotherAuthor = pullRequest(3, "2026-08-24T01:00:00Z", { author: { login: "someone-else" } })
-  const middle = pullRequest(4, "2026-08-22T01:00:00Z", { author: { login: "CLAUDIA" } })
+  const anotherRepository = pullRequest(3, "2026-08-24T01:00:00Z", {
+    baseRepository: { nameWithOwner: "other/project" },
+  })
+  const middle = pullRequest(4, "2026-08-22T01:00:00Z", {
+    baseRepository: { nameWithOwner: "BASE/PROJECT" },
+  })
 
   const parsed = parseAuthoredPullRequests(
-    JSON.stringify([response([olderDraft, anotherAuthor]), response([newest, middle])]),
+    JSON.stringify([response([olderDraft, anotherRepository]), response([newest, middle])]),
     repository,
   )
 
@@ -98,9 +110,16 @@ it("deduplicates a pull request that moved between pages while the query ran", (
   expect(parsed[0]?.title).toBe("Fresh title")
 })
 
-it("fails loudly when GitHub omits the viewer or repository connection", () => {
+it("fails loudly when GitHub omits the viewer or pull request connection", () => {
   expect(() => parseAuthoredPullRequests(JSON.stringify([{ data: { viewer: null } }]), repository)).toThrow(
     "GitHub returned an incomplete pull request response",
+  )
+})
+
+it("fails loudly when pagination stops before every authored pull request is returned", () => {
+  const incomplete = response([pullRequest(1, "2026-08-20T01:00:00Z")], "claudia", true)
+  expect(() => parseAuthoredPullRequests(JSON.stringify([incomplete]), repository)).toThrow(
+    "GitHub did not return every pull request page",
   )
 })
 

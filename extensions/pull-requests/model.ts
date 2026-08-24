@@ -7,26 +7,28 @@ interface PullRequestNode {
   readonly headRefName: string
   readonly isDraft: boolean
   readonly updatedAt: string
-  readonly author: { readonly login: string } | null
+  readonly baseRepository: { readonly nameWithOwner: string } | null
 }
 
 interface PullRequestQueryResponse {
   readonly data?: {
-    readonly viewer?: { readonly login?: string } | null
-    readonly repository?: {
-      readonly pullRequests?: { readonly nodes?: readonly PullRequestNode[] } | null
+    readonly viewer?: {
+      readonly login?: string
+      readonly pullRequests?: {
+        readonly nodes?: readonly (PullRequestNode | null)[]
+        readonly pageInfo?: { readonly hasNextPage?: boolean }
+      } | null
     } | null
+    readonly repository?: { readonly nameWithOwner?: string } | null
   }
 }
 
-const pullRequestFields = "number title url headRefName isDraft updatedAt author { login }"
+const pullRequestFields = "number title url headRefName isDraft updatedAt baseRepository { nameWithOwner }"
 
 /** `upstream` is the canonical project in a fork workflow; `origin` is the ordinary fallback. */
 export function pullRequestRepository(remotes: readonly Remote[]): PullRequestRepository | null {
   const selected =
-    remotes.find((remote) => remote.name === "upstream") ??
-    remotes.find((remote) => remote.name === "origin") ??
-    remotes[0]
+    remotes.find((remote) => remote.name === "upstream") ?? remotes.find((remote) => remote.name === "origin")
   if (selected === undefined) return null
 
   const web = remoteWebUrl([selected])
@@ -49,9 +51,9 @@ export function repositoryArgument(repository: PullRequestRepository): string {
   return repositoryKey(repository)
 }
 
-/** Exhaustive pagination over open PRs, ordered at the source by most recent update. */
+/** Exhaustive pagination over the viewer's open PRs, ordered at the source by most recent update. */
 export function pullRequestQueryArgs(repository: PullRequestRepository): readonly string[] {
-  const query = `query($owner: String!, $repo: String!, $endCursor: String) { viewer { login } repository(owner: $owner, name: $repo) { pullRequests(first: 100, after: $endCursor, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ${pullRequestFields} } pageInfo { hasNextPage endCursor } } } }`
+  const query = `query($owner: String!, $repo: String!, $endCursor: String) { viewer { login pullRequests(first: 100, after: $endCursor, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ${pullRequestFields} } pageInfo { hasNextPage endCursor } } } repository(owner: $owner, name: $repo) { nameWithOwner } }`
   return [
     "api",
     "graphql",
@@ -74,8 +76,9 @@ function updatedAt(pullRequest: Pick<PullRequest, "updatedAt">): number {
 }
 
 /**
- * `--slurp` produces one response per page. Filter against each page's authenticated viewer,
- * then sort again because updates landing during pagination can disturb page boundaries.
+ * `--slurp` produces one response per page. `viewer.pullRequests` supplies authorship; filter
+ * those results to the selected base repository, then sort again because updates landing during
+ * pagination can disturb page boundaries.
  */
 export function parseAuthoredPullRequests(stdout: string, repository: PullRequestRepository): readonly PullRequest[] {
   const parsed = JSON.parse(stdout) as PullRequestQueryResponse | readonly PullRequestQueryResponse[]
@@ -83,16 +86,23 @@ export function parseAuthoredPullRequests(stdout: string, repository: PullReques
     ? parsed
     : [parsed as PullRequestQueryResponse]
   const byNumber = new Map<number, PullRequest>()
+  const selectedRepository = `${repository.owner}/${repository.name}`.toLowerCase()
 
   for (const response of responses) {
-    const viewer = response.data?.viewer?.login
-    const connection = response.data?.repository?.pullRequests
-    if (viewer === undefined || connection === null || connection === undefined) {
+    const viewer = response.data?.viewer
+    const connection = viewer?.pullRequests
+    const returnedRepository = response.data?.repository?.nameWithOwner
+    if (
+      viewer?.login === undefined ||
+      connection === null ||
+      connection === undefined ||
+      returnedRepository?.toLowerCase() !== selectedRepository
+    ) {
       throw new Error("GitHub returned an incomplete pull request response")
     }
-    const login = viewer.toLowerCase()
     for (const node of connection.nodes ?? []) {
-      if (node.author?.login.toLowerCase() !== login) continue
+      if (node === null) continue
+      if (node.baseRepository?.nameWithOwner.toLowerCase() !== selectedRepository) continue
       const pullRequest: PullRequest = {
         number: node.number,
         title: node.title,
@@ -107,6 +117,10 @@ export function parseAuthoredPullRequests(stdout: string, repository: PullReques
         byNumber.set(node.number, pullRequest)
       }
     }
+  }
+
+  if (responses.at(-1)?.data?.viewer?.pullRequests?.pageInfo?.hasNextPage === true) {
+    throw new Error("GitHub did not return every pull request page")
   }
 
   return [...byNumber.values()].sort((left, right) => updatedAt(right) - updatedAt(left) || right.number - left.number)

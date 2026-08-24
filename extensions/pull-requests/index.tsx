@@ -10,6 +10,7 @@ import {
   useTheme,
   type PaneHandle,
   type PaneProps,
+  type Head,
   type PullRequest,
   type PullRequestsApi,
   type Remote,
@@ -82,6 +83,12 @@ function commandFailure(stderr: string, stdout: string, fallback: string): Error
   return new Error(stderr.trim() || stdout.trim() || fallback)
 }
 
+function restoreRef(head: Head): string | null {
+  if (head.kind === "onBranch") return head.branch
+  if (head.kind === "detached") return head.oid
+  return null
+}
+
 function sameRemotes(left: readonly Remote[], right: readonly Remote[]): boolean {
   return (
     left.length === right.length &&
@@ -97,6 +104,7 @@ function sameRemotes(left: readonly Remote[], right: readonly Remote[]): boolean
 export default defineExtension({
   name: "pull-requests",
   description: "Open pull requests authored by the current GitHub user (requires the `gh` CLI)",
+  needs: ["branches"],
 
   activate(ctx): PullRequestsApi {
     const rows = createRowSource<PullRequest>({
@@ -106,17 +114,40 @@ export default defineExtension({
 
     const fail = (error: unknown): void => ctx.popups.notify(messageOf(error), "error")
 
+    async function restoreCheckout(head: Head, failure: Error): Promise<never> {
+      const ref = restoreRef(head)
+      if (ref === null) throw failure
+      try {
+        await ctx.git.checkout(ref)
+      } catch (rollback) {
+        throw new Error(`${failure.message}\nCould not restore ${ref}: ${messageOf(rollback)}`)
+      }
+      throw failure
+    }
+
     async function checkout(pullRequest: PullRequest): Promise<void> {
       try {
-        const output = await ctx.exec("gh", [
+        const originalHead = ctx.git.state.head
+        if (originalHead.kind === "unborn") {
+          throw new Error("Cannot safely check out a pull request before the current branch has its first commit")
+        }
+        const args = [
           "pr",
           "checkout",
           String(pullRequest.number),
           "--repo",
           repositoryArgument(pullRequest.repository),
-        ])
+        ] as const
+        const output = await ctx
+          .exec("gh", args)
+          .catch((cause: unknown) =>
+            restoreCheckout(originalHead, cause instanceof Error ? cause : new Error(String(cause))),
+          )
         if (output.exitCode !== 0) {
-          throw commandFailure(output.stderr, output.stdout, `Could not check out pull request #${pullRequest.number}`)
+          await restoreCheckout(
+            originalHead,
+            commandFailure(output.stderr, output.stdout, `Could not check out pull request #${pullRequest.number}`),
+          )
         }
         await ctx.git.refresh()
         ctx.popups.notify(`Checked out ${pullRequest.headRefName}`, "success")
@@ -254,10 +285,16 @@ export default defineExtension({
         const request = (async () => {
           try {
             const output = await ctx.exec("gh", pullRequestQueryArgs(repository))
-            if (output.exitCode !== 0) {
-              throw commandFailure(output.stderr, output.stdout, "GitHub could not list pull requests")
-            }
-            const items = parseAuthoredPullRequests(output.stdout, repository)
+            const items = (() => {
+              try {
+                return parseAuthoredPullRequests(output.stdout, repository)
+              } catch (cause) {
+                if (output.exitCode !== 0) {
+                  throw commandFailure(output.stderr, output.stdout, "GitHub could not list pull requests")
+                }
+                throw cause
+              }
+            })()
             if (issued !== ticket.current || ctx.signal.aborted) return
             setResult({ key, items })
             setError(null)
