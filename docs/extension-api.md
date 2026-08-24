@@ -1878,6 +1878,7 @@ are Commands (§1.7), including operations contributed to another Extension's Ro
   export interface ExtensionApis {
     branches: BranchesApi;
     "remote-branches": RemoteBranchesApi;
+    "pull-requests": PullRequestsApi;
     files: FilesApi;
     commits: CommitsApi;
     stash: StashApi;
@@ -2016,13 +2017,32 @@ are Commands (§1.7), including operations contributed to another Extension's Ro
     useDecoration(row: Row): RowDecoration | undefined;
   }
 
-  // The five bundled list Extensions export RowSource APIs; `diff` and
+  /** The canonical hosted repository an Authored Pull Request targets. */
+  export interface PullRequestRepository {
+    readonly host: string;
+    readonly owner: string;
+    readonly name: string;
+  }
+
+  /** One open (possibly draft) pull request authored by the current GitHub identity. */
+  export interface PullRequest {
+    readonly number: number;
+    readonly title: string;
+    readonly url: string;
+    readonly headRefName: string;
+    readonly isDraft: boolean;
+    readonly updatedAt: string;
+    readonly repository: PullRequestRepository;
+  }
+
+  // The six bundled list Extensions export RowSource APIs; `diff` and
   // `commit-flow` export the small APIs beneath. A consumer declares the list
   // Extension in `needs`, gets its RowSource, and registers its own contextual
   // Command with `source`.
 
   export type BranchesApi = RowSource<Branch>;
   export type RemoteBranchesApi = RowSource<RemoteBranch>;
+  export type PullRequestsApi = RowSource<PullRequest>;
   export type FilesApi = RowSource<FileChange>;
   export type CommitsApi = RowSource<Commit>;
   export type StashApi = RowSource<StashEntry>;

@@ -63,3 +63,19 @@ _Avoid_: target registry, row provider
 **Row Decoration**:
 Extra visual data (badge, color, suffix) an Extension attaches to rows of another Extension's list Pane, e.g. PR status on branch rows.
 _Avoid_: annotation
+
+**Authored Pull Request**:
+An open pull request, including a draft, created by the current GitHub identity against the Pull Request Repository. The Pull Requests Pane contains the exhaustive set of these pull requests rather than a capped recent subset.
+_Avoid_: my PR, owned PR
+
+**Pull Request Repository**:
+The canonical repository represented by the `upstream` remote when it exists, otherwise by `origin`. Authored Pull Requests are selected by their base repository, so fork-originated contributions to an upstream project belong to that project's view.
+_Avoid_: current repo, local repository
+
+**Pull Request Branch**:
+The head branch containing an Authored Pull Request's proposed changes. It may live in a fork and need not have a corresponding local branch or configured remote.
+_Avoid_: local PR branch
+
+**Pull Request Recency**:
+The time of an Authored Pull Request's latest GitHub update, regardless of whether that update changed code or discussion. Pull Request lists order this recency from latest to earliest.
+_Avoid_: creation time, branch age
