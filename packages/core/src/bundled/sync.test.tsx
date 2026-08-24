@@ -210,8 +210,6 @@ describe("sync.push", () => {
     await waitForFrame(harness, "↓1")
     await press(harness, "P")
     await waitForFrame(harness, "Force-push main to origin/main?")
-    // The known divergence routes straight to this confirmation; no failed push or error toast
-    // makes the user wait before the warning appears.
     expect(toasts(harness)).toEqual([])
     expect(frame(harness)).toContain("--force-with-lease")
     expect(frame(harness)).toContain("1 commit on origin/main will be destroyed.")
