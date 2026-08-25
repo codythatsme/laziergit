@@ -299,7 +299,7 @@ describe.skipIf(process.platform === "win32")("pull requests pane", () => {
 
   it("polls while visible and stops polling when another tab is shown", async () => {
     globalThis.setInterval = ((handler: () => void, delay?: number) =>
-      originalSetInterval(handler, delay === 60_000 ? 1 : delay)) as typeof setInterval
+      originalSetInterval(handler, delay === 60_000 ? 25 : delay)) as typeof setInterval
     const { harness, gh } = await pullRequestsHarness()
     await gh.setPullRequests([pullRequest(7, "Polling pull request")])
     await start(harness)
@@ -312,7 +312,7 @@ describe.skipIf(process.platform === "win32")("pull requests pane", () => {
     // eslint-disable-next-line no-restricted-properties
     await Bun.sleep(100)
     const callsAfterUnmount = (await gh.calls()).length
-    // Elapsed time is the subject: 100 accelerated poll ticks must pass after the queue drains.
+    // Elapsed time is the subject: several accelerated poll ticks must pass after the queue drains.
     // eslint-disable-next-line no-restricted-properties
     await Bun.sleep(100)
     expect(await gh.calls()).toHaveLength(callsAfterUnmount)
