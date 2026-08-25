@@ -299,7 +299,7 @@ describe.skipIf(process.platform === "win32")("pull requests pane", () => {
 
   it("polls while visible and stops polling when another tab is shown", async () => {
     globalThis.setInterval = ((handler: () => void, delay?: number) =>
-      originalSetInterval(handler, delay === 60_000 ? 25 : delay)) as typeof setInterval
+      originalSetInterval(handler, delay === 60_000 ? 1 : delay)) as typeof setInterval
     const { harness, gh } = await pullRequestsHarness()
     await gh.setPullRequests([pullRequest(7, "Polling pull request")])
     await start(harness)
@@ -308,11 +308,14 @@ describe.skipIf(process.platform === "win32")("pull requests pane", () => {
 
     await runCommand(harness, "branches.focus")
     await waitForFrame(harness, "local branches")
-    const callsWhileVisible = (await gh.calls()).length
-    // Elapsed time is the subject: several accelerated poll ticks must pass after unmount.
+    // A timer callback queued while the PR tab was visible may finish after its interval is cleared.
     // eslint-disable-next-line no-restricted-properties
     await Bun.sleep(100)
-    expect(await gh.calls()).toHaveLength(callsWhileVisible)
+    const callsAfterUnmount = (await gh.calls()).length
+    // Elapsed time is the subject: 100 accelerated poll ticks must pass after the queue drains.
+    // eslint-disable-next-line no-restricted-properties
+    await Bun.sleep(100)
+    expect(await gh.calls()).toHaveLength(callsAfterUnmount)
   }, 30_000)
 
   it("registers the tab only after a browsable remote appears", async () => {
