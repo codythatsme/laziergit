@@ -318,7 +318,10 @@ export interface ListCursor<T> {
   readonly index: number
   readonly selected: T | undefined
   readonly query: ListQuery | undefined
-  /** Move the cursor (clicking a row, or jumping to a row your Extension just created). */
+  /**
+   * Move the cursor (clicking a row, or jumping to a row your Extension just created). The
+   * target is revealed without the keyboard navigation scroll-off margin.
+   */
   setIndex(index: number): void
   /**
    * Callback ref for the Pane's `<scrollbox>`: attach it, put {@link rowId} on each row, and
@@ -388,6 +391,7 @@ export function useListCursor<T>({
   const [requested, setRequested] = useState(0)
   const [queryState, setQueryState] = useState<QueryState>(emptyQueryState)
   const surface = useRef<ScrollSurface | null>(null)
+  const scrollOffRequest = useRef(false)
   const mode = queryOptions?.mode
   const fields = queryOptions?.fields
   const filterIndices = useMemo(
@@ -416,26 +420,34 @@ export function useListCursor<T>({
     searchIndices.length === 0 ? 0 : Math.min(Math.max(queryState.searchPosition, 0), searchIndices.length - 1)
   const currentSearchMatch = searchIndices[searchPosition]
 
-  const request = useCallback((next: number) => {
+  const requestSelection = useCallback((next: number) => {
+    scrollOffRequest.current = false
     setRequested(next)
   }, [])
 
-  // ...and written back, or the clamp would resurrect the old position once the list grew
-  // again. Revealing rides along here because this effect runs on exactly the renders that can
-  // move the cursor out of the viewport: a keypress, and a clamp. A scroll-off margin reveals
-  // the neighboring row first, then the selection; the second call is normally a no-op, but
-  // guarantees a very tall custom row cannot push the actual cursor out of view.
+  const requestKeyboardStep = useCallback(
+    (next: number) => {
+      scrollOffRequest.current = next !== index
+      setRequested(next)
+    },
+    [index],
+  )
+
+  // Clamp write-back prevents resurrection; only a fresh keyboard step gets look-ahead.
+  // Direct selections and later clamps use nearest reveal, matching lazygit's separate paths.
   useEffect(() => {
-    if (requested !== index) request(index)
+    if (requested !== index) requestSelection(index)
     const node = surface.current
     const before = revealedIndex.current
+    const useScrollOff = scrollOffRequest.current
     revealedIndex.current = index
+    scrollOffRequest.current = false
     if (!node) return
 
     const configuredMargin = Number.isFinite(scrollOffMargin) ? Math.max(0, Math.trunc(scrollOffMargin)) : 0
     const viewportRows = Math.max(0, Math.trunc(node.viewport.height))
-    const movingDown = index > before
-    const movingUp = index < before
+    const movingDown = useScrollOff && index > before
+    const movingUp = useScrollOff && index < before
     // Lazygit caps its margin at half the viewport. Besides keeping the cursor visible, that
     // makes an intentionally huge configured value behave like a centred cursor.
     const marginCap = movingDown ? Math.floor((viewportRows - 1) / 2) : Math.floor(viewportRows / 2)
@@ -443,7 +455,7 @@ export function useListCursor<T>({
     const revealIndex = movingDown ? Math.min(index + margin, last) : movingUp ? Math.max(index - margin, 0) : index
     if (revealIndex !== index) node.scrollChildIntoView(`${idPrefix}.row.${revealIndex}`)
     node.scrollChildIntoView(`${idPrefix}.row.${index}`)
-  }, [requested, index, idPrefix, last, request, scrollOffMargin])
+  }, [requested, index, idPrefix, last, requestSelection, scrollOffMargin])
 
   const latest = useRef({
     items,
@@ -486,32 +498,32 @@ export function useListCursor<T>({
   const clearQuery = useCallback(() => {
     const current = latest.current
     const sourceIndex = current.filterIndices?.[current.index] ?? current.index
-    request(sourceIndex)
+    requestSelection(sourceIndex)
     updateQueryState(emptyQueryState)
-  }, [request, updateQueryState])
+  }, [requestSelection, updateQueryState])
 
   const inputQuery = useCallback(
     (value: string) => {
       const current = latest.current
       if (current.mode === "filter") {
-        request(0)
+        requestSelection(0)
         updateQueryState({ applied: value, draft: value, editing: true, searchPosition: 0 })
         return
       }
       updateQueryState({ ...current.queryState, draft: value, editing: true })
     },
-    [request, updateQueryState],
+    [requestSelection, updateQueryState],
   )
 
   const openQuery = useCallback(() => {
     const current = latest.current
     if (current.mode === "filter") {
-      request(0)
+      requestSelection(0)
       updateQueryState({ applied: "", draft: "", editing: true, searchPosition: 0 })
       return
     }
     updateQueryState({ ...current.queryState, draft: "", editing: true })
-  }, [request, updateQueryState])
+  }, [requestSelection, updateQueryState])
 
   const acceptQuery = useCallback(() => {
     const current = latest.current
@@ -528,9 +540,9 @@ export function useListCursor<T>({
     const matches = searchMatchIndices(current.items, value, current.fields)
     const position = matches.length === 0 ? 0 : firstMatchAfter(matches, current.index)
     const target = matches[position]
-    if (target !== undefined) request(target)
+    if (target !== undefined) requestSelection(target)
     updateQueryState({ applied: value, draft: value, editing: false, searchPosition: position })
-  }, [clearQuery, request, updateQueryState])
+  }, [clearQuery, requestSelection, updateQueryState])
 
   const moveSearch = useCallback(
     (delta: -1 | 1) => {
@@ -542,17 +554,17 @@ export function useListCursor<T>({
       if (match === undefined) return
 
       if ((delta > 0 && current.index < match) || (delta < 0 && current.index > match)) {
-        request(match)
+        requestSelection(match)
         return
       }
 
       const next = (position + delta + matches.length) % matches.length
       const target = matches[next]
       if (target === undefined) return
-      request(target)
+      requestSelection(target)
       updateQueryState({ ...current.queryState, searchPosition: next })
     },
-    [request, updateQueryState],
+    [requestSelection, updateQueryState],
   )
 
   useKeyCapture(queryOptions !== undefined && queryState.editing)
@@ -669,21 +681,21 @@ export function useListCursor<T>({
     title: `Next ${noun}`,
     keys: ["j", "down"],
     hidden: true,
-    run: () => request(Math.min(index + 1, Math.max(last, 0))),
+    run: () => requestKeyboardStep(Math.min(index + 1, Math.max(last, 0))),
   })
   useCommand({
     id: `${idPrefix}.cursor.up`,
     title: `Previous ${noun}`,
     keys: ["k", "up"],
     hidden: true,
-    run: () => request(Math.max(index - 1, 0)),
+    run: () => requestKeyboardStep(Math.max(index - 1, 0)),
   })
   useCommand({
     id: `${idPrefix}.cursor.first`,
     title: `First ${noun}`,
     keys: ["g", "home"],
     hidden: true,
-    run: () => request(0),
+    run: () => requestSelection(0),
   })
   useCommand({
     id: `${idPrefix}.cursor.last`,
@@ -691,14 +703,14 @@ export function useListCursor<T>({
     // `shift+g`, not `G`: the parser lowercases a bare letter, colliding with `g` above.
     keys: ["shift+g", "end"],
     hidden: true,
-    run: () => request(Math.max(last, 0)),
+    run: () => requestSelection(Math.max(last, 0)),
   })
 
   const scrollRef = useCallback((node: ScrollSurface | null) => {
     surface.current = node
   }, [])
 
-  const setIndex = request
+  const setIndex = requestSelection
   const rowId = useCallback((row: number) => `${idPrefix}.row.${row}`, [idPrefix])
   const query =
     queryOptions === undefined
