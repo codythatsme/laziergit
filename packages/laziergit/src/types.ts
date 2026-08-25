@@ -376,6 +376,13 @@ export interface RawOptions {
   env?: Readonly<Record<string, string>>
 }
 
+export interface PushLease {
+  /** Fully qualified remote ref whose value the lease protects. */
+  readonly ref: string
+  /** Expected remote object id. An empty string requires the ref to be absent. */
+  readonly expectedOid: string
+}
+
 export type StashSaveOptions =
   | {
       message?: string
@@ -425,7 +432,12 @@ export interface Git {
     message: string,
     opts?: { amend?: boolean; allowEmpty?: boolean; signoff?: boolean; skipHooks?: boolean; messageOnly?: boolean },
   ): Promise<void>
-  push(opts?: { remote?: string; ref?: string; force?: boolean | "with-lease"; setUpstream?: boolean }): Promise<void>
+  push(opts?: {
+    remote?: string
+    ref?: string
+    force?: boolean | "with-lease" | PushLease
+    setUpstream?: boolean
+  }): Promise<void>
   pull(opts?: { rebase?: boolean }): Promise<void>
   fetch(opts?: { remote?: string; prune?: boolean }): Promise<void>
   readonly stash: {
