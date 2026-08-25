@@ -355,6 +355,7 @@ export async function waitForFrame(
 export async function runCommand(harness: Harness, id: string): Promise<void> {
   await act(async () => {
     await harness.kernel.commands.execute(id)
+    await harness.kernel.events.drain()
   })
   await settle(harness)
 }
