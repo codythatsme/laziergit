@@ -807,6 +807,13 @@ tagged with the extension name, and routed to the log file / debug pane.
     env?: Readonly<Record<string, string>>;
   }
 
+  export interface PushLease {
+    /** Fully qualified remote ref whose value the lease protects. */
+    readonly ref: string;
+    /** Expected remote object id. An empty string requires the ref to be absent. */
+    readonly expectedOid: string;
+  }
+
   /**
    * Thrown when a git invocation exits nonzero (unless `allowFailure`).
    *
@@ -984,11 +991,14 @@ tagged with the extension name, and routed to the log file / debug pane.
       },
     ): Promise<void>;
 
-    /** Push HEAD (or `ref`). `force: "with-lease"` is the only force most extensions should use. */
+    /**
+     * Push HEAD (or `ref`). `force: "with-lease"` protects the last fetched value;
+     * a `PushLease` pins the exact remote value covered by a prior confirmation.
+     */
     push(opts?: {
       remote?: string;
       ref?: string;
-      force?: boolean | "with-lease";
+      force?: boolean | "with-lease" | PushLease;
       setUpstream?: boolean;
     }): Promise<void>;
 
