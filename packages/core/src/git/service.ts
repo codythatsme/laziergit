@@ -8,6 +8,7 @@ import {
   type Disposable,
   type GitOutput,
   type GitState,
+  type PushLease,
   type RawOptions,
   type StashSaveOptions,
 } from "laziergit"
@@ -632,14 +633,20 @@ export class GitService {
   }
 
   push(
-    opts: { remote?: string; ref?: string; force?: boolean | "with-lease"; setUpstream?: boolean } = {},
+    opts: { remote?: string; ref?: string; force?: boolean | "with-lease" | PushLease; setUpstream?: boolean } = {},
   ): Promise<void> {
     // git's first positional operand is the *repository*, so a ref given without a remote
     // would be pushed to a remote of that name. The branch's own remote stands in.
     const remote = opts.remote ?? (opts.ref === undefined ? undefined : this.#remoteFor(opts.ref))
     return this.#write([
       "push",
-      ...(opts.force === "with-lease" ? ["--force-with-lease"] : opts.force === true ? ["--force"] : []),
+      ...(typeof opts.force === "object"
+        ? [`--force-with-lease=${opts.force.ref}:${opts.force.expectedOid}`]
+        : opts.force === "with-lease"
+          ? ["--force-with-lease"]
+          : opts.force === true
+            ? ["--force"]
+            : []),
       ...(opts.setUpstream === true ? ["--set-upstream"] : []),
       ...(remote === undefined ? [] : [remote]),
       ...(opts.ref === undefined ? [] : [opts.ref]),

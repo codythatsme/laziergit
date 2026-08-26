@@ -199,27 +199,20 @@ describe("sync.push", () => {
     expect(await git(origin, "rev-parse", "other")).toBe(otherBefore)
   })
 
-  it("surfaces git's own rejection and offers a force push that names the cost", async () => {
+  it("offers a known force push immediately without waiting for git to reject a normal push", async () => {
     const harness = await startRepo()
     const origin = await addOrigin(harness)
-    // The remote gains two commits this repository knows about (its tracking ref moves with
-    // the push), so the lease still holds and the force is allowed to land.
-    await git(harness.directory, "checkout", "--quiet", "-b", "elsewhere")
-    await commitIn(harness.directory, "theirs.txt", "theirs\n")
-    await commitIn(harness.directory, "theirs-two.txt", "theirs\n")
-    await git(harness.directory, "push", "--quiet", "origin", "elsewhere:main")
-    await git(harness.directory, "checkout", "--quiet", "main")
-    await commitIn(harness.directory, "ours.txt", "ours\n")
+    await commitIn(harness.directory, "discarded.txt", "discarded\n")
+    await git(harness.directory, "push", "--quiet", "origin", "main")
+    await git(harness.directory, "reset", "--hard", "HEAD^")
     await renderApp(harness)
 
+    await waitForFrame(harness, "↓1")
     await press(harness, "P")
     await waitForFrame(harness, "Force-push main to origin/main?")
-    // git's account of the refusal is on screen underneath the confirm, verbatim.
-    expect(toasts(harness).join("\n")).toContain("[rejected]")
+    expect(toasts(harness)).toEqual([])
     expect(frame(harness)).toContain("--force-with-lease")
-    // The lease will pass here, because these commits were fetched, so nothing else on screen
-    // says work is about to be lost.
-    expect(frame(harness)).toContain("2 commits on origin/main will be destroyed.")
+    expect(frame(harness)).toContain("1 commit on origin/main will be destroyed.")
 
     await press(harness, "y")
     await waitForToast(harness, "Force-pushed main to origin/main")
@@ -287,6 +280,29 @@ describe("sync.push", () => {
     // Force-with-lease remains a direct Command even when the safer push rejected first.
     await press(harness, "o")
     await waitForFrame(harness, "Force-push main to origin/main?")
+    await press(harness, "y")
+    await waitForToast(harness, "stale info")
+
+    expect(await git(origin, "rev-parse", "main")).toEqual(await git(theirs, "rev-parse", "HEAD"))
+  })
+
+  it("pins the lease to the remote tip named by the warning", async () => {
+    const harness = await startRepo()
+    const origin = await addOrigin(harness)
+    await commitIn(harness.directory, "discarded.txt", "discarded\n")
+    await git(harness.directory, "push", "--quiet", "origin", "main")
+    await git(harness.directory, "reset", "--hard", "HEAD^")
+    const theirs = await cloneOf(origin)
+    await renderApp(harness)
+
+    await waitForFrame(harness, "↓1")
+    await press(harness, "P")
+    await waitForFrame(harness, "1 commit on origin/main will be destroyed.")
+
+    await commitIn(theirs, "new-after-warning.txt", "new\n")
+    await git(theirs, "push", "--quiet", "origin", "main")
+    await act(async () => harness.kernel.git.raw(["fetch", "--all", "--no-write-fetch-head"]))
+
     await press(harness, "y")
     await waitForToast(harness, "stale info")
 

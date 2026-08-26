@@ -125,7 +125,9 @@ export function labelFor(args: readonly string[], subcommand: string): string {
   switch (subcommand) {
     case "push":
       if (has(args, "--delete")) return "deleting remote branch"
-      return has(args, "--force", "--force-with-lease") ? "force-pushing" : "pushing"
+      return has(args, "--force", "--force-with-lease") || args.some((arg) => arg.startsWith("--force-with-lease="))
+        ? "force-pushing"
+        : "pushing"
     case "pull":
       return has(args, "--rebase") ? "pulling (rebase)" : "pulling"
     case "fetch":
