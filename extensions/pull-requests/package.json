@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@laziergit/extension-pull-requests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.tsx",
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@opentui/core": "catalog:",
+    "@opentui/react": "catalog:",
+    "laziergit": "workspace:*",
+    "react": "catalog:",
+    "string-width": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:"
+  }
+}

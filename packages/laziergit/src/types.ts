@@ -277,6 +277,24 @@ export interface RemoteBranch {
   readonly oid: string
 }
 
+/** The hosted repository whose Authored Pull Requests a Pull Requests Pane lists. */
+export interface PullRequestRepository {
+  readonly host: string
+  readonly owner: string
+  readonly name: string
+}
+
+/** One open pull request authored by the current GitHub identity. */
+export interface PullRequest {
+  readonly number: number
+  readonly title: string
+  readonly url: string
+  readonly headRefName: string
+  readonly isDraft: boolean
+  readonly updatedAt: string
+  readonly repository: PullRequestRepository
+}
+
 export interface CommitSummary {
   readonly oid: string
   readonly subject: string
@@ -617,6 +635,7 @@ export interface Statusline<TName extends string = string> {
 export interface ExtensionApis {
   branches: BranchesApi
   "remote-branches": RemoteBranchesApi
+  "pull-requests": PullRequestsApi
   files: FilesApi
   commits: CommitsApi
   stash: StashApi
@@ -649,6 +668,7 @@ export interface RowSource<Row> {
 
 export type BranchesApi = RowSource<Branch>
 export type RemoteBranchesApi = RowSource<RemoteBranch>
+export type PullRequestsApi = RowSource<PullRequest>
 export type FilesApi = RowSource<FileChange>
 
 /** A reusable, read-only commit → changed-files drill-down rendered inside another Pane. */
