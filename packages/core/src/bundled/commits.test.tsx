@@ -614,21 +614,30 @@ describe("contextual commit Commands", () => {
     expect((await repo.run("status", "--porcelain")).trim()).toBe("")
   })
 
-  it("refuses to rewrite while the working tree is dirty", async () => {
+  it("autostashes a dirty working tree while dropping a commit, then restores it", async () => {
     const repo = await openRepo()
     await commit(repo, "first commit")
     await commit(repo, "second commit")
+    await commit(repo, "third commit")
     const originalHead = await repo.oid("HEAD")
     await writeFile(join(repo.harness.directory, "first-commit.txt"), "unfinished\n")
+    await writeFile(join(repo.harness.directory, "notes.txt"), "untracked notes\n")
 
     await renderApp(repo.harness)
     await press(repo.harness, "2")
-    await waitForSelection(repo, "HEAD")
-    await press(repo.harness, "s")
-    await waitForFrame(repo.harness, "Commit rewrites need a clean working tree")
+    await press(repo.harness, "j")
+    await waitForSelection(repo, "HEAD~1")
+    await press(repo.harness, "d")
+    await waitForFrame(repo.harness, "will be removed and every newer")
+    await press(repo.harness, "y")
+    await waitForFrame(repo.harness, "Pushed history now needs force-with-lease")
 
-    expect(await repo.oid("HEAD")).toBe(originalHead)
+    expect(await repo.oid("HEAD")).not.toBe(originalHead)
+    expect(await repo.run("log", "--format=%s")).toBe("third commit\nfirst commit\n")
     expect(await Bun.file(join(repo.harness.directory, "first-commit.txt")).text()).toBe("unfinished\n")
+    expect(await Bun.file(join(repo.harness.directory, "notes.txt")).text()).toBe("untracked notes\n")
+    expect((await repo.run("status", "--short")).trim()).toBe("M first-commit.txt\n?? notes.txt")
+    expect(await repo.run("stash", "list")).toBe("")
   })
 
   it("ignores a stale REBASE_HEAD when no rebase is active", async () => {

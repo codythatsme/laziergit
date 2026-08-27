@@ -442,19 +442,24 @@ describe("interactive diff workflows", () => {
     await diff.show("driver.open-staging")
     await waitForFrame(diff.harness, "unstaged tracked.txt  [line]")
 
-    await press(diff.harness, "d")
+    let discard!: Promise<void>
+    await act(async () => {
+      discard = diff.harness.kernel.commands.execute("diff.staging-discard")
+      await Promise.resolve()
+    })
     await waitForFrame(diff.harness, "Discard selected changes?")
-    await press(diff.harness, "y")
-    await waitFor(
-      diff.harness,
-      async () => (await Bun.file(path).exists()) && (await Bun.file(path).text()) === "one\n",
-      "the selected deleted line to be restored",
-    )
+    await act(async () => {
+      diff.harness.setup.mockInput.pressKey("y")
+      await discard
+      await diff.harness.kernel.events.drain()
+    })
+    await settle(diff.harness)
     await waitForFrame(
       diff.harness,
       (screen) => screen.includes("-two") && !screen.includes("-one") && !screen.includes("Discard selected changes?"),
     )
 
+    expect(await Bun.file(path).text()).toBe("one\n")
     expect(await git(diff.harness, "diff", "--", "tracked.txt")).toContain("-two")
     expect(await git(diff.harness, "diff", "--", "tracked.txt")).toContain("-three")
   }, 30_000)
@@ -564,9 +569,17 @@ describe("interactive diff workflows", () => {
     await press(diff.harness, "M")
     await waitForFrame(diff.harness, "Resolve whole file")
     await press(diff.harness, "i")
-    await waitForFrame(diff.harness, "working tree tracked.txt")
-    await act(async () => diff.harness.kernel.events.drain())
+    await waitFor(
+      diff.harness,
+      async () => (await git(diff.harness, "ls-files", "--unmerged", "--", "tracked.txt")) === "",
+      "the whole-file strategy to stage the resolved file",
+    )
+    await act(async () => {
+      await diff.harness.kernel.git.waitForIdle()
+      await diff.harness.kernel.events.drain()
+    })
     await settle(diff.harness)
+    await waitForFrame(diff.harness, "working tree tracked.txt")
 
     expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toBe("topic\n")
     expect(await git(diff.harness, "ls-files", "--unmerged", "--", "tracked.txt")).toBe("")

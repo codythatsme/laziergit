@@ -480,10 +480,6 @@ export default defineExtension({
         ctx.popups.notify("Only non-merge commits on the checked-out branch can be rewritten", "warning")
         return false
       }
-      if (!ctx.git.state.status.isClean) {
-        ctx.popups.notify("Commit rewrites need a clean working tree; stash or commit your changes first", "warning")
-        return false
-      }
 
       const refs = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] as const
       if ((await Promise.all([rebaseInProgress(), ...refs.map(refExists)])).some(Boolean)) {
@@ -525,6 +521,9 @@ export default defineExtension({
           "rebase.updateRefs=false",
           "rebase",
           "--interactive",
+          // Match lazygit: let Git protect tracked index and worktree changes for the rewrite,
+          // then restore them when the rebase completes or is aborted.
+          "--autostash",
           "--keep-empty",
           "--no-autosquash",
           "--rebase-merges",
