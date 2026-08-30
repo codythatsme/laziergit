@@ -108,17 +108,17 @@ jobs:
 
   # Deliberate async-race hunting over the integration suites: repeated runs in a randomized
   # order, never retried. A failure here is a real flake — reproduce it with the printed
-  # seed. Files are duration-balanced across four jobs per OS, but each selected file still
+  # seed. Files are duration-balanced across seven jobs per OS, but each selected file still
   # gets its own process because a process spanning every suite eventually loses subprocess
   # stdout to a Bun runtime defect, which reads as a flake but is not one.
   stress_shards:
-    name: stress (${{ matrix.os }}, shard ${{ matrix.shard }}/4, seed ${{ needs.stress_seed.outputs.seed }})
+    name: stress (${{ matrix.os }}, shard ${{ matrix.shard }}/7, seed ${{ needs.stress_seed.outputs.seed }})
     needs: stress_seed
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -126,9 +126,9 @@ jobs:
         with:
           bun-version: canary
       - run: bun install --frozen-lockfile
-      - name: Stress shard ${{ matrix.shard }}/4 (seed ${{ needs.stress_seed.outputs.seed }})
+      - name: Stress shard ${{ matrix.shard }}/7 (seed ${{ needs.stress_seed.outputs.seed }})
         run: >
-          bun scripts/test.ts integration --shard ${{ matrix.shard }}/4
+          bun scripts/test.ts integration --shard ${{ matrix.shard }}/7
           --rerun-each 10 --randomize --seed ${{ needs.stress_seed.outputs.seed }}
 
   # Stable branch-protection target for the full stress matrix.
