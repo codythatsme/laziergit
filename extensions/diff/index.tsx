@@ -48,6 +48,7 @@ import {
 } from "./patch"
 import { diffThemeProps } from "./theme"
 import { LineDocument } from "./line-document"
+import { writeWorkingFile } from "./working-file"
 
 /** The `<diff>` layouts, as one list so the config enum and the `v` toggle cannot drift apart. */
 const views = ["unified", "split"] as const
@@ -324,7 +325,7 @@ export default defineExtension({
         const open = interaction.get()
         if (open.kind !== "conflict") return
         const resolution = chooseConflict(open.session, choice)
-        await writeFile(join(ctx.git.root, open.path), resolution.content)
+        await writeWorkingFile(join(ctx.git.root, open.path), resolution.content)
         if (resolution.session !== null) {
           interaction.set({ kind: "conflict", path: open.path, session: resolution.session })
           return
@@ -341,7 +342,7 @@ export default defineExtension({
         if (open.kind !== "conflict") return
         const session = undoConflict(open.session)
         if (session === open.session) return
-        await writeFile(join(ctx.git.root, open.path), session.content)
+        await writeWorkingFile(join(ctx.git.root, open.path), session.content)
         interaction.set({ kind: "conflict", path: open.path, session })
       })
     }
@@ -379,7 +380,7 @@ export default defineExtension({
           // merge-file reports the number of conflicts (capped at 127), even though --ours,
           // --theirs and --union still produced the requested complete output.
           if (output.exitCode >= 128) throw new Error(output.stderr.trim() || "git merge-file failed")
-          await writeFile(join(ctx.git.root, open.path), output.stdout)
+          await writeWorkingFile(join(ctx.git.root, open.path), output.stdout)
           await ctx.git.stage([open.path])
           interaction.set({ kind: "passive" })
           await focusFiles(true)

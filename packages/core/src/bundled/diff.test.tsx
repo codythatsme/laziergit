@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test"
-import { readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, lstat, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { act } from "react"
 import { TextRenderable, type BaseRenderable } from "@opentui/core"
@@ -642,6 +642,28 @@ describe("interactive diff workflows", () => {
 
     await runCommand(diff.harness, "diff.undo-conflict")
     expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toBe(conflict)
+  }, 30_000)
+
+  it("preserves executable mode and symlinks when saving conflict choices", async () => {
+    const diff = await createDiffHarness()
+    const path = join(diff.harness.directory, "tracked.txt")
+    const target = join(diff.harness.directory, "target.txt")
+    await writeFile(target, "<<<<<<< HEAD\ncurrent\n=======\nincoming\n>>>>>>> topic\n")
+    await chmod(target, 0o755)
+    const mode = (await stat(target)).mode
+    await rm(path)
+    await symlink(target, path, "file")
+    await diff.show("driver.open-conflict")
+    await waitForFrame(diff.harness, "conflict tracked.txt  1/1")
+    await runCommand(diff.harness, "diff.choose")
+    await waitForFrame(diff.harness, "working tree tracked.txt")
+
+    expect(await readFile(target, "utf8")).toBe("current\n")
+    expect((await lstat(path)).isSymbolicLink()).toBeTrue()
+    expect((await stat(target)).mode).toBe(mode)
+    expect((await readdir(diff.harness.directory)).filter((name) => name.startsWith(".laziergit-conflict-"))).toEqual(
+      [],
+    )
   }, 30_000)
 
   it("resolves the last block of a real merge without staging marker text", async () => {
