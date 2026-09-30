@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -44,6 +44,7 @@ import {
   togglePatchMode,
   togglePatchRange,
   type PatchSession,
+  type PatchLine,
 } from "./patch"
 import { diffThemeProps } from "./theme"
 import { LineDocument } from "./line-document"
@@ -72,6 +73,9 @@ type DiffState =
   | { readonly kind: "empty" }
   | ({ readonly kind: "ready"; readonly target: DiffTarget } & ParsedPatch)
   | { readonly kind: "failed"; readonly target: DiffTarget; readonly message: string }
+
+const conflictLineText = (line: string): string => line
+const patchLineText = (line: PatchLine): string => line.text
 
 type StagingSide = "unstaged" | "staged"
 
@@ -258,7 +262,7 @@ export default defineExtension({
     }
 
     async function readConflict(path: string, previous?: ConflictSession): Promise<ConflictSession | null> {
-      const content = await Bun.file(`${ctx.git.root}/${path}`).text()
+      const content = await readFile(join(ctx.git.root, path), "utf8")
       const parsed = parseConflicts(content)
       if (parsed.kind === "malformed") throw new Error(parsed.message)
       return previous === undefined ? createConflictSession(content) : replaceConflictSession(previous, content)
@@ -320,7 +324,7 @@ export default defineExtension({
         const open = interaction.get()
         if (open.kind !== "conflict") return
         const resolution = chooseConflict(open.session, choice)
-        await Bun.write(`${ctx.git.root}/${open.path}`, resolution.content)
+        await writeFile(join(ctx.git.root, open.path), resolution.content)
         if (resolution.session !== null) {
           interaction.set({ kind: "conflict", path: open.path, session: resolution.session })
           return
@@ -337,7 +341,7 @@ export default defineExtension({
         if (open.kind !== "conflict") return
         const session = undoConflict(open.session)
         if (session === open.session) return
-        await Bun.write(`${ctx.git.root}/${open.path}`, session.content)
+        await writeFile(join(ctx.git.root, open.path), session.content)
         interaction.set({ kind: "conflict", path: open.path, session })
       })
     }
@@ -375,7 +379,7 @@ export default defineExtension({
           // merge-file reports the number of conflicts (capped at 127), even though --ours,
           // --theirs and --union still produced the requested complete output.
           if (output.exitCode >= 128) throw new Error(output.stderr.trim() || "git merge-file failed")
-          await Bun.write(`${ctx.git.root}/${open.path}`, output.stdout)
+          await writeFile(join(ctx.git.root, open.path), output.stdout)
           await ctx.git.stage([open.path])
           interaction.set({ kind: "passive" })
           await focusFiles(true)
@@ -836,31 +840,30 @@ export default defineExtension({
               {` ${active.path}  ${active.session.conflictIndex + 1}/${active.session.conflicts.length}  `}
               <span fg={theme.accent}>{active.session.side}</span>
             </text>
-            <scrollbox ref={scroll.ref} focusable={false} flexGrow={1} flexBasis={0}>
-              <LineDocument
-                count={active.session.lines.length}
-                lineAt={(index) => active.session.lines[index] ?? ""}
-                styleAt={(index) => {
-                  const block = conflictAtLine(active.session.conflicts, index)
-                  const role = block === undefined ? null : lineRole(block, index)
-                  const highlighted =
-                    block === selectedBlock && selected !== null && index >= selected[0] && index < selected[1]
-                  return {
-                    fg:
-                      role === "marker"
-                        ? theme.danger
-                        : role === "current"
-                          ? theme.diffRemoved
-                          : role === "incoming"
-                            ? theme.diffAdded
-                            : role === "ancestor"
-                              ? theme.warning
-                              : theme.text,
-                    bg: highlighted ? theme.selection : undefined,
-                  }
-                }}
-              />
-            </scrollbox>
+            <LineDocument
+              scroll={scroll}
+              lines={active.session.lines}
+              textOf={conflictLineText}
+              styleAt={(index) => {
+                const block = conflictAtLine(active.session.conflicts, index)
+                const role = block === undefined ? null : lineRole(block, index)
+                const highlighted =
+                  block === selectedBlock && selected !== null && index >= selected[0] && index < selected[1]
+                return {
+                  fg:
+                    role === "marker"
+                      ? theme.danger
+                      : role === "current"
+                        ? theme.diffRemoved
+                        : role === "incoming"
+                          ? theme.diffAdded
+                          : role === "ancestor"
+                            ? theme.warning
+                            : theme.text,
+                  bg: highlighted ? theme.selection : undefined,
+                }
+              }}
+            />
           </box>
         )
       }
@@ -874,32 +877,31 @@ export default defineExtension({
               <span fg={theme.accent}>{active.side}</span>
               {` ${active.path}${active.session === null ? "" : `  [${active.session.mode}${range}]`}`}
             </text>
-            <scrollbox ref={scroll.ref} focusable={false} flexGrow={1} flexBasis={0}>
-              {active.session === null ? (
-                <text fg={theme.textMuted}>{active.message ?? "no stageable text changes"}</text>
-              ) : (
-                <LineDocument
-                  count={active.session.patch.lines.length}
-                  lineAt={(index) => active.session?.patch.lines[index]?.text ?? ""}
-                  styleAt={(index) => {
-                    const line = active.session?.patch.lines[index]
-                    return {
-                      fg:
-                        line?.kind === "added"
-                          ? theme.diffAdded
-                          : line?.kind === "removed"
-                            ? theme.diffRemoved
-                            : line?.kind === "hunkHeader"
-                              ? theme.accent
-                              : line?.kind === "header" || line?.kind === "metadata"
-                                ? theme.textMuted
-                                : theme.text,
-                      bg: selected.has(index) ? theme.selection : undefined,
-                    }
-                  }}
-                />
-              )}
-            </scrollbox>
+            {active.session === null ? (
+              <text fg={theme.textMuted}>{active.message ?? "no stageable text changes"}</text>
+            ) : (
+              <LineDocument
+                scroll={scroll}
+                lines={active.session.patch.lines}
+                textOf={patchLineText}
+                styleAt={(index) => {
+                  const line = active.session?.patch.lines[index]
+                  return {
+                    fg:
+                      line?.kind === "added"
+                        ? theme.diffAdded
+                        : line?.kind === "removed"
+                          ? theme.diffRemoved
+                          : line?.kind === "hunkHeader"
+                            ? theme.accent
+                            : line?.kind === "header" || line?.kind === "metadata"
+                              ? theme.textMuted
+                              : theme.text,
+                    bg: selected.has(index) ? theme.selection : undefined,
+                  }
+                }}
+              />
+            )}
           </box>
         )
       }
