@@ -22,6 +22,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react"
 import { fetchFor } from "./fetch"
 import {
   chooseConflict,
+  conflictAtLine,
   createConflictSession,
   lineRole,
   moveConflict,
@@ -45,6 +46,7 @@ import {
   type PatchSession,
 } from "./patch"
 import { diffThemeProps } from "./theme"
+import { LineDocument } from "./line-document"
 
 /** The `<diff>` layouts, as one list so the config enum and the `v` toggle cannot drift apart. */
 const views = ["unified", "split"] as const
@@ -86,11 +88,6 @@ type Interaction =
 
 function otherSide(side: StagingSide): StagingSide {
   return side === "unstaged" ? "staged" : "unstaged"
-}
-
-function lineText(line: string): string {
-  const withoutLf = line.endsWith("\n") ? line.slice(0, -1) : line
-  return withoutLf.endsWith("\r") ? withoutLf.slice(0, -1) : withoutLf
 }
 
 /**
@@ -840,29 +837,29 @@ export default defineExtension({
               <span fg={theme.accent}>{active.session.side}</span>
             </text>
             <scrollbox ref={scroll.ref} focusable={false} flexGrow={1} flexBasis={0}>
-              {active.session.lines.map((line, index) => {
-                const block = active.session.conflicts.find(
-                  (candidate) => index >= candidate.start && index <= candidate.end,
-                )
-                const role = block === undefined ? null : lineRole(block, index)
-                const highlighted =
-                  block === selectedBlock && selected !== null && index >= selected[0] && index < selected[1]
-                const color =
-                  role === "marker"
-                    ? theme.danger
-                    : role === "current"
-                      ? theme.diffRemoved
-                      : role === "incoming"
-                        ? theme.diffAdded
-                        : role === "ancestor"
-                          ? theme.warning
-                          : theme.text
-                return (
-                  <text key={index} wrapMode="none" fg={color} bg={highlighted ? theme.selection : undefined}>
-                    {lineText(line) || " "}
-                  </text>
-                )
-              })}
+              <LineDocument
+                count={active.session.lines.length}
+                lineAt={(index) => active.session.lines[index] ?? ""}
+                styleAt={(index) => {
+                  const block = conflictAtLine(active.session.conflicts, index)
+                  const role = block === undefined ? null : lineRole(block, index)
+                  const highlighted =
+                    block === selectedBlock && selected !== null && index >= selected[0] && index < selected[1]
+                  return {
+                    fg:
+                      role === "marker"
+                        ? theme.danger
+                        : role === "current"
+                          ? theme.diffRemoved
+                          : role === "incoming"
+                            ? theme.diffAdded
+                            : role === "ancestor"
+                              ? theme.warning
+                              : theme.text,
+                    bg: highlighted ? theme.selection : undefined,
+                  }
+                }}
+              />
             </scrollbox>
           </box>
         )
@@ -881,28 +878,26 @@ export default defineExtension({
               {active.session === null ? (
                 <text fg={theme.textMuted}>{active.message ?? "no stageable text changes"}</text>
               ) : (
-                active.session.patch.lines.map((line) => {
-                  const color =
-                    line.kind === "added"
-                      ? theme.diffAdded
-                      : line.kind === "removed"
-                        ? theme.diffRemoved
-                        : line.kind === "hunkHeader"
-                          ? theme.accent
-                          : line.kind === "header" || line.kind === "metadata"
-                            ? theme.textMuted
-                            : theme.text
-                  return (
-                    <text
-                      key={line.index}
-                      wrapMode="none"
-                      fg={color}
-                      bg={selected.has(line.index) ? theme.selection : undefined}
-                    >
-                      {line.text || " "}
-                    </text>
-                  )
-                })
+                <LineDocument
+                  count={active.session.patch.lines.length}
+                  lineAt={(index) => active.session?.patch.lines[index]?.text ?? ""}
+                  styleAt={(index) => {
+                    const line = active.session?.patch.lines[index]
+                    return {
+                      fg:
+                        line?.kind === "added"
+                          ? theme.diffAdded
+                          : line?.kind === "removed"
+                            ? theme.diffRemoved
+                            : line?.kind === "hunkHeader"
+                              ? theme.accent
+                              : line?.kind === "header" || line?.kind === "metadata"
+                                ? theme.textMuted
+                                : theme.text,
+                      bg: selected.has(index) ? theme.selection : undefined,
+                    }
+                  }}
+                />
               )}
             </scrollbox>
           </box>

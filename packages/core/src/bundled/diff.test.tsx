@@ -8,6 +8,7 @@ import { gitIsolationEnv } from "../git/test-repo"
 import {
   createHarness,
   frame,
+  highlighted,
   installHarnessLifecycle,
   press,
   renderApp,
@@ -501,6 +502,61 @@ describe("interactive diff workflows", () => {
     expect(cached).toContain("LINE ONE")
     expect(cached).toContain("LINE TWELVE")
     expect(await git(diff.harness, "diff", "--", "tracked.txt")).toBe("")
+  }, 30_000)
+
+  it("opens and resolves conflicts in a large file", async () => {
+    const diff = await createDiffHarness()
+    const prefix = "unchanged dependency\r\n".repeat(20_000)
+    const current = "current dependency\r\n".repeat(20_000)
+    const incoming = "incoming dependency\r\n".repeat(20_000)
+    const first = `<<<<<<< HEAD\r\n${current}=======\r\n${incoming}>>>>>>> topic\r\n`
+    const second =
+      "<<<<<<< HEAD\r\ncurrent tail\r\n||||||| base\r\nbase tail\r\n=======\r\nincoming tail\r\n>>>>>>> topic\r\n"
+    const suffix = `${prefix}last dependency without newline`
+    const conflict = `${prefix}${first}${prefix}${second}${suffix}`
+    await writeFile(join(diff.harness.directory, "tracked.txt"), conflict)
+    await diff.show("driver.open-conflict")
+    await waitForFrame(diff.harness, "current dependency")
+    expect(highlighted(diff.harness).join("\n")).toContain("current dependency")
+
+    await runCommand(diff.harness, "diff.scroll-down")
+    await waitForFrame(diff.harness, "incoming dependency")
+    expect(highlighted(diff.harness).join("\n")).toContain("incoming dependency")
+    await runCommand(diff.harness, "diff.page-down")
+    await waitForFrame(diff.harness, "incoming dependency")
+    await runCommand(diff.harness, "diff.next-block")
+    await waitForFrame(diff.harness, "incoming tail")
+    await runCommand(diff.harness, "diff.scroll-up")
+    await waitForFrame(diff.harness, "base tail")
+    expect(highlighted(diff.harness).join("\n")).toContain("base tail")
+    await runCommand(diff.harness, "diff.bottom")
+    await waitForFrame(diff.harness, "last dependency without newline")
+    await runCommand(diff.harness, "diff.top")
+    await waitForFrame(diff.harness, "unchanged dependency")
+
+    await runCommand(diff.harness, "diff.choose")
+    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toBe(
+      `${prefix}${first}${prefix}base tail\r\n${suffix}`,
+    )
+    await runCommand(diff.harness, "diff.undo-conflict")
+    expect(await Bun.file(join(diff.harness.directory, "tracked.txt")).text()).toBe(conflict)
+    expect(diff.harness.kernel.diagnostics.getSnapshot()).toEqual([])
+  }, 30_000)
+
+  it("stages a line from a large interactive patch", async () => {
+    const diff = await createDiffHarness()
+    const content = Array.from({ length: 20_000 }, (_, index) => `dependency ${index + 1}\n`).join("")
+    await writeFile(join(diff.harness.directory, "new.txt"), content)
+    await diff.show("driver.open-new-staging")
+    await waitForFrame(diff.harness, "dependency 1")
+    await runCommand(diff.harness, "diff.bottom")
+    await waitForFrame(diff.harness, "dependency 20000")
+    await runCommand(diff.harness, "diff.top")
+    await waitForFrame(diff.harness, "dependency 1")
+    await runCommand(diff.harness, "diff.choose")
+    expect(await git(diff.harness, "show", ":new.txt")).toBe("dependency 1\n")
+    expect(await Bun.file(join(diff.harness.directory, "new.txt")).text()).toBe(content)
+    expect(diff.harness.kernel.diagnostics.getSnapshot()).toEqual([])
   }, 30_000)
 
   it("picks and undoes marker-delimited conflict sides", async () => {

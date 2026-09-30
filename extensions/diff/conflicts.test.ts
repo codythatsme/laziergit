@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test"
 import {
   availableSides,
   chooseConflict,
+  conflictAtLine,
   createConflictSession,
   moveConflict,
   moveSide,
@@ -20,6 +21,19 @@ function present<T>(value: T | null): T {
 }
 
 describe("conflict parser", () => {
+  it("locates lines inside sorted marker blocks and leaves surrounding context unstyled", () => {
+    const parsed = parseConflicts(ordinary.repeat(100))
+    if (parsed.kind !== "ready") throw new Error("expected complete conflicts")
+    for (let index = 0; index < parsed.lines.length; index += 1) {
+      expect(conflictAtLine(parsed.conflicts, index)).toBe(
+        parsed.conflicts.find((block) => index >= block.start && index <= block.end),
+      )
+    }
+    expect(conflictAtLine([], 0)).toBeUndefined()
+    expect(conflictAtLine(parsed.conflicts, -1)).toBeUndefined()
+    expect(conflictAtLine(parsed.conflicts, parsed.lines.length)).toBeUndefined()
+  })
+
   it("finds multiple ordinary and diff3 blocks", () => {
     const parsed = parseConflicts(
       ordinary + `<<<<<<< ours\ncurrent\n||||||| base\nancestor\n=======\nincoming\n>>>>>>> theirs\n`,
