@@ -17,6 +17,25 @@ export interface ResolvedLayout {
   readonly columns: readonly ResolvedColumn[]
 }
 
+/** Integer row allocation: the expanded cell has weight two; every other cell has one. */
+export function sideCellHeights(height: number, count: number, expandedIndex: number): readonly number[] {
+  if (height < count * 5) {
+    // Reserve room to work before spending rows on inactive frames. At very small
+    // sizes only the working cell fits; the others can still be reached by keyboard.
+    const compact = height >= count * 3 + 2 ? 3 : height >= count + 2 ? 1 : 0
+    return Array.from({ length: count }, (_, index) =>
+      index === expandedIndex ? height - compact * (count - 1) : compact,
+    )
+  }
+
+  let usedWeight = 0
+  return Array.from({ length: count }, (_, index) => {
+    const start = Math.floor((height * usedWeight) / (count + 1))
+    usedWeight += index === expandedIndex ? 2 : 1
+    return Math.floor((height * usedWeight) / (count + 1)) - start
+  })
+}
+
 /** A Pane cannot push the Layout arbitrarily wide with a hint; columns past this fold in. */
 const maxHintedColumn = 8
 
@@ -144,6 +163,8 @@ export interface LayoutSnapshot {
   readonly layout: ResolvedLayout
   /** The Pane that owns the keyboard, or null while no Pane is live. */
   readonly focusedPaneId: string | null
+  /** Last focused cell in the left column; stays expanded while reading a detail Pane. */
+  readonly expandedSideCell: string | null
   /** Cell key → the Pane showing in it. */
   readonly activeTabs: ReadonlyMap<string, string>
 }
@@ -151,6 +172,7 @@ export interface LayoutSnapshot {
 const emptySnapshot: LayoutSnapshot = Object.freeze({
   layout: Object.freeze({ columns: Object.freeze([]) }),
   focusedPaneId: null,
+  expandedSideCell: null,
   activeTabs: new Map<string, string>(),
 })
 
@@ -165,6 +187,7 @@ export class LayoutHost {
   #panes: readonly PaneEntry[] = []
   #snapshot: LayoutSnapshot = emptySnapshot
   #focusedCell: string | null = null
+  #expandedSideCell: string | null = null
   /** Whether anything has *chosen* a focus — a keypress, a Command, `PaneHandle.focus`. */
   #focusChosen = false
   #onFocus: ((paneId: string | null, previous: string | null) => void) | undefined
@@ -337,7 +360,19 @@ export class LayoutHost {
     const focusedPaneId = focusedTab !== undefined && this.#isLive(focusedTab) ? focusedTab : null
     const previous = this.#snapshot.focusedPaneId
 
-    this.#snapshot = { layout, focusedPaneId, activeTabs: new Map(this.#activeTabs) }
+    const sideCells = layout.columns[0]?.cells ?? []
+    if (sideCells.some((cell) => cell.key === this.#focusedCell)) {
+      this.#expandedSideCell = this.#focusedCell
+    } else if (!sideCells.some((cell) => cell.key === this.#expandedSideCell)) {
+      this.#expandedSideCell = sideCells[0]?.key ?? null
+    }
+
+    this.#snapshot = {
+      layout,
+      focusedPaneId,
+      expandedSideCell: this.#expandedSideCell,
+      activeTabs: new Map(this.#activeTabs),
+    }
     this.#publish()
 
     if (focusedPaneId !== previous) {

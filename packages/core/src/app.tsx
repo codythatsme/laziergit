@@ -1,4 +1,5 @@
 import { KeymapProvider } from "@opentui/keymap/react"
+import { useTerminalDimensions } from "@opentui/react"
 import { RuntimeProvider } from "@laziergit/runtime-bridge"
 import { basename } from "node:path"
 import { useTheme, type Theme } from "laziergit"
@@ -38,13 +39,20 @@ function ExtensionStatusList({ kernel }: { kernel: ExtensionKernel }) {
 
 function AppShell({ kernel }: { kernel: ExtensionKernel }) {
   const theme = useTheme()
+  // The status line owns one terminal row; the Layout divides all remaining rows.
+  const layoutHeight = Math.max(0, useTerminalDimensions().height - 1)
 
   return (
     <box width="100%" height="100%" backgroundColor={theme.background}>
       {/* No padding and no gap: every Pane draws its own frame, so an inset here would
           frame the frames. The status line insets itself to land on the Pane content column. */}
       <box flexGrow={1} flexDirection="column">
-        <LayoutView layout={kernel.layout} panes={kernel.panes} fallback={<ExtensionStatusList kernel={kernel} />} />
+        <LayoutView
+          layout={kernel.layout}
+          panes={kernel.panes}
+          height={layoutHeight}
+          fallback={<ExtensionStatusList kernel={kernel} />}
+        />
         <StatuslineView
           statusline={kernel.statusline}
           panes={kernel.panes}

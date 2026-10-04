@@ -3,7 +3,21 @@ import type { PlacementHint } from "laziergit"
 
 import type { LayoutConfig } from "../config/config"
 import type { PaneEntry } from "../extension/pane-host"
-import { LayoutHost, resolveLayout } from "./layout"
+import { LayoutHost, resolveLayout, sideCellHeights } from "./layout"
+
+it("allocates every available row without overflow at all side pane counts and focus positions", () => {
+  expect(sideCellHeights(30, 0, -1)).toEqual([])
+  for (let count = 1; count <= 10; count += 1) {
+    for (let height = 0; height <= 80; height += 1) {
+      for (let focused = 0; focused < count; focused += 1) {
+        const heights = sideCellHeights(height, count, focused)
+        expect(heights.reduce((sum, rows) => sum + rows, 0)).toBe(height)
+        expect(heights.every((rows) => Number.isInteger(rows) && rows >= 0)).toBe(true)
+        expect(heights[focused]).toBe(Math.max(...heights))
+      }
+    }
+  }
+})
 
 function pane(id: string, placement?: PlacementHint, state: PaneEntry["state"] = "active"): PaneEntry {
   return { id, owner: id.split(".")[0] ?? id, title: id, state, placement }
@@ -265,6 +279,51 @@ it("remembers the visible tab of a cell across focus moves", () => {
   layout.focusStep(-1)
 
   expect(layout.focusedPaneId).toBe("stash")
+})
+
+it("expands the last focused side cell across tab, detail and reload transitions", () => {
+  const config = columns(["files", ["branches", "remotes"], "stash"], ["diff"])
+  const panes = [pane("files"), pane("branches"), pane("remotes"), pane("stash"), pane("diff")]
+  const { layout } = host(panes, config)
+  expect(layout.getSnapshot().expandedSideCell).toBe("layout:0.0")
+
+  layout.focusAt(1)
+  expect(layout.getSnapshot().expandedSideCell).toBe("layout:0.1")
+  layout.cycleTab(1)
+  expect(layout.focusedPaneId).toBe("remotes")
+  expect(layout.getSnapshot().expandedSideCell).toBe("layout:0.1")
+
+  layout.setPanes(panes.map((entry) => ({ ...entry, state: "reloading" })))
+  expect(layout.focusedPaneId).toBeNull()
+  expect(layout.getSnapshot().expandedSideCell).toBe("layout:0.1")
+  layout.setPanes(panes)
+  layout.focus("diff")
+  expect(layout.getSnapshot().expandedSideCell).toBe("layout:0.1")
+})
+
+it("replaces an expanded side cell that disappears and clears it with an empty layout", () => {
+  const { layout } = host([pane("files"), pane("branches"), pane("diff", { column: 1 })])
+  layout.focus("branches")
+  layout.focus("diff")
+  layout.setPanes([pane("files"), pane("diff", { column: 1 })])
+  expect(layout.getSnapshot().expandedSideCell).toBe("pane:files")
+  expect(layout.focusedPaneId).toBe("diff")
+
+  layout.setPanes([])
+  expect(layout.getSnapshot().expandedSideCell).toBeNull()
+})
+
+it("expands the configured startup focus, falling back to the first side cell for a detail focus", () => {
+  const panes = [pane("files"), pane("branches"), pane("diff")]
+  for (const [focus, expanded] of [
+    ["branches", "layout:0.1"],
+    ["diff", "layout:0.0"],
+  ] as const) {
+    const { layout } = host(panes, { ...columns(["files", "branches"], ["diff"]), focus })
+    layout.settleInitialFocus()
+    expect(layout.focusedPaneId).toBe(focus)
+    expect(layout.getSnapshot().expandedSideCell).toBe(expanded)
+  }
 })
 
 it("keeps the focused cell and its visible tab across a reload of its Panes", () => {

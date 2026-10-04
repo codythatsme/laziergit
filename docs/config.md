@@ -90,7 +90,13 @@ needed.
   `weight` is that column's share of the screen width relative to the others (default `1`).
 - A **cell** is a Pane id (`"files"`), or an array of Pane ids that share the cell as tabs
   (`["branches", "commits"]` — one visible at a time, `[`/`]` cycles them).
-- Cells stack top to bottom and share their column's height, in equal shares.
+- Cells stack top to bottom. In the left column, the last focused cell gets twice the
+  height of its neighbors; it stays expanded while focus moves to a detail Pane or popup.
+  On short terminals, the other cells shrink to one content row, then just their titles,
+  leaving the remaining height for the expanded cell. Focusing a cell with the keyboard
+  or mouse expands it without resetting its cursor. Tabs share the cell's height. Other
+  columns continue to divide their height equally. If even the titles cannot fit alongside
+  the working cell, only that cell is shown; keyboard navigation still reaches the others.
 - `focus` is the Pane the keyboard starts in. Omit it and laziergit opens on the first cell
   of the first column — which is the right place to *read* first and often the wrong place
   to *work* first, since a summary Pane has no rows to walk.
