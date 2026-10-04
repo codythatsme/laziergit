@@ -190,7 +190,13 @@ export interface ScrollSurface {
   readonly scrollHeight: number
   /** Total width of the content, in columns. */
   readonly scrollWidth: number
-  readonly viewport: { readonly height: number; readonly width: number }
+  readonly viewport: {
+    readonly height: number
+    readonly width: number
+    /** OpenTUI emits this after the viewport's dimensions change. */
+    on?(event: "resize", listener: () => void): unknown
+    off?(event: "resize", listener: () => void): unknown
+  }
   /**
    * Scroll the descendant carrying `childId` just far enough to be visible — OpenTUI's own
    * `scrollIntoView({ block: "nearest" })`, measured where the element was actually laid out.
@@ -706,9 +712,32 @@ export function useListCursor<T>({
     run: () => requestSelection(Math.max(last, 0)),
   })
 
-  const scrollRef = useCallback((node: ScrollSurface | null) => {
-    surface.current = node
-  }, [])
+  const stopObservingSize = useRef<(() => void) | undefined>(undefined)
+  const scrollRef = useCallback(
+    (node: ScrollSurface | null) => {
+      stopObservingSize.current?.()
+      stopObservingSize.current = undefined
+      surface.current = node
+      if (!node?.viewport.on || !node.viewport.off) return
+
+      // A pane can shrink without its cursor moving. Reveal against the new viewport,
+      // using the latest selection and nearest scrolling rather than keyboard look-ahead.
+      let observing = true
+      const reveal = () => {
+        // Resize fires while OpenTUI is still laying out descendants. Wait until that
+        // pass finishes so both the viewport and the selected row have their new bounds.
+        queueMicrotask(() => {
+          if (observing && node.viewport.height > 0) node.scrollChildIntoView(`${idPrefix}.row.${latest.current.index}`)
+        })
+      }
+      node.viewport.on("resize", reveal)
+      stopObservingSize.current = () => {
+        observing = false
+        node.viewport.off?.("resize", reveal)
+      }
+    },
+    [idPrefix],
+  )
 
   const setIndex = requestSelection
   const rowId = useCallback((row: number) => `${idPrefix}.row.${row}`, [idPrefix])

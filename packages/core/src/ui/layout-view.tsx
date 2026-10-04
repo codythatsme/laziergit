@@ -4,7 +4,7 @@ import type { ReactNode } from "react"
 import { useTheme, type Theme } from "laziergit"
 
 import type { PaneEntry, PaneHost } from "../extension/pane-host"
-import type { LayoutHost, ResolvedCell } from "./layout"
+import { sideCellHeights, type LayoutHost, type ResolvedCell } from "./layout"
 import { useStore } from "./use-store"
 
 function PaneErrorCard({ failure }: { failure: PluginErrorEvent }) {
@@ -31,6 +31,7 @@ function PaneFrame({
   entries,
   activeId,
   focused,
+  height,
   theme,
 }: {
   cell: ResolvedCell
@@ -39,6 +40,7 @@ function PaneFrame({
   entries: readonly PaneEntry[]
   activeId: string
   focused: boolean
+  height: number | undefined
   theme: Theme
 }) {
   const active = entries.find((entry) => entry.id === activeId)
@@ -46,10 +48,14 @@ function PaneFrame({
 
   return (
     <box
-      flexGrow={1}
-      flexBasis={0}
-      minHeight={3}
-      border
+      id={`pane-frame:${cell.key}`}
+      flexGrow={height === undefined ? 1 : 0}
+      flexBasis={height ?? 0}
+      minHeight={height ?? 3}
+      maxHeight={height}
+      visible={height !== 0}
+      overflow={height === 1 ? "hidden" : "visible"}
+      border={height === 1 ? ["top"] : true}
       borderStyle="rounded"
       borderColor={focused ? theme.borderFocused : theme.border}
       title={` ${cellTitle(entries, active.id)} `}
@@ -105,20 +111,36 @@ function EmptyLayout({ theme, fallback }: { theme: Theme; fallback?: ReactNode }
 }
 
 /** The screen: columns of cells, each cell a tab group with one visible Pane. */
-export function LayoutView({ layout, panes, fallback }: { layout: LayoutHost; panes: PaneHost; fallback?: ReactNode }) {
+export function LayoutView({
+  layout,
+  panes,
+  height,
+  fallback,
+}: {
+  layout: LayoutHost
+  panes: PaneHost
+  height: number
+  fallback?: ReactNode
+}) {
   const theme = useTheme()
   const view = useStore(layout)
   const registered = useStore(panes)
+  const sideCells = view.layout.columns[0]?.cells ?? []
+  const heights = sideCellHeights(
+    height,
+    sideCells.length,
+    sideCells.findIndex((cell) => cell.key === view.expandedSideCell),
+  )
 
   if (view.layout.columns.length === 0) return <EmptyLayout theme={theme} fallback={fallback} />
 
   return (
-    <box flexGrow={1} flexDirection="row">
+    <box flexGrow={1} flexBasis={0} minHeight={0} flexDirection="row">
       {view.layout.columns.map((column, index) => (
         // Cells stack border-to-border: a blank row between them costs a short Pane a third
         // of its content, and rounded borders already separate one Pane from the next.
         <box key={`column-${index}`} flexGrow={column.weight} flexBasis={0} flexDirection="column">
-          {column.cells.map((cell) => {
+          {column.cells.map((cell, cellIndex) => {
             const entries = cell.paneIds.flatMap((paneId) => {
               const entry = registered.find((candidate) => candidate.id === paneId)
               return entry ? [entry] : []
@@ -134,6 +156,7 @@ export function LayoutView({ layout, panes, fallback }: { layout: LayoutHost; pa
                 entries={entries}
                 activeId={activeId}
                 focused={view.focusedPaneId === activeId}
+                height={index === 0 ? heights[cellIndex] : undefined}
                 theme={theme}
               />
             )
