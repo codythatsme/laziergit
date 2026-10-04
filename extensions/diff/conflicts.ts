@@ -100,6 +100,21 @@ export function availableSides(block: ConflictBlock): readonly ConflictSideChoic
   return block.ancestor === null ? ["current", "incoming"] : ["current", "ancestor", "incoming"]
 }
 
+/** Marker blocks are sorted and disjoint, so line styling need not scan every conflict. */
+export function conflictAtLine(conflicts: readonly ConflictBlock[], line: number): ConflictBlock | undefined {
+  let start = 0
+  let end = conflicts.length
+  while (start < end) {
+    const middle = Math.floor((start + end) / 2)
+    const block = conflicts[middle]
+    if (block === undefined) return undefined
+    if (line < block.start) end = middle
+    else if (line > block.end) start = middle + 1
+    else return block
+  }
+  return undefined
+}
+
 function normalizeSide(side: ConflictSideChoice, block: ConflictBlock): ConflictSideChoice {
   return side === "ancestor" && block.ancestor === null ? "incoming" : side
 }
