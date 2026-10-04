@@ -259,8 +259,9 @@ export async function settle(harness: Harness): Promise<void> {
     await Promise.resolve()
     await Promise.resolve()
   })
-  await harness.setup.renderOnce()
-  await harness.setup.renderOnce()
+  // Layout callbacks can update React state, for example a document's visible line window.
+  await act(async () => harness.setup.renderOnce())
+  await act(async () => harness.setup.renderOnce())
 }
 
 /**
