@@ -23,8 +23,9 @@ laziergit is a single Bun process: a small core that knows nothing about git _fe
 │                              │ Extension Context (ctx)         │
 │                              │ Promise-first public API        │
 │  ┌───────────────────────────┴──────────────────────────────┐  │
-│  │ Bundled Extensions: files · branches · commits · stash   │  │
-│  │ · diff · commit-flow · sync · gh-workflows               │  │
+│  │ Bundled Extensions: files · branches · remote-branches   │  │
+│  │ · pull-requests · commits · stash · diff · commit-flow   │  │
+│  │ · sync · operations · gh-workflows                       │  │
 │  │ User Extensions: ~/.config/laziergit/extensions/*,       │  │
 │  │ <repo>/.laziergit/extensions/*                           │  │
 │  └──────────────────────────────────────────────────────────┘  │

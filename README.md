@@ -23,6 +23,8 @@ laziergit          # from inside any git repository
 
 - **files** — working-tree status as a path tree, file-level stage/unstage/discard
 - **branches** — checkout, create, delete, divergence at a glance
+- **pull-requests** — every open PR you authored, newest update first; open, copy, refresh, or
+  check out (needs the `gh` CLI)
 - **commits** — log, targeted squash/reword/drop, and a session cherry-pick queue beside Stash
 - **stash** — save, apply, pop, drop
 - **diff** — patch view that follows your cursor across panes

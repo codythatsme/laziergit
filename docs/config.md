@@ -100,8 +100,9 @@ still appears — it lands wherever its Extension's `placement` hint asks (`colu
 `tabWith`), which is the whole point of hints: config wins where it speaks, hints decide the
 rest. When the repository has a configured remote, the `remote-branches` Pane uses
 `tabWith: "branches"`, so it automatically appears as a tab wherever the local Branches Pane
-is placed. The session cherry-pick queue similarly uses `tabWith: "stash"`; adding a commit
-reveals that companion tab without taking the keyboard away from the commit list. Omit
+is placed. The `pull-requests` Pane uses the same placement when the selected `upstream` or
+`origin` has a browsable URL. The session cherry-pick queue similarly uses `tabWith: "stash"`;
+adding a commit reveals that companion tab without taking the keyboard away from the commit list. Omit
 `columns` and every Pane is placed by its hint, which is why
 `{ "focus": "files" }` alone is a valid Layout. Omit `layout` entirely and both apply.
 
@@ -142,9 +143,10 @@ Every query-enabled list gets Commands under the prefix it passes to `useListCur
 | `.query.next` / `.query.previous` | `n` / `shift+n` | Move between matches in a search-mode list; absent for filters |
 
 The Bundled Extension prefixes are `files`, `branches`, `remote-branches.list`,
-`remote-branches.remotes`, `commits`, `commits.cherry-pick`, and `stash`. Files, Branches,
-both Remote branches views, the cherry-pick queue, and Stash filter their rows live. Commits
-searches without removing history, so `j`/`k` still move through the commits around the match.
+`remote-branches.remotes`, `pull-requests`, `commits`, `commits.cherry-pick`, and `stash`.
+Files, Branches, both Remote branches views, Pull Requests, the cherry-pick queue, and Stash
+filter their rows live. Commits searches without removing history, so `j`/`k` still move
+through the commits around the match.
 
 Core's own Commands, all rebindable:
 
